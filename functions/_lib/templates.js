@@ -113,6 +113,7 @@ export function adminHtml() {
     <button data-tab="stats" onclick="showTab('stats')">儲值統計</button>
     <button data-tab="settings" onclick="showTab('settings')">付款設定</button>
     <button data-tab="export" onclick="showTab('export')">資料匯出</button>
+    <button data-tab="staff" onclick="showTab('staff')">員工帳號</button>
   </nav>
   <main>
 
@@ -225,6 +226,24 @@ export function adminHtml() {
       </div>
     </section>
 
+    <section id="tab-staff" class="tab hidden">
+      <div class="card">
+        <h2>新增員工帳號</h2>
+        <small class="hint">員工帳號登入後跟目前帳號權限相同，可以操作整個後台。</small>
+        <label>帳號</label><input id="staff_username" autocomplete="off" />
+        <label>密碼（至少 6 碼）</label><input id="staff_password" type="password" autocomplete="new-password" />
+        <button class="btn" onclick="submitStaff()">新增</button>
+        <div id="staff_msg" class="msg"></div>
+      </div>
+      <div class="card">
+        <h2>帳號列表</h2>
+        <table id="staff_table">
+          <thead><tr><th>ID</th><th>帳號</th><th>建立時間</th><th>操作</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
   </main>
 </div>
 
@@ -280,9 +299,12 @@ async function api(path, opts={}) {
   return data;
 }
 
+let currentAdminId = null;
+
 async function checkSession(){
   try{
     const me = await api('/api/admin/me');
+    currentAdminId = me.id;
     document.getElementById('whoami').textContent = me.username;
     document.getElementById('loginView').classList.add('hidden');
     document.getElementById('appView').classList.remove('hidden');
@@ -324,6 +346,7 @@ function showTab(name){
   if (name==='members') loadMembers();
   if (name==='stats') loadStats();
   if (name==='settings') loadSettings();
+  if (name==='staff') loadStaff();
 }
 
 let membersCache = [];
@@ -676,6 +699,52 @@ async function deleteMember(id){
   if (!confirm('確定刪除此會員？')) return;
   await api('/api/admin/members/'+id, {method:'DELETE'});
   loadMembers();
+}
+
+async function loadStaff(){
+  const list = await api('/api/admin/staff');
+  const tbody = document.querySelector('#staff_table tbody');
+  tbody.innerHTML = list.map(s=>{
+    const isSelf = s.id === currentAdminId;
+    return \`<tr>
+      <td data-label="ID">\${s.id}</td><td data-label="帳號">\${s.username}\${isSelf?'（目前登入）':''}</td><td data-label="建立時間">\${s.created_at||''}</td>
+      <td data-label="操作">
+        <button class="btn secondary small" onclick="resetStaffPassword(\${s.id})">重設密碼</button>
+        <button class="btn danger small" \${isSelf?'disabled':''} onclick="deleteStaff(\${s.id})">刪除</button>
+      </td>
+    </tr>\`;
+  }).join('') || '<tr><td colspan="4">尚無帳號</td></tr>';
+}
+
+async function submitStaff(){
+  const username = document.getElementById('staff_username').value.trim();
+  const password = document.getElementById('staff_password').value;
+  const msg = document.getElementById('staff_msg');
+  if (!username){ msg.textContent='請輸入帳號'; msg.className='msg err'; return; }
+  try{
+    await api('/api/admin/staff', {method:'POST', body: JSON.stringify({username,password})});
+    document.getElementById('staff_username').value='';
+    document.getElementById('staff_password').value='';
+    msg.textContent='已新增'; msg.className='msg ok';
+    loadStaff();
+  }catch(e){ msg.textContent=e.message; msg.className='msg err'; }
+}
+
+async function resetStaffPassword(id){
+  const pw = prompt('請輸入新密碼（至少 6 碼）：');
+  if (!pw) return;
+  try{
+    await api('/api/admin/staff/'+id+'/password', {method:'POST', body: JSON.stringify({password: pw})});
+    alert('已更新密碼');
+  }catch(e){ alert(e.message); }
+}
+
+async function deleteStaff(id){
+  if (!confirm('確定刪除此帳號？')) return;
+  try{
+    await api('/api/admin/staff/'+id, {method:'DELETE'});
+    loadStaff();
+  }catch(e){ alert(e.message); }
 }
 
 async function loadStats(){

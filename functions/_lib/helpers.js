@@ -137,6 +137,14 @@ export async function expireIfNeeded(db, order) {
   return order;
 }
 
+// 付款連結本身的「硬」失效時間：不論訂單狀態如何（即使還沒到 3 小時付款時效），
+// 從建立起算超過這個時數之後，連結一律視為失效、無法再開啟／操作。
+// 這跟 order.expires_at（3 小時付款時效，只影響能不能繼續付款）是兩件事，兩者互不影響、各自獨立判斷。
+export function isLinkHardExpired(order, hours = 24) {
+  const createdAt = new Date(order.created_at + "Z");
+  return new Date() > addHours(createdAt, hours);
+}
+
 export async function getSettingsObj(env) {
   const { results } = await env.DB.prepare("SELECT key, value FROM settings").all();
   const obj = {};

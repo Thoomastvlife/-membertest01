@@ -16,8 +16,14 @@ import {
   PROOF_ELIGIBLE_METHODS,
   publicOrderView,
   expireIfNeeded,
+  isLinkHardExpired,
   getSettingsObj,
 } from "./_lib/helpers.js";
+
+// 付款連結建立後，最多可以被開啟／操作幾小時，超過就整條連結失效（跟訂單本身 3 小時付款時效是兩回事）。
+function linkHardExpireHours(env) {
+  return parseInt(env.LINK_HARD_EXPIRE_HOURS || "24", 10);
+}
 
 // ---- Setup / auth ----
 
@@ -59,7 +65,54 @@ async function handleLogout() {
 }
 
 async function handleMe(session) {
-  return json({ username: session.username });
+  return json({ id: session.adminId, username: session.username });
+}
+
+// ---- Staff / admin accounts (由已登入的管理員新增其他員工帳號) ----
+
+async function handleListStaff(env) {
+  const { results } = await env.DB.prepare(
+    "SELECT id, username, created_at FROM admins ORDER BY created_at ASC"
+  ).all();
+  return json(results);
+}
+
+async function handleAddStaff(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const { username, password } = body;
+  if (!username || !username.trim()) return json({ error: "請輸入帳號" }, 400);
+  if (!password || password.length < 6) return json({ error: "密碼至少需要 6 碼" }, 400);
+  const hash = await hashPassword(password);
+  try {
+    const r = await env.DB.prepare("INSERT INTO admins (username, password_hash) VALUES (?, ?)")
+      .bind(username.trim(), hash)
+      .run();
+    return json({ ok: true, id: r.meta.last_row_id });
+  } catch (err) {
+    if (String(err.message || "").includes("UNIQUE")) {
+      return json({ error: "此帳號已被使用，請換一個" }, 400);
+    }
+    throw err;
+  }
+}
+
+async function handleResetStaffPassword(id, request, env) {
+  const body = await request.json().catch(() => ({}));
+  const { password } = body;
+  if (!password || password.length < 6) return json({ error: "密碼至少需要 6 碼" }, 400);
+  const hash = await hashPassword(password);
+  await env.DB.prepare("UPDATE admins SET password_hash=? WHERE id=?").bind(hash, id).run();
+  return json({ ok: true });
+}
+
+async function handleDeleteStaff(id, session, env) {
+  if (parseInt(id, 10) === session.adminId) {
+    return json({ error: "無法刪除目前登入中的自己帳號，請改用其他帳號登入後再刪除" }, 400);
+  }
+  const row = await env.DB.prepare("SELECT COUNT(*) as c FROM admins").first();
+  if (row.c <= 1) return json({ error: "至少要保留一組管理員帳號，無法全部刪除" }, 400);
+  await env.DB.prepare("DELETE FROM admins WHERE id=?").bind(id).run();
+  return json({ ok: true });
 }
 
 // ---- Members ----
@@ -443,6 +496,9 @@ async function handleMonthlyStats(request, env) {
 async function handleGetOrderPublic(token, env) {
   let order = await env.DB.prepare("SELECT * FROM orders WHERE token=?").bind(token).first();
   if (!order) return json({ error: "找不到此訂單，連結可能有誤" }, 404);
+  if (isLinkHardExpired(order, linkHardExpireHours(env))) {
+    return json({ error: "此付款連結已失效，請洽店家重新開立" }, 410);
+  }
   order = await expireIfNeeded(env.DB, order);
   return json(publicOrderView(order));
 }
@@ -454,6 +510,9 @@ async function handleSelectMethod(token, request, env) {
 
   let order = await env.DB.prepare("SELECT * FROM orders WHERE token=?").bind(token).first();
   if (!order) return json({ error: "找不到此訂單" }, 404);
+  if (isLinkHardExpired(order, linkHardExpireHours(env))) {
+    return json({ error: "此付款連結已失效，請洽店家重新開立" }, 410);
+  }
   order = await expireIfNeeded(env.DB, order);
   if (order.status === "expired") return json({ error: "此連結已過期" }, 400);
   if (order.status === "paid" || order.status === "cancelled") return json({ error: "此訂單無法選擇付款方式" }, 400);
@@ -496,6 +555,9 @@ async function handleUploadProof(token, request, env) {
 
   let order = await env.DB.prepare("SELECT * FROM orders WHERE token=?").bind(token).first();
   if (!order) return json({ error: "找不到此訂單" }, 404);
+  if (isLinkHardExpired(order, linkHardExpireHours(env))) {
+    return json({ error: "此付款連結已失效，請洽店家重新開立" }, 410);
+  }
   order = await expireIfNeeded(env.DB, order);
   if (order.status === "expired") return json({ error: "此連結已過期" }, 400);
   if (order.status === "cancelled") return json({ error: "此訂單已取消" }, 400);
@@ -610,6 +672,16 @@ export async function onRequest(context) {
       if (!session) return json({ error: "未登入或登入已過期" }, 401);
 
       if (path === "/api/admin/me" && method === "GET") return handleMe(session);
+
+      if (path === "/api/admin/staff" && method === "GET") return handleListStaff(env);
+      if (path === "/api/admin/staff" && method === "POST") return handleAddStaff(request, env);
+
+      const staffPasswordMatch = path.match(/^\/api\/admin\/staff\/(\d+)\/password$/);
+      if (staffPasswordMatch && method === "POST") return handleResetStaffPassword(staffPasswordMatch[1], request, env);
+
+      const staffDeleteMatch = path.match(/^\/api\/admin\/staff\/(\d+)$/);
+      if (staffDeleteMatch && method === "DELETE") return handleDeleteStaff(staffDeleteMatch[1], session, env);
+
       if (path === "/api/admin/members" && method === "GET") return handleListMembers(env);
       if (path === "/api/admin/members" && method === "POST") return handleAddMember(request, env);
 
