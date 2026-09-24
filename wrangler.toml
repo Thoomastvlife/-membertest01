@@ -1,0 +1,16 @@
+name = "member-checkout-pages"
+pages_build_output_dir = "public"
+compatibility_date = "2024-09-23"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "checkout_db"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+
+[vars]
+SESSION_TTL_HOURS = "12"
+LINK_TTL_HOURS = "3"
+
+# 部署前務必設定這個機密值（用來簽署登入 session）：
+#   wrangler pages secret put ADMIN_SESSION_SECRET --project-name=member-checkout-pages
+# 建議用一長串隨機字串，例如: openssl rand -hex 32
