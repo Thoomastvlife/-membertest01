@@ -1,7 +1,7 @@
 -- ========================================
 -- 會員結帳系統 D1 資料庫結構 (Cloudflare Pages 版)
 -- 全新安裝: wrangler d1 execute checkout_db --file=./schema.sql
--- 既有資料庫升級: 請改用 migrate_v2.sql（不要重跑本檔，避免覆蓋既有資料）
+-- 既有資料庫升級: 請改用 migrate_v2.sql（不要重跑本檔，避免覆蓋既有資料） 
 -- ========================================
 
 CREATE TABLE IF NOT EXISTS admins (
