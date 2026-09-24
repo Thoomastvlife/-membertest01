@@ -540,7 +540,7 @@ export async function onRequest(context) {
     if (path === "/admin" || path === "/admin/") return html(adminHtml());
     if (path.startsWith("/pay/")) return html(payHtml());
     if (path === "/member" || path === "/member/") return html(memberHtml());
-    if (path === "/") return Response.redirect(url.origin + "/admin", 302);
+    if (path === "/") return Response.redirect(url.origin + "/member", 302);
 
     // ---- Public API ----
     if (path === "/api/setup-status" && method === "GET") return handleSetupStatus(env);
