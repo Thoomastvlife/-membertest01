@@ -134,7 +134,8 @@ export function adminHtml() {
           <div><label>密碼（選填）</label><input id="mem_password" type="password" /></div>
         </div>
         <label>備註</label><input id="mem_note" />
-        <button class="btn" onclick="addMember()">新增</button>
+        <button class="btn" id="mem_submit_btn" onclick="submitMember()">新增</button>
+        <button class="btn secondary hidden" id="mem_cancel_btn" onclick="cancelEditMember()">取消編輯</button>
         <div id="mem_msg" class="msg"></div>
       </div>
       <div class="card">
@@ -278,6 +279,7 @@ function showTab(name){
 let membersCache = [];
 let ordersCache = [];
 let correctingId = null;
+let editingMemberId = null;
 
 async function loadMembersIntoSelect(){
   const list = await api('/api/admin/members');
@@ -324,6 +326,7 @@ function renderOrders(){
   tbody.innerHTML = list.map(o=>{
     const st = STATUS_LABEL[o.status] || [o.status,'b-pending'];
     let actions = '';
+    actions += \`<button class="btn secondary small" onclick="viewLink('\${o.token}')">查看連結</button>\`;
     if (o.payment_method==='store_barcode' || o.payment_method==='taiwan_pay') {
       if (o.status==='awaiting_barcode' || o.status==='ready_to_pay') {
         actions += \`<input type="file" accept="image/*" style="width:120px" onchange="uploadBarcode(\${o.id}, this)"/> \`;
@@ -342,6 +345,7 @@ function renderOrders(){
     if (o.is_completed) {
       actions += \`<button class="btn secondary small" onclick="uncompleteOrder(\${o.id})">取消結案</button>\`;
     }
+    actions += \`<button class="btn danger small" onclick="deleteOrder(\${o.id}, \${o.status==='paid'})">刪除</button>\`;
 
     let proofInfo = '';
     if (o.proof_last_digits) proofInfo += \`末碼 \${o.proof_last_digits}<br/>\`;
@@ -360,6 +364,22 @@ function renderOrders(){
       <td>\${actions}</td>
     </tr>\`;
   }).join('') || '<tr><td colspan="9">本月尚無訂單</td></tr>';
+}
+
+function viewLink(token){
+  const link = location.origin + '/pay/' + token;
+  prompt('付款連結（Ctrl+C 複製，到期時間仍是建立當下算起 3 小時，不會因為查看而改變）：', link);
+}
+
+async function deleteOrder(id, isPaid){
+  const warn = isPaid
+    ? '這筆訂單已經付款完成，刪除後月報表和儲值統計都會少這一筆，且無法復原，確定要刪除嗎？'
+    : '確定要永久刪除此訂單嗎？此動作無法復原（如果只是想讓訂單失效，用「取消」即可，記錄還會保留）。';
+  if (!confirm(warn)) return;
+  try{
+    await api('/api/admin/orders/'+id, {method:'DELETE'});
+    loadOrders();
+  }catch(e){ alert(e.message); }
 }
 
 function viewProof(id){
@@ -449,6 +469,7 @@ async function loadMembers(){
   tbody.innerHTML = list.map(m=>\`<tr>
     <td>\${m.id}</td><td>\${m.name}</td><td>\${m.account||''}</td><td>\${m.phone||''}</td><td>\${m.note||''}</td>
     <td>
+      <button class="btn secondary" style="margin:2px" onclick="editMember(\${m.id})">編輯</button>
       <button class="btn secondary" style="margin:2px" onclick="resetPassword(\${m.id})">設定密碼</button>
       <button class="btn danger" style="margin:2px" onclick="deleteMember(\${m.id})">刪除</button>
     </td>
@@ -465,7 +486,37 @@ async function resetPassword(id){
   }catch(e){ alert(e.message); }
 }
 
-async function addMember(){
+function editMember(id){
+  const m = membersCache.find(x=>x.id===id);
+  if (!m) return;
+  editingMemberId = id;
+  document.getElementById('mem_name').value = m.name || '';
+  document.getElementById('mem_phone').value = m.phone || '';
+  document.getElementById('mem_note').value = m.note || '';
+  document.getElementById('mem_account').value = m.account || '';
+  document.getElementById('mem_password').value = '';
+  document.getElementById('mem_password').placeholder = '不填則不變更密碼';
+  document.getElementById('mem_submit_btn').textContent = '儲存修改';
+  document.getElementById('mem_cancel_btn').classList.remove('hidden');
+  document.getElementById('mem_msg').textContent = '正在編輯：' + m.name;
+  document.getElementById('mem_msg').className = 'msg';
+  document.getElementById('mem_name').scrollIntoView({behavior:'smooth', block:'center'});
+}
+
+function cancelEditMember(){
+  editingMemberId = null;
+  document.getElementById('mem_name').value='';
+  document.getElementById('mem_phone').value='';
+  document.getElementById('mem_note').value='';
+  document.getElementById('mem_account').value='';
+  document.getElementById('mem_password').value='';
+  document.getElementById('mem_password').placeholder = '';
+  document.getElementById('mem_submit_btn').textContent = '新增';
+  document.getElementById('mem_cancel_btn').classList.add('hidden');
+  document.getElementById('mem_msg').textContent = '';
+}
+
+async function submitMember(){
   const name = document.getElementById('mem_name').value.trim();
   const phone = document.getElementById('mem_phone').value.trim();
   const note = document.getElementById('mem_note').value.trim();
@@ -474,13 +525,20 @@ async function addMember(){
   const msg = document.getElementById('mem_msg');
   if (!name){ msg.textContent='請輸入姓名'; msg.className='msg err'; return; }
   try{
-    await api('/api/admin/members', {method:'POST', body: JSON.stringify({name,phone,note,account,password})});
-    document.getElementById('mem_name').value='';
-    document.getElementById('mem_phone').value='';
-    document.getElementById('mem_note').value='';
-    document.getElementById('mem_account').value='';
-    document.getElementById('mem_password').value='';
-    msg.textContent='已新增'; msg.className='msg ok';
+    if (editingMemberId){
+      await api('/api/admin/members/'+editingMemberId, {method:'PATCH', body: JSON.stringify({name,phone,note,account})});
+      if (password) await api('/api/admin/members/'+editingMemberId+'/password', {method:'POST', body: JSON.stringify({password})});
+      msg.textContent='已儲存修改'; msg.className='msg ok';
+      cancelEditMember();
+    } else {
+      await api('/api/admin/members', {method:'POST', body: JSON.stringify({name,phone,note,account,password})});
+      document.getElementById('mem_name').value='';
+      document.getElementById('mem_phone').value='';
+      document.getElementById('mem_note').value='';
+      document.getElementById('mem_account').value='';
+      document.getElementById('mem_password').value='';
+      msg.textContent='已新增'; msg.className='msg ok';
+    }
     loadMembers();
   }catch(e){ msg.textContent=e.message; msg.className='msg err'; }
 }

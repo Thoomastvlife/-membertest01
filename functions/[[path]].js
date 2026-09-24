@@ -98,6 +98,33 @@ async function handleDeleteMember(id, env) {
   return json({ ok: true });
 }
 
+// 隨時可修改會員資料（姓名／電話／備註／帳號）。密碼修改走另一支 /password 端點。
+async function handleUpdateMember(id, request, env) {
+  const existing = await env.DB.prepare("SELECT * FROM members WHERE id=?").bind(id).first();
+  if (!existing) return json({ error: "找不到此會員" }, 404);
+
+  const body = await request.json().catch(() => ({}));
+  const { name, phone, note, account } = body;
+  if (name !== undefined && !String(name).trim()) return json({ error: "姓名不可為空白" }, 400);
+
+  const newName = name !== undefined ? name.trim() : existing.name;
+  const newPhone = phone !== undefined ? phone || null : existing.phone;
+  const newNote = note !== undefined ? note || null : existing.note;
+  const newAccount = account !== undefined ? (account && account.trim() ? account.trim() : null) : existing.account;
+
+  try {
+    await env.DB.prepare("UPDATE members SET name=?, phone=?, note=?, account=? WHERE id=?")
+      .bind(newName, newPhone, newNote, newAccount, id)
+      .run();
+    return json({ ok: true });
+  } catch (err) {
+    if (String(err.message || "").includes("UNIQUE")) {
+      return json({ error: "此帳號已被使用，請換一個" }, 400);
+    }
+    throw err;
+  }
+}
+
 async function handleSetMemberPassword(id, request, env) {
   const body = await request.json().catch(() => ({}));
   const { password } = body;
@@ -233,6 +260,14 @@ async function handleMarkPaid(id, env) {
 
 async function handleCancelOrder(id, env) {
   await env.DB.prepare("UPDATE orders SET status='cancelled' WHERE id=?").bind(id).run();
+  return json({ ok: true });
+}
+
+// 徹底刪除訂單記錄（跟「取消」不同：取消只是改狀態、記錄還在；刪除會把這筆資料整個移除，無法復原）
+async function handleDeleteOrder(id, env) {
+  const order = await env.DB.prepare("SELECT id FROM orders WHERE id=?").bind(id).first();
+  if (!order) return json({ error: "找不到訂單" }, 404);
+  await env.DB.prepare("DELETE FROM orders WHERE id=?").bind(id).run();
   return json({ ok: true });
 }
 
@@ -584,6 +619,8 @@ export async function onRequest(context) {
       const memberPasswordMatch = path.match(/^\/api\/admin\/members\/(\d+)\/password$/);
       if (memberPasswordMatch && method === "POST") return handleSetMemberPassword(memberPasswordMatch[1], request, env);
 
+      if (memberDeleteMatch && method === "PATCH") return handleUpdateMember(memberDeleteMatch[1], request, env);
+
       if (path === "/api/admin/settings" && method === "GET") return handleGetSettings(env);
       if (path === "/api/admin/settings" && method === "POST") return handleSaveSettings(request, env);
 
@@ -601,6 +638,7 @@ export async function onRequest(context) {
 
       const correctMatch = path.match(/^\/api\/admin\/orders\/(\d+)$/);
       if (correctMatch && method === "PATCH") return handleCorrectOrder(correctMatch[1], request, env);
+      if (correctMatch && method === "DELETE") return handleDeleteOrder(correctMatch[1], env);
 
       const completeMatch = path.match(/^\/api\/admin\/orders\/(\d+)\/complete$/);
       if (completeMatch && method === "POST") return handleCompleteOrder(completeMatch[1], env);
