@@ -45,6 +45,46 @@ export function adminHtml() {
   img.proof-thumb{max-width:56px;max-height:40px;border-radius:4px;border:1px solid var(--border);cursor:pointer;display:block;}
   .filter-row{display:flex;align-items:center;gap:6px;margin-top:10px;font-size:13px;color:var(--muted);}
   button.btn.small{padding:5px 10px;font-size:12px;margin:2px;}
+
+  /* 會員可搜尋選單 */
+  .member-picker{position:relative;}
+  .member-picker-input{width:100%;padding:9px 28px 9px 10px;border:1px solid var(--border);border-radius:6px;font-size:14px;background:#fff;}
+  .member-picker-input.is-selected{background:#eef3ff;border-color:var(--accent);}
+  .member-picker-clear{position:absolute;right:6px;top:50%;transform:translateY(-50%);border:none;background:transparent;color:var(--muted);font-size:16px;line-height:1;cursor:pointer;padding:4px 6px;display:none;}
+  .member-picker-clear.show{display:block;}
+  .member-picker-dropdown{position:absolute;left:0;right:0;top:calc(100% + 4px);background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;z-index:60;}
+  .member-picker-dropdown.hidden{display:none;}
+  .member-picker-option{padding:10px 12px;font-size:14px;cursor:pointer;border-bottom:1px solid var(--border);}
+  .member-picker-option:last-child{border-bottom:none;}
+  .member-picker-option:hover,.member-picker-option.active{background:#eef3ff;}
+  .member-picker-option .mp-sub{color:var(--muted);font-size:12px;margin-top:2px;}
+  .member-picker-option.mp-nonmember{color:var(--muted);font-style:italic;}
+  .member-picker-empty{padding:10px 12px;font-size:13px;color:var(--muted);}
+
+  /* 手機排版優化 */
+  @media (max-width:700px){
+    header{padding:10px 12px;flex-wrap:wrap;gap:8px;}
+    header h1{font-size:16px;}
+    nav{padding:8px 8px 0;gap:4px;overflow-x:auto;flex-wrap:nowrap;-webkit-overflow-scrolling:touch;}
+    nav button{flex:0 0 auto;padding:8px 12px;font-size:13px;white-space:nowrap;}
+    main{padding:10px;}
+    .card{padding:12px;border-radius:8px;}
+    .grid2{grid-template-columns:1fr;gap:0;}
+    input,select,textarea{font-size:16px;}
+    .modal-box{padding:14px;border-radius:8px;max-width:100%;}
+
+    table thead{display:none;}
+    table, table tbody, table tr, table td{display:block;width:100%;}
+    table{border:none;}
+    table tr{border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-bottom:10px;background:#fff;}
+    table tr.total-row{background:#f8f9fb;}
+    table td{border-bottom:1px dashed var(--border);padding:6px 2px;display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:6px 10px;text-align:right;}
+    table td:last-child{border-bottom:none;}
+    table td::before{content:attr(data-label);font-weight:600;color:var(--muted);text-align:left;flex:0 0 auto;font-size:12px;padding-right:10px;}
+    table td:not([data-label])::before{content:none;}
+    table td[colspan]{display:block;text-align:center;}
+    table td .btn.small{margin:2px 0 2px 6px;}
+  }
 </style>
 </head>
 <body>
@@ -82,7 +122,12 @@ export function adminHtml() {
         <label>金額</label>
         <input id="co_amount" type="number" min="1" step="1" />
         <label>會員</label>
-        <select id="co_member"><option value="">-- 非會員 --</option></select>
+        <div class="member-picker" id="co_member_picker">
+          <input type="text" id="co_member_search" class="member-picker-input" placeholder="輸入姓名／帳號／電話搜尋，留空表示非會員" autocomplete="off" />
+          <button type="button" class="member-picker-clear" id="co_member_clear" onclick="clearMemberPicker('co')">&times;</button>
+          <input type="hidden" id="co_member" value="" />
+          <div class="member-picker-dropdown hidden" id="co_member_dropdown"></div>
+        </div>
         <div id="co_nonmember_wrap">
           <label>非會員名稱（選填，方便辨識）</label>
           <input id="co_nonmember_name" placeholder="例如：現場客人" />
@@ -189,7 +234,12 @@ export function adminHtml() {
     <label>金額</label>
     <input id="cor_amount" type="number" min="1" step="1" />
     <label>會員</label>
-    <select id="cor_member"><option value="">-- 非會員 --</option></select>
+    <div class="member-picker" id="cor_member_picker">
+      <input type="text" id="cor_member_search" class="member-picker-input" placeholder="輸入姓名／帳號／電話搜尋，留空表示非會員" autocomplete="off" />
+      <button type="button" class="member-picker-clear" id="cor_member_clear" onclick="clearMemberPicker('cor')">&times;</button>
+      <input type="hidden" id="cor_member" value="" />
+      <div class="member-picker-dropdown hidden" id="cor_member_dropdown"></div>
+    </div>
     <div id="cor_nonmember_wrap">
       <label>非會員名稱</label>
       <input id="cor_nonmember_name" placeholder="例如：現場客人" />
@@ -284,11 +334,94 @@ let editingMemberId = null;
 async function loadMembersIntoSelect(){
   const list = await api('/api/admin/members');
   membersCache = list;
-  const sel = document.getElementById('co_member');
-  sel.innerHTML = '<option value="">-- 非會員 --</option>' +
-    list.map(m=>\`<option value="\${m.id}">\${m.name}</option>\`).join('');
-  sel.onchange = ()=>{ document.getElementById('co_nonmember_wrap').style.display = sel.value ? 'none':'block'; };
 }
+
+function escapeHtml(s){
+  return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// 可搜尋的會員選單（取代原本的下拉式 <select>）
+function setupMemberPicker(prefix, onChange){
+  const search = document.getElementById(prefix+'_member_search');
+  const hidden = document.getElementById(prefix+'_member');
+  const dropdown = document.getElementById(prefix+'_member_dropdown');
+  const clearBtn = document.getElementById(prefix+'_member_clear');
+  let activeIndex = -1;
+
+  function filteredList(q){
+    q = (q||'').trim().toLowerCase();
+    if (!q) return membersCache;
+    return membersCache.filter(m=>
+      (m.name||'').toLowerCase().includes(q) ||
+      (m.account||'').toLowerCase().includes(q) ||
+      (m.phone||'').toLowerCase().includes(q)
+    );
+  }
+
+  function updateActive(options){
+    options.forEach((o,i)=> o.classList.toggle('active', i===activeIndex));
+    if (activeIndex>=0 && options[activeIndex]) options[activeIndex].scrollIntoView({block:'nearest'});
+  }
+
+  function renderDropdown(q){
+    const list = filteredList(q);
+    activeIndex = -1;
+    let html = '<div class="member-picker-option mp-nonmember" data-id="">-- 非會員 --</div>';
+    html += list.length ? list.map(m=>{
+      const sub = [m.account?('帳號 '+m.account):'', m.phone||''].filter(Boolean).join(' ・ ');
+      return '<div class="member-picker-option" data-id="'+m.id+'" data-name="'+escapeHtml(m.name)+'">'+escapeHtml(m.name)+(sub?'<div class="mp-sub">'+escapeHtml(sub)+'</div>':'')+'</div>';
+    }).join('') : '<div class="member-picker-empty">查無符合的會員</div>';
+    dropdown.innerHTML = html;
+    dropdown.classList.remove('hidden');
+    dropdown.querySelectorAll('.member-picker-option[data-id]').forEach(opt=>{
+      opt.addEventListener('mousedown', (e)=>{
+        e.preventDefault();
+        selectMember(opt.dataset.id, opt.dataset.name || '');
+      });
+    });
+  }
+
+  function closeDropdown(){ dropdown.classList.add('hidden'); }
+
+  function selectMember(id, name){
+    hidden.value = id || '';
+    search.value = id ? name : '';
+    search.classList.toggle('is-selected', !!id);
+    clearBtn.classList.toggle('show', !!id);
+    closeDropdown();
+    if (onChange) onChange(id);
+  }
+
+  search.addEventListener('focus', ()=> renderDropdown(search.value));
+  search.addEventListener('input', ()=>{
+    if (hidden.value){ hidden.value=''; search.classList.remove('is-selected'); clearBtn.classList.remove('show'); if (onChange) onChange(''); }
+    renderDropdown(search.value);
+  });
+  search.addEventListener('blur', ()=>{
+    setTimeout(()=>{
+      closeDropdown();
+      if (!hidden.value) search.value = '';
+    }, 150);
+  });
+  search.addEventListener('keydown', (e)=>{
+    if (dropdown.classList.contains('hidden')) return;
+    const options = Array.from(dropdown.querySelectorAll('.member-picker-option[data-id]'));
+    if (e.key === 'ArrowDown'){ e.preventDefault(); activeIndex = Math.min(activeIndex+1, options.length-1); updateActive(options); }
+    else if (e.key === 'ArrowUp'){ e.preventDefault(); activeIndex = Math.max(activeIndex-1, -1); updateActive(options); }
+    else if (e.key === 'Enter'){ e.preventDefault(); const opt = options[activeIndex] || (options.length===1 ? options[0] : null); if (opt) selectMember(opt.dataset.id, opt.dataset.name); }
+    else if (e.key === 'Escape'){ closeDropdown(); }
+  });
+
+  return { selectMember, closeDropdown };
+}
+
+function clearMemberPicker(prefix){
+  const picker = prefix==='co' ? coMemberPicker : corMemberPicker;
+  picker.selectMember('', '');
+  document.getElementById(prefix+'_member_search').focus();
+}
+
+let coMemberPicker, corMemberPicker;
 
 async function createOrder(){
   const amount = parseFloat(document.getElementById('co_amount').value);
@@ -353,15 +486,15 @@ function renderOrders(){
     if (!proofInfo) proofInfo = '<span class="muted" style="color:var(--muted)">-</span>';
 
     return \`<tr>
-      <td>\${o.id}</td>
-      <td>\${o.created_at}</td>
-      <td>\${o.member_name_snapshot}</td>
-      <td>$\${o.amount}</td>
-      <td>\${PM_LABEL[o.payment_method]||'尚未選擇'}</td>
-      <td><span class="badge \${st[1]}">\${st[0]}</span></td>
-      <td>\${o.is_completed ? '<span class="badge b-completed">已結案</span>' : ''}</td>
-      <td>\${proofInfo}</td>
-      <td>\${actions}</td>
+      <td data-label="ID">\${o.id}</td>
+      <td data-label="建立時間">\${o.created_at}</td>
+      <td data-label="會員">\${o.member_name_snapshot}</td>
+      <td data-label="金額">$\${o.amount}</td>
+      <td data-label="付款方式">\${PM_LABEL[o.payment_method]||'尚未選擇'}</td>
+      <td data-label="狀態"><span class="badge \${st[1]}">\${st[0]}</span></td>
+      <td data-label="結案">\${o.is_completed ? '<span class="badge b-completed">已結案</span>' : ''}</td>
+      <td data-label="核對資訊">\${proofInfo}</td>
+      <td data-label="操作">\${actions}</td>
     </tr>\`;
   }).join('') || '<tr><td colspan="9">本月尚無訂單</td></tr>';
 }
@@ -395,13 +528,9 @@ function openCorrect(id){
   correctingId = id;
   document.getElementById('cor_id').textContent = id;
   document.getElementById('cor_amount').value = o.amount;
-  const memSel = document.getElementById('cor_member');
-  memSel.innerHTML = '<option value="">-- 非會員 --</option>' +
-    membersCache.map(m=>\`<option value="\${m.id}">\${m.name}</option>\`).join('');
-  memSel.value = o.member_id || '';
+  const member = o.member_id ? membersCache.find(m=>m.id===o.member_id) : null;
+  corMemberPicker.selectMember(o.member_id || '', member ? member.name : '');
   document.getElementById('cor_nonmember_name').value = o.member_id ? '' : o.member_name_snapshot;
-  document.getElementById('cor_nonmember_wrap').style.display = memSel.value ? 'none' : 'block';
-  memSel.onchange = ()=>{ document.getElementById('cor_nonmember_wrap').style.display = memSel.value ? 'none':'block'; };
   document.getElementById('cor_method').value = '__keep__';
   document.getElementById('cor_msg').textContent = '';
   document.getElementById('correctModal').classList.remove('hidden');
@@ -467,11 +596,11 @@ async function loadMembers(){
   const list = await api('/api/admin/members');
   const tbody = document.querySelector('#mem_table tbody');
   tbody.innerHTML = list.map(m=>\`<tr>
-    <td>\${m.id}</td><td>\${m.name}</td><td>\${m.account||''}</td><td>\${m.phone||''}</td><td>\${m.note||''}</td>
-    <td>
-      <button class="btn secondary" style="margin:2px" onclick="editMember(\${m.id})">編輯</button>
-      <button class="btn secondary" style="margin:2px" onclick="resetPassword(\${m.id})">設定密碼</button>
-      <button class="btn danger" style="margin:2px" onclick="deleteMember(\${m.id})">刪除</button>
+    <td data-label="ID">\${m.id}</td><td data-label="姓名">\${m.name}</td><td data-label="帳號">\${m.account||''}</td><td data-label="電話">\${m.phone||''}</td><td data-label="備註">\${m.note||''}</td>
+    <td data-label="操作">
+      <button class="btn secondary small" onclick="editMember(\${m.id})">編輯</button>
+      <button class="btn secondary small" onclick="resetPassword(\${m.id})">設定密碼</button>
+      <button class="btn danger small" onclick="deleteMember(\${m.id})">刪除</button>
     </td>
   </tr>\`).join('') || '<tr><td colspan="6">尚無會員</td></tr>';
   loadMembersIntoSelect();
@@ -558,10 +687,10 @@ async function loadStats(){
   let total = 0, totalCount = 0;
   const rows = list.map(r=>{
     total += r.total; totalCount += r.count;
-    return \`<tr><td>\${r.member_name}</td><td>\${r.count}</td><td>$\${r.total}</td></tr>\`;
+    return \`<tr><td data-label="會員 / 客人">\${r.member_name}</td><td data-label="儲值筆數">\${r.count}</td><td data-label="儲值金額合計">$\${r.total}</td></tr>\`;
   }).join('');
   tbody.innerHTML = (rows || '<tr><td colspan="3">本月尚無儲值紀錄</td></tr>') +
-    \`<tr class="total-row"><td>合計</td><td>\${totalCount}</td><td>$\${total}</td></tr>\`;
+    \`<tr class="total-row"><td data-label="會員 / 客人">合計</td><td data-label="儲值筆數">\${totalCount}</td><td data-label="儲值金額合計">$\${total}</td></tr>\`;
 }
 
 async function loadSettings(){
@@ -588,6 +717,8 @@ function exportCsv(){
   window.location.href = '/api/admin/export?month='+encodeURIComponent(month);
 }
 
+coMemberPicker = setupMemberPicker('co', (id)=>{ document.getElementById('co_nonmember_wrap').style.display = id ? 'none':'block'; });
+corMemberPicker = setupMemberPicker('cor', (id)=>{ document.getElementById('cor_nonmember_wrap').style.display = id ? 'none':'block'; });
 checkSession();
 </script>
 </body>
