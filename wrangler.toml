@@ -4,8 +4,8 @@ compatibility_date = "2024-09-23"
 
 [[d1_databases]]
 binding = "DB"
-database_name = "checkout_db"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+database_name = "test2"
+database_id = "9e8fa572-c3a8-4bfb-93c5-bdaf3f78f11b"
 
 [vars]
 SESSION_TTL_HOURS = "12"
