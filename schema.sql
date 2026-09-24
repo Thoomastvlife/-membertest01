@@ -1,7 +1,7 @@
 -- ========================================
 -- 會員結帳系統 D1 資料庫結構 (Cloudflare Pages 版)
 -- 全新安裝: wrangler d1 execute checkout_db --file=./schema.sql
--- 既有資料庫升級: 請改用 migrate_v2.sql（不要重跑本檔，避免覆蓋既有資料） 
+-- 既有資料庫升級: 請改用 migrate_v2.sql（不要重跑本檔，避免覆蓋既有資料）
 -- ========================================
 
 CREATE TABLE IF NOT EXISTS admins (
@@ -40,6 +40,11 @@ CREATE TABLE IF NOT EXISTS orders (
   method_selected_at TEXT,
   barcode_uploaded_at TEXT,
   paid_at TEXT,
+  is_completed INTEGER NOT NULL DEFAULT 0,   -- 「訂單完成/結案」標記，只是方便篩選，不影響金流，需先 paid 才能標記
+  completed_at TEXT,
+  proof_image TEXT,                    -- 客人上傳的轉帳/繳費證明截圖 (base64 data URL)
+  proof_last_digits TEXT,              -- 客人填寫的帳號末幾碼，方便店家核對
+  proof_uploaded_at TEXT,
   FOREIGN KEY (member_id) REFERENCES members(id)
 );
 
@@ -52,6 +57,7 @@ CREATE INDEX IF NOT EXISTS idx_orders_token ON orders(token);
 CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_orders_paid_at ON orders(paid_at);
+CREATE INDEX IF NOT EXISTS idx_orders_is_completed ON orders(is_completed);
 
 -- 預設轉帳帳戶設定（可於後台「設定」頁修改）
 INSERT OR IGNORE INTO settings (key, value) VALUES ('bank_name', '請於後台設定填入銀行名稱');

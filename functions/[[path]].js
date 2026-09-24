@@ -1,4 +1,4 @@
-import { adminHtml, payHtml } from "./_lib/templates.js";
+import { adminHtml, payHtml, memberHtml } from "./_lib/templates.js";
 import {
   jsonRes as json,
   htmlRes as html,
@@ -7,11 +7,13 @@ import {
   verifyPassword,
   signSession,
   requireAdmin,
+  requireMember,
   setCookieHeader,
   clearCookieHeader,
   nowIso,
   addHours,
   PAYMENT_METHODS,
+  PROOF_ELIGIBLE_METHODS,
   publicOrderView,
   expireIfNeeded,
   getSettingsObj,
@@ -234,6 +236,101 @@ async function handleCancelOrder(id, env) {
   return json({ ok: true });
 }
 
+// 訂單更正：修正金額 / 會員 / 付款方式打錯的情況。已取消或已結案的訂單不能再更正。
+async function handleCorrectOrder(id, request, env) {
+  const order = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).first();
+  if (!order) return json({ error: "找不到訂單" }, 404);
+  if (order.status === "cancelled") return json({ error: "已取消的訂單無法更正" }, 400);
+  if (order.is_completed) return json({ error: "此訂單已結案，請先取消結案才能更正" }, 400);
+
+  const body = await request.json().catch(() => ({}));
+  const fields = [];
+  const binds = [];
+
+  if (body.amount !== undefined && body.amount !== null && String(body.amount).trim() !== "") {
+    const amt = parseFloat(body.amount);
+    if (!amt || amt <= 0) return json({ error: "金額不正確" }, 400);
+    fields.push("amount=?");
+    binds.push(amt);
+  }
+
+  if (body.member_id !== undefined) {
+    if (body.member_id) {
+      const m = await env.DB.prepare("SELECT * FROM members WHERE id=?").bind(body.member_id).first();
+      if (!m) return json({ error: "找不到指定會員" }, 400);
+      fields.push("member_id=?", "member_name_snapshot=?");
+      binds.push(m.id, m.name);
+    } else {
+      const name = body.non_member_name && body.non_member_name.trim() ? body.non_member_name.trim() : "非會員";
+      fields.push("member_id=?", "member_name_snapshot=?");
+      binds.push(null, name);
+    }
+  }
+
+  if (body.payment_method !== undefined) {
+    const method = body.payment_method || null;
+    if (method && !PAYMENT_METHODS.has(method)) return json({ error: "付款方式不正確" }, 400);
+    if (method !== order.payment_method) {
+      if (!method) {
+        // 重設為未選擇，讓客人可以重新選擇付款方式（同時清掉舊的條碼／付款證明）
+        fields.push(
+          "payment_method=?", "status=?", "method_selected_at=?",
+          "bank_name=?", "bank_account_number=?", "bank_account_holder=?",
+          "barcode_image=?", "barcode_uploaded_at=?",
+          "proof_image=?", "proof_last_digits=?", "proof_uploaded_at=?"
+        );
+        binds.push(null, "pending_method", null, null, null, null, null, null, null, null, null);
+      } else {
+        let newStatus = order.status === "paid" ? "paid" : method === "transfer" ? "awaiting_payment" : "awaiting_barcode";
+        let bankFields = {
+          bank_name: order.bank_name,
+          bank_account_number: order.bank_account_number,
+          bank_account_holder: order.bank_account_holder,
+        };
+        if (newStatus === "awaiting_payment") {
+          const settings = await getSettingsObj(env);
+          bankFields = {
+            bank_name: settings.bank_name || null,
+            bank_account_number: settings.bank_account_number || null,
+            bank_account_holder: settings.bank_account_holder || null,
+          };
+        }
+        fields.push(
+          "payment_method=?", "status=?", "method_selected_at=?",
+          "bank_name=?", "bank_account_number=?", "bank_account_holder=?",
+          "barcode_image=?", "barcode_uploaded_at=?",
+          "proof_image=?", "proof_last_digits=?", "proof_uploaded_at=?"
+        );
+        binds.push(
+          method, newStatus, nowIso(),
+          bankFields.bank_name, bankFields.bank_account_number, bankFields.bank_account_holder,
+          null, null, null, null, null
+        );
+      }
+    }
+  }
+
+  if (!fields.length) return json({ error: "沒有要更正的內容" }, 400);
+
+  binds.push(id);
+  await env.DB.prepare(`UPDATE orders SET ${fields.join(", ")} WHERE id=?`).bind(...binds).run();
+  return json({ ok: true });
+}
+
+// 訂單完成（結案）：純粹方便篩選哪些訂單已經處理完畢，不影響金流，只有已完成付款的訂單能標記
+async function handleCompleteOrder(id, env) {
+  const order = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).first();
+  if (!order) return json({ error: "找不到訂單" }, 404);
+  if (order.status !== "paid") return json({ error: "只有已完成付款的訂單才能標記為訂單完成" }, 400);
+  await env.DB.prepare("UPDATE orders SET is_completed=1, completed_at=? WHERE id=?").bind(nowIso(), id).run();
+  return json({ ok: true });
+}
+
+async function handleUncompleteOrder(id, env) {
+  await env.DB.prepare("UPDATE orders SET is_completed=0, completed_at=NULL WHERE id=?").bind(id).run();
+  return json({ ok: true });
+}
+
 async function handleExport(request, env) {
   const url = new URL(request.url);
   const month = url.searchParams.get("month") || new Date().toISOString().slice(0, 7);
@@ -254,7 +351,7 @@ async function handleExport(request, env) {
     cancelled: "已取消",
   };
 
-  const header = ["訂單編號", "建立時間", "會員/客人", "金額", "付款方式", "狀態", "付款方式選擇時間", "完成付款時間", "到期時間"];
+  const header = ["訂單編號", "建立時間", "會員/客人", "金額", "付款方式", "狀態", "訂單完成(結案)", "付款證明末幾碼", "付款方式選擇時間", "完成付款時間", "到期時間"];
   const rows = results.map((o) => [
     o.id,
     o.created_at,
@@ -262,6 +359,8 @@ async function handleExport(request, env) {
     o.amount,
     PM_LABEL[o.payment_method] || "",
     STATUS_LABEL[o.status] || o.status,
+    o.is_completed ? "是" : "否",
+    o.proof_last_digits || "",
     o.method_selected_at || "",
     o.paid_at || "",
     o.expires_at,
@@ -352,6 +451,82 @@ async function handleSelectMethod(token, request, env) {
   return json(publicOrderView(updated));
 }
 
+// 客人上傳轉帳截圖 / 填寫帳號末幾碼，方便店家核對款項（轉帳、超商繳費適用）
+async function handleUploadProof(token, request, env) {
+  const body = await request.json().catch(() => ({}));
+  const { image_base64, last_digits } = body;
+  const hasImage = image_base64 && String(image_base64).startsWith("data:image");
+  const digits = last_digits && last_digits.trim() ? last_digits.trim().slice(0, 20) : null;
+  if (!hasImage && !digits) return json({ error: "請上傳截圖或填寫帳號末幾碼" }, 400);
+
+  let order = await env.DB.prepare("SELECT * FROM orders WHERE token=?").bind(token).first();
+  if (!order) return json({ error: "找不到此訂單" }, 404);
+  order = await expireIfNeeded(env.DB, order);
+  if (order.status === "expired") return json({ error: "此連結已過期" }, 400);
+  if (order.status === "cancelled") return json({ error: "此訂單已取消" }, 400);
+  if (!PROOF_ELIGIBLE_METHODS.has(order.payment_method)) {
+    return json({ error: "此付款方式不需要上傳付款證明" }, 400);
+  }
+
+  await env.DB.prepare(
+    `UPDATE orders SET
+      proof_image = COALESCE(?, proof_image),
+      proof_last_digits = COALESCE(?, proof_last_digits),
+      proof_uploaded_at = ?
+     WHERE token=?`
+  )
+    .bind(hasImage ? image_base64 : null, digits, nowIso(), token)
+    .run();
+
+  const updated = await env.DB.prepare("SELECT * FROM orders WHERE token=?").bind(token).first();
+  return json(publicOrderView(updated));
+}
+
+// ---- Member self-service (自助登入查詢) ----
+
+async function handleMemberLogin(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const { account, password } = body;
+  if (!account || !password) return json({ error: "請輸入帳號與密碼" }, 400);
+  const member = await env.DB.prepare("SELECT * FROM members WHERE account=?").bind(account.trim()).first();
+  if (!member || !member.password_hash) {
+    return json({ error: "帳號或密碼錯誤，或此帳號尚未開通登入功能，請洽店家" }, 401);
+  }
+  const valid = await verifyPassword(password, member.password_hash);
+  if (!valid) return json({ error: "帳號或密碼錯誤" }, 401);
+  const ttlHours = parseInt(env.SESSION_TTL_HOURS || "12", 10);
+  const session = await signSession(
+    { memberId: member.id, account: member.account, exp: Date.now() + ttlHours * 3600 * 1000 },
+    env.ADMIN_SESSION_SECRET
+  );
+  return json({ ok: true }, 200, { "Set-Cookie": setCookieHeader("member_session", session, ttlHours * 3600) });
+}
+
+async function handleMemberLogout() {
+  return json({ ok: true }, 200, { "Set-Cookie": clearCookieHeader("member_session") });
+}
+
+async function handleMemberMe(session, env) {
+  const member = await env.DB.prepare("SELECT id, name, account FROM members WHERE id=?").bind(session.memberId).first();
+  if (!member) return json({ error: "會員不存在，請重新登入" }, 404);
+  return json(member);
+}
+
+async function handleMemberOrders(session, request, env) {
+  const url = new URL(request.url);
+  const month = url.searchParams.get("month");
+  let query =
+    "SELECT id, amount, payment_method, status, is_completed, created_at, paid_at, expires_at FROM orders WHERE member_id=?";
+  const binds = [session.memberId];
+  if (month) {
+    query += " AND strftime('%Y-%m', created_at) = ?";
+    binds.push(month);
+  }
+  query += " ORDER BY created_at DESC LIMIT 200";
+  const { results } = await env.DB.prepare(query).bind(...binds).all();
+  return json(results);
+}
+
 // ================= Pages Functions entrypoint =================
 
 export async function onRequest(context) {
@@ -364,6 +539,7 @@ export async function onRequest(context) {
     // ---- Public pages ----
     if (path === "/admin" || path === "/admin/") return html(adminHtml());
     if (path.startsWith("/pay/")) return html(payHtml());
+    if (path === "/member" || path === "/member/") return html(memberHtml());
     if (path === "/") return Response.redirect(url.origin + "/admin", 302);
 
     // ---- Public API ----
@@ -372,11 +548,26 @@ export async function onRequest(context) {
     if (path === "/api/admin/login" && method === "POST") return handleLogin(request, env);
     if (path === "/api/admin/logout" && method === "POST") return handleLogout();
 
+    if (path === "/api/member/login" && method === "POST") return handleMemberLogin(request, env);
+    if (path === "/api/member/logout" && method === "POST") return handleMemberLogout();
+
     const orderTokenMatch = path.match(/^\/api\/order\/([a-f0-9]+)$/);
     if (orderTokenMatch && method === "GET") return handleGetOrderPublic(orderTokenMatch[1], env);
 
     const selectMethodMatch = path.match(/^\/api\/order\/([a-f0-9]+)\/select-method$/);
     if (selectMethodMatch && method === "POST") return handleSelectMethod(selectMethodMatch[1], request, env);
+
+    const proofMatch = path.match(/^\/api\/order\/([a-f0-9]+)\/proof$/);
+    if (proofMatch && method === "POST") return handleUploadProof(proofMatch[1], request, env);
+
+    // ---- Member API (member session required) ----
+    if (path.startsWith("/api/member/")) {
+      const session = await requireMember(request, env);
+      if (!session) return json({ error: "未登入或登入已過期" }, 401);
+      if (path === "/api/member/me" && method === "GET") return handleMemberMe(session, env);
+      if (path === "/api/member/orders" && method === "GET") return handleMemberOrders(session, request, env);
+      return json({ error: "Not found" }, 404);
+    }
 
     // ---- Admin API (session required) ----
     if (path.startsWith("/api/admin/")) {
@@ -407,6 +598,15 @@ export async function onRequest(context) {
 
       const cancelMatch = path.match(/^\/api\/admin\/orders\/(\d+)\/cancel$/);
       if (cancelMatch && method === "POST") return handleCancelOrder(cancelMatch[1], env);
+
+      const correctMatch = path.match(/^\/api\/admin\/orders\/(\d+)$/);
+      if (correctMatch && method === "PATCH") return handleCorrectOrder(correctMatch[1], request, env);
+
+      const completeMatch = path.match(/^\/api\/admin\/orders\/(\d+)\/complete$/);
+      if (completeMatch && method === "POST") return handleCompleteOrder(completeMatch[1], env);
+
+      const uncompleteMatch = path.match(/^\/api\/admin\/orders\/(\d+)\/uncomplete$/);
+      if (uncompleteMatch && method === "POST") return handleUncompleteOrder(uncompleteMatch[1], env);
 
       if (path === "/api/admin/export" && method === "GET") return handleExport(request, env);
       if (path === "/api/admin/stats/monthly" && method === "GET") return handleMonthlyStats(request, env);

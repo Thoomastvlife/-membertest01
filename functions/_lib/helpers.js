@@ -86,7 +86,16 @@ export function clearCookieHeader(name) {
 
 export async function requireAdmin(request, env) {
   const token = getCookie(request, "admin_session");
-  return verifySession(token, env.ADMIN_SESSION_SECRET);
+  const session = await verifySession(token, env.ADMIN_SESSION_SECRET);
+  if (!session || !session.adminId) return null;
+  return session;
+}
+
+export async function requireMember(request, env) {
+  const token = getCookie(request, "member_session");
+  const session = await verifySession(token, env.ADMIN_SESSION_SECRET);
+  if (!session || !session.memberId) return null;
+  return session;
 }
 
 export function nowIso() {
@@ -111,8 +120,13 @@ export function publicOrderView(o) {
     barcode_image: o.status === "ready_to_pay" ? o.barcode_image : null,
     expires_at: o.expires_at,
     created_at: o.created_at,
+    proof_last_digits: o.proof_last_digits || null,
+    proof_uploaded_at: o.proof_uploaded_at || null,
+    has_proof_image: !!o.proof_image,
   };
 }
+
+export const PROOF_ELIGIBLE_METHODS = new Set(["transfer", "store_barcode"]);
 
 export async function expireIfNeeded(db, order) {
   if (["paid", "cancelled", "expired"].includes(order.status)) return order;
