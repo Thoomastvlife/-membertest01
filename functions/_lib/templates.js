@@ -39,6 +39,7 @@ export function adminHtml() {
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 12px;}
   .total-row td{font-weight:700;background:#f8f9fb;}
   .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:50;padding:16px;}
+  .modal-overlay.hidden{display:none;}
   .modal-box{background:#fff;border-radius:10px;padding:20px;max-width:380px;width:100%;max-height:90vh;overflow:auto;}
   .modal-box h2{margin-top:0;font-size:16px;}
   img.proof-thumb{max-width:56px;max-height:40px;border-radius:4px;border:1px solid var(--border);cursor:pointer;display:block;}
