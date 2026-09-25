@@ -613,7 +613,7 @@ async function handleMemberOrders(session, request, env) {
   const url = new URL(request.url);
   const month = url.searchParams.get("month");
   let query =
-    "SELECT id, amount, payment_method, status, is_completed, created_at, paid_at, expires_at FROM orders WHERE member_id=?";
+    "SELECT id, token, amount, payment_method, status, is_completed, created_at, paid_at, expires_at FROM orders WHERE member_id=?";
   const binds = [session.memberId];
   if (month) {
     query += " AND strftime('%Y-%m', created_at) = ?";
@@ -622,6 +622,32 @@ async function handleMemberOrders(session, request, env) {
   query += " ORDER BY created_at DESC LIMIT 200";
   const { results } = await env.DB.prepare(query).bind(...binds).all();
   return json(results);
+}
+
+// 會員自助下單：會員登入後自己輸入金額建立訂單，流程跟後台「結帳櫃檯」建立的訂單完全相同，
+// 建立後導向 /pay/{token} 選付款方式、上傳證明；member_id 一律鎖定為目前登入的會員，不能填別人。
+async function handleMemberCreateOrder(session, request, env) {
+  const body = await request.json().catch(() => ({}));
+  const amt = parseFloat(body.amount);
+  if (!amt || amt <= 0) return json({ error: "金額不正確" }, 400);
+
+  const member = await env.DB.prepare("SELECT * FROM members WHERE id=?").bind(session.memberId).first();
+  if (!member) return json({ error: "會員不存在，請重新登入" }, 404);
+
+  const token = randomToken(24);
+  const ttlHours = parseInt(env.LINK_TTL_HOURS || "3", 10);
+  const expiresAt = addHours(new Date(), ttlHours).toISOString().replace("T", " ").slice(0, 19);
+
+  await env.DB.prepare(
+    `INSERT INTO orders (token, amount, member_id, member_name_snapshot, status, expires_at)
+     VALUES (?, ?, ?, ?, 'pending_method', ?)`
+  )
+    .bind(token, amt, member.id, member.name, expiresAt)
+    .run();
+
+  const url = new URL(request.url);
+  const link = `${url.origin}/pay/${token}`;
+  return json({ ok: true, token, link, expires_at: expiresAt });
 }
 
 // ================= Pages Functions entrypoint =================
@@ -663,6 +689,7 @@ export async function onRequest(context) {
       if (!session) return json({ error: "未登入或登入已過期" }, 401);
       if (path === "/api/member/me" && method === "GET") return handleMemberMe(session, env);
       if (path === "/api/member/orders" && method === "GET") return handleMemberOrders(session, request, env);
+      if (path === "/api/member/orders" && method === "POST") return handleMemberCreateOrder(session, request, env);
       return json({ error: "Not found" }, 404);
     }
 

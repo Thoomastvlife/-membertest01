@@ -1034,12 +1034,24 @@ export function memberHtml() {
   </header>
   <main>
     <div class="card">
+      <h2>自助下單</h2>
+      <label>金額</label>
+      <input id="new_amount" type="number" min="1" step="1" placeholder="請輸入金額" />
+      <button class="btn" id="newOrderBtn" onclick="createOrder()">建立訂單</button>
+      <div id="newOrderMsg" class="msg"></div>
+      <div id="newOrderResult" class="hidden" style="margin-top:10px;">
+        <div class="msg ok">訂單已建立，請繼續完成付款：</div>
+        <a id="newOrderLink" class="btn" style="display:inline-block;text-decoration:none;" target="_blank">前往付款頁</a>
+      </div>
+    </div>
+
+    <div class="card">
       <h2>我的訂單記錄</h2>
       <label>月份（留空查詢全部）</label>
       <input id="ord_month" type="month" />
       <button class="btn secondary" onclick="loadOrders()">查詢</button>
       <table id="ord_table">
-        <thead><tr><th>建立時間</th><th>金額</th><th>付款方式</th><th>狀態</th></tr></thead>
+        <thead><tr><th>建立時間</th><th>金額</th><th>付款方式</th><th>狀態</th><th>操作</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -1092,21 +1104,45 @@ async function doLogout(){
   location.reload();
 }
 
+async function createOrder(){
+  const btn = document.getElementById('newOrderBtn');
+  const msg = document.getElementById('newOrderMsg');
+  const amount = document.getElementById('new_amount').value;
+  msg.textContent=''; msg.className='msg';
+  document.getElementById('newOrderResult').classList.add('hidden');
+  if (!amount || Number(amount) <= 0){ msg.textContent='請輸入正確的金額'; msg.className='msg err'; return; }
+  btn.disabled = true;
+  try{
+    const res = await api('/api/member/orders', {method:'POST', body: JSON.stringify({amount})});
+    document.getElementById('new_amount').value = '';
+    const linkEl = document.getElementById('newOrderLink');
+    linkEl.href = res.link;
+    document.getElementById('newOrderResult').classList.remove('hidden');
+    loadOrders();
+  }catch(e){ msg.textContent = e.message; msg.className='msg err'; }
+  finally{ btn.disabled = false; }
+}
+
 async function loadOrders(){
   const month = document.getElementById('ord_month').value;
   const qs = month ? ('?month='+encodeURIComponent(month)) : '';
   const list = await api('/api/member/orders'+qs);
   const tbody = document.querySelector('#ord_table tbody');
+  const ACTIVE = new Set(['pending_method','awaiting_payment','awaiting_barcode','ready_to_pay']);
   tbody.innerHTML = list.map(o=>{
     const st = STATUS_LABEL[o.status] || [o.status,'b-pending'];
     const completedTag = o.is_completed ? ' <span class="badge b-completed">已結案</span>' : '';
+    const action = ACTIVE.has(o.status)
+      ? \`<a href="/pay/\${o.token}" target="_blank">前往付款</a>\`
+      : \`<a href="/pay/\${o.token}" target="_blank">查看</a>\`;
     return \`<tr>
       <td>\${o.created_at}</td>
       <td>$\${o.amount}</td>
       <td>\${PM_LABEL[o.payment_method]||'尚未選擇'}</td>
       <td><span class="badge \${st[1]}">\${st[0]}</span>\${completedTag}</td>
+      <td>\${action}</td>
     </tr>\`;
-  }).join('') || '<tr><td colspan="4">尚無訂單記錄</td></tr>';
+  }).join('') || '<tr><td colspan="5">尚無訂單記錄</td></tr>';
 }
 
 checkSession();
