@@ -1022,6 +1022,14 @@ export function memberHtml() {
   label{display:block;font-size:12.5px;color:var(--muted);margin:14px 0 5px;}
   input,select{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:8px;font-size:14.5px;background:#FBFBFD;color:var(--ink);transition:border-color .15s;}
   input:focus,select:focus{outline:none;border-color:var(--accent);background:#fff;}
+  input.hidden{display:none;}
+
+  .chips{display:flex;flex-wrap:wrap;gap:8px;}
+  .chip{font-family:var(--mono);font-size:13.5px;font-weight:600;padding:9px 14px;border-radius:20px;border:1px solid var(--line);background:#FBFBFD;color:var(--ink);cursor:pointer;transition:border-color .15s,background .15s;}
+  .chip:hover{border-color:var(--accent);}
+  .chip.active{background:var(--ink);border-color:var(--ink);color:#fff;}
+  .chip-custom{font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif;color:var(--muted);}
+  .chip-custom.active{background:var(--accent-soft);border-color:var(--accent);color:var(--accent-ink);}
 
   button.btn{font-family:var(--display);background:var(--ink);color:#fff;border:none;padding:11px 20px;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600;margin-top:16px;letter-spacing:.01em;transition:background .15s,transform .1s;}
   button.btn:hover{background:#2A2E48;}
@@ -1029,6 +1037,9 @@ export function memberHtml() {
   button.btn.secondary{background:transparent;color:var(--ink);border:1px solid var(--line);}
   button.btn.secondary:hover{background:var(--neutral-soft);border-color:var(--neutral);}
   button.btn:disabled{opacity:.5;cursor:default;}
+
+  header button.btn.secondary{background:transparent;color:#fff;border:1px solid rgba(255,255,255,.35);margin-top:0;}
+  header button.btn.secondary:hover{background:rgba(255,255,255,.1);border-color:#fff;}
 
   table{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:14px;}
   th{text-align:left;padding:8px 6px;border-bottom:1px solid var(--ink);font-weight:600;font-size:12px;color:var(--muted);}
@@ -1083,7 +1094,14 @@ export function memberHtml() {
     <div class="card">
       <h2>自助下單</h2>
       <label>金額</label>
-      <input id="new_amount" type="number" min="1" step="1" placeholder="請輸入金額" />
+      <div class="chips" id="amountChips">
+        <button type="button" class="chip" data-amount="100">$100</button>
+        <button type="button" class="chip" data-amount="300">$300</button>
+        <button type="button" class="chip" data-amount="500">$500</button>
+        <button type="button" class="chip" data-amount="1000">$1000</button>
+        <button type="button" class="chip chip-custom" id="chipCustom">其他金額</button>
+      </div>
+      <input id="new_amount" type="number" min="1" step="1" placeholder="請輸入金額" class="hidden" />
       <button class="btn" id="newOrderBtn" onclick="createOrder()">建立訂單</button>
       <div id="newOrderMsg" class="msg"></div>
       <div id="newOrderResult" class="hidden">
@@ -1116,6 +1134,27 @@ const STATUS_LABEL = {
   expired:['已過期','b-expired'],
   cancelled:['已取消','b-cancel'],
 };
+
+function initAmountChips(){
+  const wrap = document.getElementById('amountChips');
+  const input = document.getElementById('new_amount');
+  if (!wrap || !input) return;
+  wrap.querySelectorAll('.chip').forEach(chip=>{
+    chip.addEventListener('click', ()=>{
+      wrap.querySelectorAll('.chip').forEach(c=>c.classList.remove('active'));
+      chip.classList.add('active');
+      if (chip.id === 'chipCustom'){
+        input.classList.remove('hidden');
+        input.value = '';
+        input.focus();
+      } else {
+        input.classList.add('hidden');
+        input.value = chip.dataset.amount;
+      }
+    });
+  });
+}
+initAmountChips();
 
 async function api(path, opts={}) {
   const res = await fetch(path, {credentials:'include', headers:{'Content-Type':'application/json'}, ...opts});
@@ -1162,6 +1201,8 @@ async function createOrder(){
   try{
     const res = await api('/api/member/orders', {method:'POST', body: JSON.stringify({amount})});
     document.getElementById('new_amount').value = '';
+    document.getElementById('new_amount').classList.add('hidden');
+    document.querySelectorAll('#amountChips .chip').forEach(c=>c.classList.remove('active'));
     const linkEl = document.getElementById('newOrderLink');
     linkEl.href = res.link;
     document.getElementById('newOrderResult').classList.remove('hidden');
