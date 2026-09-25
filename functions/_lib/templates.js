@@ -987,35 +987,82 @@ export function memberHtml() {
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>會員查詢</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
 <style>
-  :root{--bg:#f5f6f8;--card:#fff;--border:#e2e4e8;--text:#1f2430;--muted:#6b7280;--accent:#2f6fed;--danger:#e0453c;--ok:#1f9d55;}
+  :root{
+    --bg:#EEF0F6; --card:#fff; --line:#E2E4ED;
+    --ink:#181B2E; --muted:#767B8C;
+    --accent:#B8842E; --accent-ink:#54390F; --accent-soft:#F6ECD8;
+    --danger:#B8433A; --danger-soft:#F7E6E4;
+    --ok:#1E7A56; --ok-soft:#E1F0E8;
+    --wait:#9C6A16; --wait-soft:#FBEEDA;
+    --neutral:#5B6072; --neutral-soft:#EAEBF1;
+    --violet:#5C4C9E; --violet-soft:#EBE7F6;
+    --radius:14px;
+    --display:'Space Grotesk',-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif;
+    --mono:'IBM Plex Mono',ui-monospace,monospace;
+  }
   *{box-sizing:border-box;}
-  body{margin:0;font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif;background:var(--bg);color:var(--text);}
-  header{background:var(--card);border-bottom:1px solid var(--border);padding:14px 20px;display:flex;justify-content:space-between;align-items:center;}
-  header h1{font-size:18px;margin:0;}
-  main{padding:20px;max-width:640px;margin:0 auto;}
-  .card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:18px;margin-bottom:16px;}
-  .card h2{margin-top:0;font-size:16px;}
-  label{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px;}
-  input,select{width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:6px;font-size:14px;}
-  button.btn{background:var(--accent);color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer;font-size:14px;margin-top:12px;}
-  button.btn.secondary{background:#fff;color:var(--accent);border:1px solid var(--accent);}
-  table{width:100%;border-collapse:collapse;font-size:13px;margin-top:10px;}
-  th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--border);}
-  .badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:12px;color:#fff;}
-  .b-pending{background:#9ca3af;} .b-await{background:#f59e0b;} .b-ready{background:#2f6fed;}
-  .b-paid{background:var(--ok);} .b-expired{background:#6b7280;} .b-cancel{background:var(--danger);}
-  .b-completed{background:#7c3aed;}
+  body{margin:0;font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif;background:var(--bg);color:var(--ink);}
+
+  header{background:var(--ink);padding:20px 24px;display:flex;justify-content:space-between;align-items:center;position:relative;}
+  header::after{content:"";position:absolute;left:0;right:0;bottom:0;height:3px;background:var(--accent);}
+  header h1{font-family:var(--display);font-size:19px;font-weight:600;margin:0;color:#fff;letter-spacing:.02em;}
+  header .who{display:flex;align-items:center;gap:14px;}
+  header #whoami{color:#B9BCCC;font-size:13px;}
+
+  main{padding:24px 18px 60px;max-width:640px;margin:0 auto;}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:22px;margin-bottom:20px;position:relative;box-shadow:0 1px 2px rgba(24,27,46,.04);}
+  .card::before{content:"";position:absolute;left:22px;top:0;width:28px;height:3px;background:var(--accent);}
+  .card h2{margin:6px 0 18px;font-family:var(--display);font-size:16px;font-weight:600;padding-top:6px;}
+
+  label{display:block;font-size:12.5px;color:var(--muted);margin:14px 0 5px;}
+  input,select{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:8px;font-size:14.5px;background:#FBFBFD;color:var(--ink);transition:border-color .15s;}
+  input:focus,select:focus{outline:none;border-color:var(--accent);background:#fff;}
+
+  button.btn{font-family:var(--display);background:var(--ink);color:#fff;border:none;padding:11px 20px;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600;margin-top:16px;letter-spacing:.01em;transition:background .15s,transform .1s;}
+  button.btn:hover{background:#2A2E48;}
+  button.btn:active{transform:translateY(1px);}
+  button.btn.secondary{background:transparent;color:var(--ink);border:1px solid var(--line);}
+  button.btn.secondary:hover{background:var(--neutral-soft);border-color:var(--neutral);}
+  button.btn:disabled{opacity:.5;cursor:default;}
+
+  table{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:14px;}
+  th{text-align:left;padding:8px 6px;border-bottom:1px solid var(--ink);font-weight:600;font-size:12px;color:var(--muted);}
+  td{text-align:left;padding:11px 6px;border-bottom:1px dashed var(--line);}
+  td:nth-child(2){font-family:var(--mono);}
+
+  .badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11.5px;font-weight:600;border:1px solid transparent;}
+  .b-pending{color:var(--neutral);background:var(--neutral-soft);border-color:#D6D8E2;}
+  .b-await{color:var(--wait);background:var(--wait-soft);border-color:#EFD9AE;}
+  .b-ready{color:#2648B0;background:#E5EAFB;border-color:#C6D0F2;}
+  .b-paid{color:var(--ok);background:var(--ok-soft);border-color:#BFE1CE;}
+  .b-expired{color:var(--neutral);background:var(--neutral-soft);border-color:#D6D8E2;}
+  .b-cancel{color:var(--danger);background:var(--danger-soft);border-color:#EFC7C2;}
+  .b-completed{color:var(--violet);background:var(--violet-soft);border-color:#D3CAEE;}
+
   .msg{font-size:13px;margin-top:8px;}
   .msg.err{color:var(--danger);} .msg.ok{color:var(--ok);}
   .hidden{display:none;}
-  #loginView{max-width:360px;margin:80px auto;}
+
+  #loginView{max-width:360px;margin:14vh auto 0;padding-top:26px;}
+  #loginView .mark{font-family:var(--display);font-weight:700;font-size:15px;color:var(--accent-ink);background:var(--accent-soft);display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:9px;margin-bottom:14px;}
+  #loginView h2{padding-top:0;}
+  #loginView .hint{margin-top:16px;color:var(--muted);font-size:12.5px;}
+
+  #newOrderResult{margin-top:14px;padding-top:14px;border-top:1px dashed var(--line);}
+  #newOrderLink{display:inline-block;text-decoration:none;}
+
   .total-row td{font-weight:700;background:#f8f9fb;}
 </style>
 </head>
 <body>
 
 <div id="loginView" class="card">
+  <div class="mark">會</div>
   <h2>會員登入查詢</h2>
   <label>帳號</label>
   <input id="loginAccount" />
@@ -1023,13 +1070,13 @@ export function memberHtml() {
   <input id="loginPass" type="password" />
   <button class="btn" id="loginBtn" onclick="doLogin()">登入</button>
   <div id="loginMsg" class="msg"></div>
-  <div class="msg" style="margin-top:14px;color:var(--muted);">尚未收到帳號密碼？請洽店家開通。</div>
+  <div class="hint">尚未收到帳號密碼？請洽店家開通。</div>
 </div>
 
 <div id="appView" class="hidden">
   <header>
     <h1>會員查詢</h1>
-    <div><span id="whoami" style="margin-right:12px;color:var(--muted);font-size:13px;"></span>
+    <div class="who"><span id="whoami"></span>
       <button class="btn secondary" onclick="doLogout()">登出</button></div>
   </header>
   <main>
@@ -1039,9 +1086,9 @@ export function memberHtml() {
       <input id="new_amount" type="number" min="1" step="1" placeholder="請輸入金額" />
       <button class="btn" id="newOrderBtn" onclick="createOrder()">建立訂單</button>
       <div id="newOrderMsg" class="msg"></div>
-      <div id="newOrderResult" class="hidden" style="margin-top:10px;">
+      <div id="newOrderResult" class="hidden">
         <div class="msg ok">訂單已建立，請繼續完成付款：</div>
-        <a id="newOrderLink" class="btn" style="display:inline-block;text-decoration:none;" target="_blank">前往付款頁</a>
+        <a id="newOrderLink" class="btn" target="_blank">前往付款頁</a>
       </div>
     </div>
 
