@@ -48,6 +48,7 @@ export function adminHtml() {
   .filter-row{display:flex;align-items:center;gap:6px;margin-top:10px;font-size:13px;color:var(--muted);}
   button.btn.small{padding:5px 10px;font-size:12px;margin:2px;}
 
+  /* 會員可搜尋選單 */
   .member-picker{position:relative;}
   .member-picker-input{width:100%;padding:9px 28px 9px 10px;border:1px solid var(--border);border-radius:6px;font-size:14px;background:#fff;}
   .member-picker-input.is-selected{background:#eef3ff;border-color:var(--accent);}
@@ -62,6 +63,7 @@ export function adminHtml() {
   .member-picker-option.mp-nonmember{color:var(--muted);font-style:italic;}
   .member-picker-empty{padding:10px 12px;font-size:13px;color:var(--muted);}
 
+  /* 手機排版優化 */
   @media (max-width:700px){
     header{padding:10px 12px;flex-wrap:wrap;gap:8px;}
     header h1{font-size:16px;}
@@ -115,7 +117,6 @@ export function adminHtml() {
     <button data-tab="settings" onclick="showTab('settings')">付款設定</button>
     <button data-tab="export" onclick="showTab('export')">資料匯出</button>
     <button data-tab="staff" onclick="showTab('staff')">員工帳號</button>
-    <button data-tab="rates" onclick="showTab('rates')">費率設定</button>
   </nav>
   <main>
 
@@ -246,18 +247,6 @@ export function adminHtml() {
       </div>
     </section>
 
-    <section id="tab-rates" class="tab hidden">
-      <div class="card">
-        <h2>抖幣費率設定</h2>
-        <small class="hint">符合金額 ≥ min 時，套用該 rate。系統會自動由大到小排序。修改後儲存即生效，會員下次登入會看到新費率。</small>
-        <div id="rates_list" style="margin-top:14px;"></div>
-        <button class="btn secondary" onclick="addRateRow()">➕ 新增一筆</button>
-        <button class="btn" onclick="saveRates()">儲存費率</button>
-        <button class="btn secondary" onclick="resetRates()">還原預設值</button>
-        <div id="rates_msg" class="msg"></div>
-      </div>
-    </section>
-
   </main>
 </div>
 
@@ -306,7 +295,7 @@ const STATUS_LABEL = {
   cancelled:['已取消','b-cancel'],
 };
 
-// === 將 UTC 時間轉為台灣時間 (UTC+8) ===
+// === 將 UTC 時間轉為台灣時間 (UTC+8) 的格式化函式 ===
 function toTaipeiTime(dateStr) {
   if (!dateStr) return "";
   const isoStr = String(dateStr).replace(" ", "T") + "Z";
@@ -362,7 +351,7 @@ async function doLogout(){
   location.reload();
 }
 
-// ---- 推播通知（Web Push） ----
+// ---- 推播通知（Web Push）：有會員自助下單時，就算沒開著這個網頁也能收到通知 ----
 
 function urlBase64ToUint8Array(base64String){
   const padding = '='.repeat((4 - base64String.length % 4) % 4);
@@ -436,7 +425,6 @@ function showTab(name){
   if (name==='stats') loadStats();
   if (name==='settings') loadSettings();
   if (name==='staff') loadStaff();
-  if (name==='rates') loadRates();
 }
 
 // ---- 訂單自動更新（輪詢）----
@@ -447,10 +435,11 @@ function startOrdersPolling(){
   ordersPollTimer = setInterval(()=> {
     const tab = document.getElementById('tab-orders');
     const modalOpen = !document.getElementById('correctModal').classList.contains('hidden');
+    // 只有在「訂單列表」頁籤還開著、且沒有在編輯更正視窗時才更新
     if (tab && !tab.classList.contains('hidden') && !modalOpen) {
       loadOrders();
     }
-  }, 5000);
+  }, 5000); // 每 5 秒自動更新
 }
 
 function stopOrdersPolling(){
@@ -471,6 +460,7 @@ function escapeHtml(s){
   return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+// 可搜尋的會員選單（取代原本的下拉式 <select>）
 function setupMemberPicker(prefix, onChange){
   const search = document.getElementById(prefix+'_member_search');
   const hidden = document.getElementById(prefix+'_member');
@@ -893,96 +883,6 @@ function exportCsv(){
   window.location.href = '/api/admin/export?month='+encodeURIComponent(month);
 }
 
-// ---- 費率設定 ----
-
-let rateRows = [];
-
-async function loadRates() {
-  const msg = document.getElementById('rates_msg');
-  msg.textContent = '';
-  try {
-    const data = await api('/api/admin/rates');
-    rateRows = data.rules || [];
-    renderRateRows();
-  } catch (e) {
-    msg.textContent = e.message; msg.className = 'msg err';
-  }
-}
-
-function renderRateRows() {
-  const container = document.getElementById('rates_list');
-  if (!rateRows.length) {
-    container.innerHTML = '<div class="msg">尚無費率，請點「新增一筆」</div>';
-    return;
-  }
-  container.innerHTML = rateRows.map((r, i) => `
-    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
-      <span style="min-width:80px;font-size:13px;color:var(--muted);">金額 ≥</span>
-      <input type="number" value="${r.min}" onchange="updateRate(${i},'min',this.value)" style="max-width:140px;">
-      <span style="font-size:13px;color:var(--muted);">→ 匯率</span>
-      <input type="number" step="0.001" value="${r.rate}" onchange="updateRate(${i},'rate',this.value)" style="max-width:120px;">
-      <button class="btn danger small" onclick="removeRate(${i})">刪除</button>
-    </div>
-  `).join('');
-}
-
-function updateRate(index, field, value) {
-  const num = parseFloat(value);
-  if (isNaN(num)) return;
-  rateRows[index][field] = num;
-}
-
-function removeRate(index) {
-  rateRows.splice(index, 1);
-  renderRateRows();
-}
-
-function addRateRow() {
-  rateRows.push({ min: 0, rate: 1.0 });
-  renderRateRows();
-}
-
-async function saveRates() {
-  const msg = document.getElementById('rates_msg');
-  msg.textContent = '';
-  if (!rateRows.length) {
-    msg.textContent = '至少需要一筆費率'; msg.className = 'msg err'; return;
-  }
-  try {
-    await api('/api/admin/rates', {method:'POST', body: JSON.stringify({rules: rateRows})});
-    msg.textContent = '已儲存，會員下次登入即生效'; msg.className = 'msg ok';
-    loadRates();
-  } catch (e) { msg.textContent = e.message; msg.className = 'msg err'; }
-}
-
-async function resetRates() {
-  if (!confirm('確定還原成程式預設的費率嗎？此動作會覆蓋資料庫目前的設定。')) return;
-  const msg = document.getElementById('rates_msg');
-  try {
-    rateRows = [
-      { min: 20000, rate: 2.905 },
-      { min: 10000, rate: 2.900 },
-      { min: 9000,  rate: 2.900 },
-      { min: 8000,  rate: 2.900 },
-      { min: 7000,  rate: 2.890 },
-      { min: 6000,  rate: 2.890 },
-      { min: 5000,  rate: 2.890 },
-      { min: 4500,  rate: 2.890 },
-      { min: 4000,  rate: 2.890 },
-      { min: 3000,  rate: 2.880 },
-      { min: 2250,  rate: 2.880 },
-      { min: 2000,  rate: 2.880 },
-      { min: 1500,  rate: 2.880 },
-      { min: 1000,  rate: 2.870 },
-      { min: 500,   rate: 2.860 },
-      { min: 150,   rate: 2.800 }
-    ];
-    renderRateRows();
-    await api('/api/admin/rates', {method:'POST', body: JSON.stringify({rules: rateRows})});
-    msg.textContent = '已還原預設值'; msg.className = 'msg ok';
-  } catch (e) { msg.textContent = e.message; msg.className = 'msg err'; }
-}
-
 coMemberPicker = setupMemberPicker('co', (id)=>{ document.getElementById('co_nonmember_wrap').style.display = id ? 'none':'block'; });
 corMemberPicker = setupMemberPicker('cor', (id)=>{ document.getElementById('cor_nonmember_wrap').style.display = id ? 'none':'block'; });
 checkSession();
@@ -1031,7 +931,7 @@ const token = location.pathname.split('/').pop();
 const PM_LABEL = {transfer:'轉帳', store_barcode:'超商條碼', taiwan_pay:'台灣Pay'};
 let pollTimer=null;
 
-// === 將 UTC 時間轉為台灣時間 (UTC+8) ===
+// === 將 UTC 時間轉為台灣時間 (UTC+8) 的格式化函式 ===
 function toTaipeiTime(dateStr) {
   if (!dateStr) return "";
   const isoStr = String(dateStr).replace(" ", "T") + "Z";
@@ -1079,6 +979,7 @@ function render(o){
     app.innerHTML = html; return;
   }
 
+  // 訂單還沒結束，開始（或維持）自動輪詢，讓頁面在店家操作後自動更新
   if (!pollTimer) pollTimer = setInterval(load, 5000);
 
   html += '<div class="row"><span>到期時間</span><span>'+toTaipeiTime(o.expires_at)+'</span></div>';
@@ -1276,46 +1177,6 @@ export function memberHtml() {
   #newOrderLink{display:inline-block;text-decoration:none;}
 
   .total-row td{font-weight:700;background:#f8f9fb;}
-
-  /* === 查價專區 === */
-  .quote-toggle{display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none;}
-  .quote-toggle h2{margin:0;padding-top:0;}
-  .quote-toggle .arrow{transition:transform .2s;color:var(--accent);font-size:16px;}
-  .quote-toggle.open .arrow{transform:rotate(180deg);}
-
-  .quote-panel{margin-top:18px;padding-top:18px;border-top:1px dashed var(--line);}
-  .quote-inputs{display:flex;flex-direction:column;gap:10px;margin-bottom:12px;}
-  .quote-input-row{display:flex;gap:8px;align-items:center;}
-  .quote-input-row input{flex:1;}
-  .quote-input-row .remove-btn{background:transparent;color:var(--danger);border:1px solid var(--danger-soft);font-size:14px;padding:8px 12px;margin:0;border-radius:8px;cursor:pointer;}
-  .quote-input-row .remove-btn:hover{background:var(--danger-soft);}
-
-  .quote-actions{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;}
-  .quote-actions button{margin-top:0;}
-
-  .quote-result{background:linear-gradient(135deg, var(--accent-soft), #FFFBF0);border:1px solid var(--accent);border-radius:12px;padding:14px 16px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;animation:fadeIn .3s ease;}
-  .quote-result .info{flex:1;min-width:180px;}
-  .quote-result .info .amount{font-family:var(--mono);font-size:15px;font-weight:600;color:var(--ink);}
-  .quote-result .info .rate{font-size:12px;color:var(--muted);margin-top:2px;}
-  .quote-result .info .coins{font-family:var(--display);font-size:20px;font-weight:700;color:var(--accent-ink);margin-top:4px;}
-  .quote-result .select-btn{background:var(--ink);color:#fff;border:none;padding:9px 16px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;margin:0;white-space:nowrap;}
-  .quote-result .select-btn:hover{background:#2A2E48;}
-
-  @keyframes fadeIn{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:translateY(0);}}
-
-  .estimate-badge{display:inline-block;background:var(--accent-soft);color:var(--accent-ink);font-family:var(--mono);font-size:13px;font-weight:600;padding:6px 12px;border-radius:20px;margin-top:10px;border:1px solid var(--accent);}
-  .estimate-badge.hidden{display:none;}
-
-  /* Modal 彈窗 */
-  .modal-backdrop{position:fixed;inset:0;background:rgba(24,27,46,.6);display:none;align-items:center;justify-content:center;z-index:100;padding:16px;}
-  .modal-backdrop.show{display:flex;}
-  .popup{background:#fff;border-radius:14px;padding:26px 30px;max-width:340px;width:100%;text-align:center;position:relative;box-shadow:0 12px 40px rgba(24,27,46,.25);opacity:0;transform:scale(.92);transition:opacity .25s,transform .25s;}
-  .popup.show{opacity:1;transform:scale(1);}
-  .popup h3{margin:0 0 10px;font-family:var(--display);font-size:16px;color:var(--accent-ink);}
-  .popup p{color:var(--muted);font-size:14px;line-height:1.7;margin:0 0 18px;}
-  .popup button.btn{width:100%;margin-top:0;}
-  #popup-close{position:absolute;top:10px;right:12px;background:transparent;color:var(--muted);font-size:18px;border:none;cursor:pointer;padding:4px 8px;border-radius:50%;width:32px;height:32px;line-height:1;margin:0;}
-  #popup-close:hover{background:var(--neutral-soft);}
 </style>
 </head>
 <body>
@@ -1339,29 +1200,6 @@ export function memberHtml() {
       <button class="btn secondary" onclick="doLogout()">登出</button></div>
   </header>
   <main>
-
-    <!-- === 查價專區（可收合） === -->
-    <div class="card">
-      <div class="quote-toggle" id="quoteToggle" onclick="toggleQuotePanel()">
-        <h2>💰 前往查價</h2>
-        <span class="arrow">▼</span>
-      </div>
-      <div class="quote-panel hidden" id="quotePanel">
-        <label>輸入金額（可新增多筆）</label>
-        <div class="quote-inputs" id="quoteInputs">
-          <div class="quote-input-row">
-            <input type="number" class="quote-amount" placeholder="輸入金額 (150~50000)" min="150" max="50000" step="1">
-          </div>
-        </div>
-        <div class="quote-actions">
-          <button class="btn secondary" onclick="addQuoteInput()">➕ 新增金額</button>
-          <button class="btn" onclick="calculateQuotes()">計算抖幣</button>
-        </div>
-        <div id="quoteResults"></div>
-      </div>
-    </div>
-
-    <!-- === 自助下單 === -->
     <div class="card">
       <h2>自助下單</h2>
       <label>金額</label>
@@ -1373,7 +1211,6 @@ export function memberHtml() {
         <button type="button" class="chip chip-custom" id="chipCustom">其他金額</button>
       </div>
       <input id="new_amount" type="number" min="1" step="1" placeholder="請輸入金額" class="hidden" />
-      <div class="estimate-badge hidden" id="estimateBadge"></div>
       <button class="btn" id="newOrderBtn" onclick="createOrder()">建立訂單</button>
       <div id="newOrderMsg" class="msg"></div>
       <div id="newOrderResult" class="hidden">
@@ -1382,7 +1219,6 @@ export function memberHtml() {
       </div>
     </div>
 
-    <!-- === 我的訂單記錄 === -->
     <div class="card">
       <h2>我的訂單記錄</h2>
       <label>月份（留空查詢全部）</label>
@@ -1394,16 +1230,6 @@ export function memberHtml() {
       </table>
     </div>
   </main>
-</div>
-
-<!-- === Modal 彈窗 === -->
-<div class="modal-backdrop" id="modal-backdrop">
-  <div class="popup" id="popup">
-    <button id="popup-close" onclick="hidePopup()">✖</button>
-    <h3 id="popup-title">提醒</h3>
-    <p id="popup-message">其他金額請私信</p>
-    <button class="btn" onclick="hidePopup()">我知道了</button>
-  </div>
 </div>
 
 <script>
@@ -1418,174 +1244,31 @@ const STATUS_LABEL = {
   cancelled:['已取消','b-cancel'],
 };
 
-// === 匯率規則（從 API 讀取） ===
-let rateRules = [];
-
-async function loadRates() {
-  try {
-    const data = await api('/api/rates');
-    rateRules = data.rules || [];
-  } catch (e) {
-    console.warn('讀取費率失敗', e);
-    rateRules = [];
-  }
-}
-
-// 取得對應匯率
-function getRate(amount) {
-  for (const rule of rateRules) {
-    if (amount >= rule.min) return rule.rate;
-  }
-  return null;
-}
-
-// 計算抖幣
-function calcCoins(amount) {
-  if (isNaN(amount) || amount < 150 || amount > 50000) return null;
-  const rate = getRate(amount);
-  if (!rate) return null;
-  return { amount, rate, coins: (amount * rate).toFixed(2) };
-}
-
-// === 將 UTC 時間轉為台灣時間 (UTC+8) ===
+// === 將 UTC 時間轉為台灣時間 (UTC+8) 的格式化函式 ===
 function toTaipeiTime(dateStr) {
   if (!dateStr) return "";
   const isoStr = String(dateStr).replace(" ", "T") + "Z";
   return new Date(isoStr).toLocaleString("zh-TW", { timeZone: "Asia/Taipei", hour12: false });
 }
+// ========================================================
 
-// === Modal 彈窗 ===
-function showPopup(title, message) {
-  document.getElementById('popup-title').textContent = title;
-  document.getElementById('popup-message').textContent = message;
-  const backdrop = document.getElementById('modal-backdrop');
-  const popup = document.getElementById('popup');
-  backdrop.classList.add('show');
-  setTimeout(()=>popup.classList.add('show'), 10);
-}
-function hidePopup() {
-  const backdrop = document.getElementById('modal-backdrop');
-  const popup = document.getElementById('popup');
-  popup.classList.remove('show');
-  setTimeout(()=>backdrop.classList.remove('show'), 250);
-}
-
-// === 查價專區：展開 / 收合 ===
-function toggleQuotePanel() {
-  const toggle = document.getElementById('quoteToggle');
-  const panel = document.getElementById('quotePanel');
-  toggle.classList.toggle('open');
-  panel.classList.toggle('hidden');
-}
-
-// === 查價專區：新增金額輸入列 ===
-function addQuoteInput() {
-  const container = document.getElementById('quoteInputs');
-  const row = document.createElement('div');
-  row.className = 'quote-input-row';
-  row.innerHTML = `
-    <input type="number" class="quote-amount" placeholder="輸入金額 (150~50000)" min="150" max="50000" step="1">
-    <button type="button" class="remove-btn" onclick="this.parentElement.remove()">✖</button>
-  `;
-  container.appendChild(row);
-}
-
-// === 查價專區：計算 ===
-function calculateQuotes() {
-  const inputs = document.querySelectorAll('.quote-amount');
-  const results = [];
-  let hasInvalid = false;
-
-  inputs.forEach(input => {
-    const raw = input.value.trim();
-    if (!raw) return;
-    const amount = parseFloat(raw);
-    const res = calcCoins(amount);
-    if (!res) { hasInvalid = true; return; }
-    results.push(res);
-  });
-
-  if (results.length === 0) {
-    if (hasInvalid) {
-      showPopup('金額超出範圍', '其他金額請私信');
-    } else {
-      showPopup('提醒', '請至少輸入一筆金額');
-    }
-    document.getElementById('quoteResults').innerHTML = '';
-    return;
-  }
-
-  const container = document.getElementById('quoteResults');
-  container.innerHTML = results.map(r => `
-    <div class="quote-result">
-      <div class="info">
-        <div class="amount">$${r.amount.toLocaleString()} TWD</div>
-        <div class="rate">兌換比例：1 : ${r.rate}</div>
-        <div class="coins">🪙 ${Number(r.coins).toLocaleString()} 抖幣</div>
-      </div>
-      <button class="select-btn" onclick="selectQuote(${r.amount}, '${r.coins}')">選擇此金額</button>
-    </div>
-  `).join('');
-
-  if (hasInvalid) {
-    showPopup('部分金額超出範圍', '超出 150~50000 的金額請私信');
-  }
-}
-
-// === 選擇查價結果 → 帶入自助下單金額 ===
-function selectQuote(amount, coins) {
-  const input = document.getElementById('new_amount');
-  input.value = amount;
-  document.querySelectorAll('#amountChips .chip').forEach(c => c.classList.remove('active'));
-  document.querySelectorAll('#amountChips .chip').forEach(chip => {
-    if (chip.dataset.amount && Number(chip.dataset.amount) === amount) {
-      chip.classList.add('active');
-    }
-  });
-  const badge = document.getElementById('estimateBadge');
-  badge.textContent = `預估可獲得 🪙 ${Number(coins).toLocaleString()} 抖幣`;
-  badge.classList.remove('hidden');
-  document.getElementById('new_amount').scrollIntoView({behavior:'smooth', block:'center'});
-}
-
-// === 金額 chip 點擊 ===
-function initAmountChips() {
+function initAmountChips(){
   const wrap = document.getElementById('amountChips');
   const input = document.getElementById('new_amount');
-  const badge = document.getElementById('estimateBadge');
   if (!wrap || !input) return;
-  wrap.querySelectorAll('.chip').forEach(chip => {
-    chip.addEventListener('click', () => {
-      wrap.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+  wrap.querySelectorAll('.chip').forEach(chip=>{
+    chip.addEventListener('click', ()=>{
+      wrap.querySelectorAll('.chip').forEach(c=>c.classList.remove('active'));
       chip.classList.add('active');
-      if (chip.id === 'chipCustom') {
+      if (chip.id === 'chipCustom'){
         input.classList.remove('hidden');
         input.value = '';
         input.focus();
-        badge.classList.add('hidden');
       } else {
         input.classList.add('hidden');
         input.value = chip.dataset.amount;
-        const res = calcCoins(parseFloat(chip.dataset.amount));
-        if (res) {
-          badge.textContent = `預估可獲得 🪙 ${Number(res.coins).toLocaleString()} 抖幣`;
-          badge.classList.remove('hidden');
-        } else {
-          badge.classList.add('hidden');
-        }
       }
     });
-  });
-
-  input.addEventListener('input', () => {
-    const val = parseFloat(input.value);
-    const res = calcCoins(val);
-    if (res) {
-      badge.textContent = `預估可獲得 🪙 ${Number(res.coins).toLocaleString()} 抖幣`;
-      badge.classList.remove('hidden');
-    } else {
-      badge.classList.add('hidden');
-    }
   });
 }
 initAmountChips();
@@ -1603,7 +1286,6 @@ async function checkSession(){
     document.getElementById('whoami').textContent = me.name + '（' + me.account + '）';
     document.getElementById('loginView').classList.add('hidden');
     document.getElementById('appView').classList.remove('hidden');
-    await loadRates();
     loadOrders();
     startOrdersPolling();
   }catch(e){ /* 尚未登入，維持登入畫面 */ }
@@ -1639,7 +1321,6 @@ async function createOrder(){
     const res = await api('/api/member/orders', {method:'POST', body: JSON.stringify({amount})});
     document.getElementById('new_amount').value = '';
     document.getElementById('new_amount').classList.add('hidden');
-    document.getElementById('estimateBadge').classList.add('hidden');
     document.querySelectorAll('#amountChips .chip').forEach(c=>c.classList.remove('active'));
     const linkEl = document.getElementById('newOrderLink');
     linkEl.href = res.link;
@@ -1655,11 +1336,12 @@ let ordersPollTimer = null;
 function startOrdersPolling(){
   stopOrdersPolling();
   ordersPollTimer = setInterval(()=> {
+    // 只有在會員已登入、且頁面還在前景時才更新
     const appView = document.getElementById('appView');
     if (appView && !appView.classList.contains('hidden') && !document.hidden) {
       loadOrders();
     }
-  }, 5000);
+  }, 5000); // 每 5 秒自動更新
 }
 
 function stopOrdersPolling(){
@@ -1688,10 +1370,7 @@ async function loadOrders(){
   }).join('') || '<tr><td colspan="5">尚無訂單記錄</td></tr>';
 }
 
-// 頁面載入時就先抓費率（不管有沒有登入）
-loadRates().then(() => {
-  checkSession();
-});
+checkSession();
 </script>
 </body>
 </html>`;
