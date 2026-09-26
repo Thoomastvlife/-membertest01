@@ -430,6 +430,15 @@ async function handleExport(request, env) {
     .bind(month)
     .all();
 
+  // === 新增：將 UTC 時間轉為台灣時間 (UTC+8) 的格式化函式 ===
+  const toTaipeiTime = (dateStr) => {
+    if (!dateStr) return "";
+    // 將 "YYYY-MM-DD HH:mm:ss" 轉為 ISO 格式，加上 Z 表示 UTC，再轉為台北時區
+    const isoStr = dateStr.replace(" ", "T") + "Z";
+    return new Date(isoStr).toLocaleString("zh-TW", { timeZone: "Asia/Taipei", hour12: false });
+  };
+  // ========================================================
+
   const PM_LABEL = { transfer: "轉帳", store_barcode: "超商條碼", taiwan_pay: "台灣Pay" };
   const STATUS_LABEL = {
     pending_method: "待選付款方式",
@@ -442,18 +451,20 @@ async function handleExport(request, env) {
   };
 
   const header = ["訂單編號", "建立時間", "會員/客人", "金額", "付款方式", "狀態", "訂單完成(結案)", "付款證明末幾碼", "付款方式選擇時間", "完成付款時間", "到期時間"];
+  
+  // === 修改：將時間欄位透過 toTaipeiTime 轉換 ===
   const rows = results.map((o) => [
     o.id,
-    o.created_at,
+    toTaipeiTime(o.created_at),
     o.member_name_snapshot,
     o.amount,
     PM_LABEL[o.payment_method] || "",
     STATUS_LABEL[o.status] || o.status,
     o.is_completed ? "是" : "否",
     o.proof_last_digits || "",
-    o.method_selected_at || "",
-    o.paid_at || "",
-    o.expires_at,
+    toTaipeiTime(o.method_selected_at),
+    toTaipeiTime(o.paid_at),
+    toTaipeiTime(o.expires_at),
   ]);
 
   const csvLines = [header, ...rows].map((row) =>
@@ -688,12 +699,17 @@ async function handlePushUnsubscribe(request, env) {
 // ================= Pages Functions entrypoint =================
 
 export async function onRequest(context) {
-  const { request, env } = context;
+  // 加入 next，讓靜態資源可以通過
+  const { request, env, next } = context;
   const url = new URL(request.url);
   const path = url.pathname;
   const method = request.method;
 
   try {
+    // ---- 放行 Service Worker 靜態檔案 ----
+    // 這行是為了解決 sw.js 404 的問題，讓 Cloudflare 直接把 public/sw.js 當作靜態資源回傳
+    if (path === "/sw.js") return next();
+
     // ---- Public pages ----
     if (path === "/admin" || path === "/admin/") return html(adminHtml());
     if (path.startsWith("/pay/")) return html(payHtml());
