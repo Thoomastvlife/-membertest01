@@ -4,6 +4,8 @@ export function adminHtml() {
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="apple-touch-icon" href="/favicon.svg" />
 <title>後台管理系統</title>
 <style>
   :root{--bg:#f5f6f8;--card:#fff;--border:#e2e4e8;--text:#1f2430;--muted:#6b7280;--accent:#2f6fed;--danger:#e0453c;--ok:#1f9d55;}
@@ -293,10 +295,9 @@ const STATUS_LABEL = {
   cancelled:['已取消','b-cancel'],
 };
 
-// === 新增：將 UTC 時間轉為台灣時間 (UTC+8) 的格式化函式 ===
+// === 將 UTC 時間轉為台灣時間 (UTC+8) 的格式化函式 ===
 function toTaipeiTime(dateStr) {
   if (!dateStr) return "";
-  // 將 "YYYY-MM-DD HH:mm:ss" 轉為 ISO 格式，加上 Z 表示 UTC，再轉為台北時區
   const isoStr = String(dateStr).replace(" ", "T") + "Z";
   return new Date(isoStr).toLocaleString("zh-TW", { timeZone: "Asia/Taipei", hour12: false });
 }
@@ -875,6 +876,8 @@ export function payHtml() {
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="apple-touch-icon" href="/favicon.svg" />
 <title>付款頁面</title>
 <style>
   *{box-sizing:border-box;}
@@ -907,7 +910,7 @@ const token = location.pathname.split('/').pop();
 const PM_LABEL = {transfer:'轉帳', store_barcode:'超商條碼', taiwan_pay:'台灣Pay'};
 let pollTimer=null;
 
-// === 新增：將 UTC 時間轉為台灣時間 (UTC+8) 的格式化函式 ===
+// === 將 UTC 時間轉為台灣時間 (UTC+8) 的格式化函式 ===
 function toTaipeiTime(dateStr) {
   if (!dateStr) return "";
   const isoStr = String(dateStr).replace(" ", "T") + "Z";
@@ -1069,6 +1072,8 @@ export function memberHtml() {
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="apple-touch-icon" href="/favicon.svg" />
 <title>會員查詢</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1218,7 +1223,7 @@ const STATUS_LABEL = {
   cancelled:['已取消','b-cancel'],
 };
 
-// === 新增：將 UTC 時間轉為台灣時間 (UTC+8) 的格式化函式 ===
+// === 將 UTC 時間轉為台灣時間 (UTC+8) 的格式化函式 ===
 function toTaipeiTime(dateStr) {
   if (!dateStr) return "";
   const isoStr = String(dateStr).replace(" ", "T") + "Z";
