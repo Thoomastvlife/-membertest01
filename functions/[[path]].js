@@ -430,11 +430,10 @@ async function handleExport(request, env) {
     .bind(month)
     .all();
 
-  // === 新增：將 UTC 時間轉為台灣時間 (UTC+8) 的格式化函式 ===
+  // === 將 UTC 時間轉為台灣時間 (UTC+8) 的格式化函式 ===
   const toTaipeiTime = (dateStr) => {
     if (!dateStr) return "";
-    // 將 "YYYY-MM-DD HH:mm:ss" 轉為 ISO 格式，加上 Z 表示 UTC，再轉為台北時區
-    const isoStr = dateStr.replace(" ", "T") + "Z";
+    const isoStr = String(dateStr).replace(" ", "T") + "Z";
     return new Date(isoStr).toLocaleString("zh-TW", { timeZone: "Asia/Taipei", hour12: false });
   };
   // ========================================================
@@ -451,8 +450,6 @@ async function handleExport(request, env) {
   };
 
   const header = ["訂單編號", "建立時間", "會員/客人", "金額", "付款方式", "狀態", "訂單完成(結案)", "付款證明末幾碼", "付款方式選擇時間", "完成付款時間", "到期時間"];
-  
-  // === 修改：將時間欄位透過 toTaipeiTime 轉換 ===
   const rows = results.map((o) => [
     o.id,
     toTaipeiTime(o.created_at),
@@ -707,8 +704,57 @@ export async function onRequest(context) {
 
   try {
     // ---- 放行 Service Worker 靜態檔案 ----
-    // 這行是為了解決 sw.js 404 的問題，讓 Cloudflare 直接把 public/sw.js 當作靜態資源回傳
     if (path === "/sw.js") return next();
+
+    // ---- 動態生成 Favicon (SVG 圖標) ----
+    if (path === "/favicon.svg" || path === "/favicon.ico") {
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3D2314"/>
+      <stop offset="100%" stop-color="#1A0D07"/>
+    </linearGradient>
+    <linearGradient id="cardGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F3A152"/>
+      <stop offset="100%" stop-color="#C67C26"/>
+    </linearGradient>
+    <linearGradient id="steamGrad" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0"/>
+      <stop offset="50%" stop-color="#FFFFFF" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="dropShadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000000" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bgGrad)"/>
+  <rect x="16" y="16" width="480" height="480" rx="96" fill="none" stroke="#D4A373" stroke-width="4" stroke-opacity="0.3"/>
+  <g filter="url(#dropShadow)">
+    <g transform="rotate(-12, 230, 260)">
+      <rect x="110" y="160" width="260" height="160" rx="16" fill="url(#cardGrad)"/>
+      <path d="M 110 210 Q 240 230 370 190" fill="none" stroke="#FFFFFF" stroke-width="3" stroke-opacity="0.4"/>
+      <circle cx="330" cy="280" r="14" fill="#FFE5B4" fill-opacity="0.8"/>
+      <polygon points="330,270 333,277 340,278 335,283 336,290 330,286 324,290 325,283 320,278 327,277" fill="#C67C26"/>
+    </g>
+    <g transform="translate(40, 20)">
+      <path d="M 180 200 L 200 400 Q 200 416 216 416 L 296 416 Q 312 416 312 400 L 332 200 Z" fill="#FFFDF9"/>
+      <path d="M 187 270 L 195 340 L 317 340 L 325 270 Z" fill="#D4A373"/>
+      <path d="M 240 292 L 246 308 L 256 296 L 266 308 L 272 292 L 270 318 L 242 318 Z" fill="#3D2314"/>
+      <path d="M 170 184 C 170 176, 176 170, 184 170 L 328 170 C 336 170, 342 176, 342 184 L 346 200 L 166 200 Z" fill="#2B170D"/>
+      <rect x="236" y="160" width="40" height="12" rx="4" fill="#2B170D"/>
+    </g>
+    <path d="M 230 140 Q 220 110 240 80 T 230 20" fill="none" stroke="url(#steamGrad)" stroke-width="8" stroke-linecap="round"/>
+    <path d="M 280 150 Q 290 120 270 90 T 280 30" fill="none" stroke="url(#steamGrad)" stroke-width="8" stroke-linecap="round"/>
+  </g>
+</svg>`;
+
+      return new Response(svg, {
+        headers: {
+          "Content-Type": "image/svg+xml",
+          "Cache-Control": "public, max-age=86400"
+        }
+      });
+    }
 
     // ---- Public pages ----
     if (path === "/admin" || path === "/admin/") return html(adminHtml());
