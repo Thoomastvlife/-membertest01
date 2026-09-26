@@ -17,3 +17,6 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT
 );
+
+-- 預設抖幣費率（若後台已經存過費率，這行 INSERT OR IGNORE 不會覆蓋掉既有設定）
+INSERT OR IGNORE INTO settings (key, value) VALUES ('rate_rules', '[{"min":0,"rate":2.5}]');

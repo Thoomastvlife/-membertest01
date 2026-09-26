@@ -74,3 +74,4 @@ CREATE INDEX IF NOT EXISTS idx_orders_is_completed ON orders(is_completed);
 INSERT OR IGNORE INTO settings (key, value) VALUES ('bank_name', '請於後台設定填入銀行名稱');
 INSERT OR IGNORE INTO settings (key, value) VALUES ('bank_account_number', '請於後台設定填入帳號');
 INSERT OR IGNORE INTO settings (key, value) VALUES ('bank_account_holder', '請於後台設定填入戶名');
+INSERT OR IGNORE INTO settings (key, value) VALUES ('rate_rules', '[{"min":0,"rate":2.5}]');

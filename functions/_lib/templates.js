@@ -960,22 +960,7 @@ async function resetRates() {
   const msg = document.getElementById('rates_msg');
   try {
     rateRows = [
-      { min: 20000, rate: 2.905 },
-      { min: 10000, rate: 2.900 },
-      { min: 9000,  rate: 2.900 },
-      { min: 8000,  rate: 2.900 },
-      { min: 7000,  rate: 2.890 },
-      { min: 6000,  rate: 2.890 },
-      { min: 5000,  rate: 2.890 },
-      { min: 4500,  rate: 2.890 },
-      { min: 4000,  rate: 2.890 },
-      { min: 3000,  rate: 2.880 },
-      { min: 2250,  rate: 2.880 },
-      { min: 2000,  rate: 2.880 },
-      { min: 1500,  rate: 2.880 },
-      { min: 1000,  rate: 2.870 },
-      { min: 500,   rate: 2.860 },
-      { min: 150,   rate: 2.800 }
+      { min: 0, rate: 2.500 }
     ];
     renderRateRows();
     await api('/api/admin/rates', {method:'POST', body: JSON.stringify({rules: rateRows})});

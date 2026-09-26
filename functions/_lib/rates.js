@@ -4,22 +4,7 @@
 // 注意：管理員若在後台有設定過費率，會以資料庫的為主
 
 export const DEFAULT_RATE_RULES = [
-  { min: 20000, rate: 2.700 },
-  { min: 10000, rate: 2.700 },
-  { min: 9000,  rate: 2.700 },
-  { min: 8000,  rate: 2.700 },
-  { min: 7000,  rate: 2.700 },
-  { min: 6000,  rate: 2.700 },
-  { min: 5000,  rate: 2.700 },
-  { min: 4500,  rate: 2.700 },
-  { min: 4000,  rate: 2.700 },
-  { min: 3000,  rate: 2.700 },
-  { min: 2250,  rate: 2.700 },
-  { min: 2000,  rate: 2.700 },
-  { min: 1500,  rate: 2.700 },
-  { min: 1000,  rate: 2.700 },
-  { min: 500,   rate: 2.600 },
-  { min: 150,   rate: 2.500 }
+  { min: 0, rate: 2.500 }
 ];
 
 // 取得目前費率（優先讀資料庫，沒有則用預設）
