@@ -1287,6 +1287,7 @@ async function checkSession(){
     document.getElementById('loginView').classList.add('hidden');
     document.getElementById('appView').classList.remove('hidden');
     loadOrders();
+    startOrdersPolling();
   }catch(e){ /* 尚未登入，維持登入畫面 */ }
 }
 
@@ -1303,6 +1304,7 @@ async function doLogin(){
 }
 
 async function doLogout(){
+  stopOrdersPolling();
   await api('/api/member/logout', {method:'POST'});
   location.reload();
 }
@@ -1326,6 +1328,24 @@ async function createOrder(){
     loadOrders();
   }catch(e){ msg.textContent = e.message; msg.className='msg err'; }
   finally{ btn.disabled = false; }
+}
+
+// ---- 訂單自動更新（輪詢）----
+let ordersPollTimer = null;
+
+function startOrdersPolling(){
+  stopOrdersPolling();
+  ordersPollTimer = setInterval(()=> {
+    // 只有在會員已登入、且頁面還在前景時才更新
+    const appView = document.getElementById('appView');
+    if (appView && !appView.classList.contains('hidden') && !document.hidden) {
+      loadOrders();
+    }
+  }, 5000); // 每 5 秒自動更新
+}
+
+function stopOrdersPolling(){
+  if (ordersPollTimer) { clearInterval(ordersPollTimer); ordersPollTimer = null; }
 }
 
 async function loadOrders(){
