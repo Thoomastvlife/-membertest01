@@ -346,6 +346,7 @@ async function doLogin(){
 }
 
 async function doLogout(){
+  stopOrdersPolling();
   await api('/api/admin/logout', {method:'POST'});
   location.reload();
 }
@@ -418,11 +419,31 @@ function showTab(name){
   document.querySelectorAll('.tab').forEach(t=>t.classList.add('hidden'));
   document.getElementById('tab-'+name).classList.remove('hidden');
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active', b.dataset.tab===name));
-  if (name==='orders') loadOrders();
+  if (name==='orders') { loadOrders(); startOrdersPolling(); }
+  else { stopOrdersPolling(); }
   if (name==='members') loadMembers();
   if (name==='stats') loadStats();
   if (name==='settings') loadSettings();
   if (name==='staff') loadStaff();
+}
+
+// ---- 訂單自動更新（輪詢）----
+let ordersPollTimer = null;
+
+function startOrdersPolling(){
+  stopOrdersPolling();
+  ordersPollTimer = setInterval(()=> {
+    const tab = document.getElementById('tab-orders');
+    const modalOpen = !document.getElementById('correctModal').classList.contains('hidden');
+    // 只有在「訂單列表」頁籤還開著、且沒有在編輯更正視窗時才更新
+    if (tab && !tab.classList.contains('hidden') && !modalOpen) {
+      loadOrders();
+    }
+  }, 5000); // 每 5 秒自動更新
+}
+
+function stopOrdersPolling(){
+  if (ordersPollTimer) { clearInterval(ordersPollTimer); ordersPollTimer = null; }
 }
 
 let membersCache = [];
