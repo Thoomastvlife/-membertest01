@@ -293,6 +293,15 @@ const STATUS_LABEL = {
   cancelled:['已取消','b-cancel'],
 };
 
+// === 新增：將 UTC 時間轉為台灣時間 (UTC+8) 的格式化函式 ===
+function toTaipeiTime(dateStr) {
+  if (!dateStr) return "";
+  // 將 "YYYY-MM-DD HH:mm:ss" 轉為 ISO 格式，加上 Z 表示 UTC，再轉為台北時區
+  const isoStr = String(dateStr).replace(" ", "T") + "Z";
+  return new Date(isoStr).toLocaleString("zh-TW", { timeZone: "Asia/Taipei", hour12: false });
+}
+// ========================================================
+
 async function api(path, opts={}) {
   const res = await fetch(path, {credentials:'include', headers:{'Content-Type':'application/json'}, ...opts});
   const data = await res.json().catch(()=>({}));
@@ -576,7 +585,7 @@ function renderOrders(){
 
     return \`<tr>
       <td data-label="ID">\${o.id}</td>
-      <td data-label="建立時間">\${o.created_at}</td>
+      <td data-label="建立時間">\${toTaipeiTime(o.created_at)}</td>
       <td data-label="會員">\${o.member_name_snapshot}</td>
       <td data-label="金額">$\${o.amount}</td>
       <td data-label="付款方式">\${PM_LABEL[o.payment_method]||'尚未選擇'}</td>
@@ -773,7 +782,7 @@ async function loadStaff(){
   tbody.innerHTML = list.map(s=>{
     const isSelf = s.id === currentAdminId;
     return \`<tr>
-      <td data-label="ID">\${s.id}</td><td data-label="帳號">\${s.username}\${isSelf?'（目前登入）':''}</td><td data-label="建立時間">\${s.created_at||''}</td>
+      <td data-label="ID">\${s.id}</td><td data-label="帳號">\${s.username}\${isSelf?'（目前登入）':''}</td><td data-label="建立時間">\${toTaipeiTime(s.created_at)}</td>
       <td data-label="操作">
         <button class="btn secondary small" onclick="resetStaffPassword(\${s.id})">重設密碼</button>
         <button class="btn danger small" \${isSelf?'disabled':''} onclick="deleteStaff(\${s.id})">刪除</button>
@@ -898,6 +907,14 @@ const token = location.pathname.split('/').pop();
 const PM_LABEL = {transfer:'轉帳', store_barcode:'超商條碼', taiwan_pay:'台灣Pay'};
 let pollTimer=null;
 
+// === 新增：將 UTC 時間轉為台灣時間 (UTC+8) 的格式化函式 ===
+function toTaipeiTime(dateStr) {
+  if (!dateStr) return "";
+  const isoStr = String(dateStr).replace(" ", "T") + "Z";
+  return new Date(isoStr).toLocaleString("zh-TW", { timeZone: "Asia/Taipei", hour12: false });
+}
+// ========================================================
+
 async function load(){
   const app = document.getElementById('app');
   try{
@@ -941,7 +958,7 @@ function render(o){
   // 訂單還沒結束，開始（或維持）自動輪詢，讓頁面在店家操作後自動更新
   if (!pollTimer) pollTimer = setInterval(load, 5000);
 
-  html += '<div class="row"><span>到期時間</span><span>'+o.expires_at+'</span></div>';
+  html += '<div class="row"><span>到期時間</span><span>'+toTaipeiTime(o.expires_at)+'</span></div>';
 
   if (!o.payment_method) {
     html += '<div class="muted" style="margin-top:14px;">請選擇付款方式（選擇後將無法變更）</div>';
@@ -1201,6 +1218,14 @@ const STATUS_LABEL = {
   cancelled:['已取消','b-cancel'],
 };
 
+// === 新增：將 UTC 時間轉為台灣時間 (UTC+8) 的格式化函式 ===
+function toTaipeiTime(dateStr) {
+  if (!dateStr) return "";
+  const isoStr = String(dateStr).replace(" ", "T") + "Z";
+  return new Date(isoStr).toLocaleString("zh-TW", { timeZone: "Asia/Taipei", hour12: false });
+}
+// ========================================================
+
 function initAmountChips(){
   const wrap = document.getElementById('amountChips');
   const input = document.getElementById('new_amount');
@@ -1290,7 +1315,7 @@ async function loadOrders(){
       ? \`<a href="/pay/\${o.token}" target="_blank">前往付款</a>\`
       : \`<a href="/pay/\${o.token}" target="_blank">查看</a>\`;
     return \`<tr>
-      <td>\${o.created_at}</td>
+      <td>\${toTaipeiTime(o.created_at)}</td>
       <td>$\${o.amount}</td>
       <td>\${PM_LABEL[o.payment_method]||'尚未選擇'}</td>
       <td><span class="badge \${st[1]}">\${st[0]}</span>\${completedTag}</td>
