@@ -14,6 +14,8 @@ LINK_TTL_HOURS = "3"
 # 付款連結「硬」失效時間：連結本身建立後最多可以被打開/操作幾小時，超過就完全打不開，
 # 跟上面 3 小時付款時效是兩件事——3 小時只是不能再付款，但頁面在這裡設定的時數內都還能看；超過這裡設定的時數，連結直接失效。
 LINK_HARD_EXPIRE_HOURS = "24"
+# 後台推播通知（Web Push）用的聯絡資訊，選填，不填也能正常運作：
+# VAPID_SUBJECT = "mailto:you@example.com"
 
 # 部署前務必設定這個機密值（用來簽署登入 session）：
 #   wrangler pages secret put ADMIN_SESSION_SECRET --project-name=member-checkout-pages

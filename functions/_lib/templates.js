@@ -104,6 +104,7 @@ export function adminHtml() {
   <header>
     <h1>會員結帳後台</h1>
     <div><span id="whoami" style="margin-right:12px;color:var(--muted);font-size:13px;"></span>
+      <button class="btn secondary" id="pushBtn" onclick="togglePush()" style="margin-right:8px;">🔔 開啟通知</button>
       <button class="btn secondary" onclick="doLogout()">登出</button></div>
   </header>
   <nav>
@@ -310,6 +311,7 @@ async function checkSession(){
     document.getElementById('appView').classList.remove('hidden');
     showTab('checkout');
     loadMembersIntoSelect();
+    refreshPushButton();
   }catch(e){
     try{
       const s = await api('/api/setup-status');
@@ -336,6 +338,70 @@ async function doLogin(){
 async function doLogout(){
   await api('/api/admin/logout', {method:'POST'});
   location.reload();
+}
+
+// ---- 推播通知（Web Push）：有會員自助下單時，就算沒開著這個網頁也能收到通知 ----
+
+function urlBase64ToUint8Array(base64String){
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
+  return outputArray;
+}
+
+async function getExistingPushSubscription(){
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return null;
+  try{
+    const reg = await navigator.serviceWorker.register('/sw.js');
+    await navigator.serviceWorker.ready;
+    return await reg.pushManager.getSubscription();
+  }catch(e){ return null; }
+}
+
+async function refreshPushButton(){
+  const btn = document.getElementById('pushBtn');
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+    btn.textContent = '🔕 此瀏覽器不支援通知';
+    btn.disabled = true;
+    return;
+  }
+  const sub = await getExistingPushSubscription();
+  btn.textContent = sub ? '🔔 通知已開啟' : '🔔 開啟通知';
+}
+
+async function togglePush(){
+  const btn = document.getElementById('pushBtn');
+  const existing = await getExistingPushSubscription();
+
+  if (existing) {
+    if (!confirm('確定要關閉這台裝置的訂單通知嗎？')) return;
+    try{
+      await api('/api/admin/push/unsubscribe', {method:'POST', body: JSON.stringify({endpoint: existing.endpoint})});
+      await existing.unsubscribe();
+    }catch(e){ alert(e.message); }
+    refreshPushButton();
+    return;
+  }
+
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+    alert('此瀏覽器不支援推播通知（iPhone 需先將此網站加入主畫面，用該圖示打開才支援）');
+    return;
+  }
+  try{
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') { alert('您拒絕了通知權限，若要開啟請到瀏覽器設定允許此網站的通知'); return; }
+    const reg = await navigator.serviceWorker.register('/sw.js');
+    await navigator.serviceWorker.ready;
+    const { publicKey } = await api('/api/admin/push/public-key');
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(publicKey),
+    });
+    await api('/api/admin/push/subscribe', {method:'POST', body: JSON.stringify(sub.toJSON())});
+    refreshPushButton();
+  }catch(e){ alert('開啟通知失敗: ' + e.message); }
 }
 
 function showTab(name){

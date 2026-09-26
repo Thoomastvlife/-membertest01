@@ -151,3 +151,170 @@ export async function getSettingsObj(env) {
   for (const r of results) obj[r.key] = r.value;
   return obj;
 }
+
+// ========================================================================
+// Web Push 推播（RFC 8291 aes128gcm 內容加密 + RFC 8292 VAPID 身分驗證）
+// 純用瀏覽器/Workers 內建的 Web Crypto API 實作，不依賴任何 npm 套件。
+// VAPID 金鑰對只需要產生一次，產生後存進 D1 的 settings 表，之後重複使用。
+// ========================================================================
+
+function b64urlToBytes(b64url) {
+  const b64 = b64url.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((b64url.length + 3) % 4);
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+function bytesToB64url(bytes) {
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function concatBytes(...arrs) {
+  const len = arrs.reduce((a, b) => a + b.length, 0);
+  const out = new Uint8Array(len);
+  let off = 0;
+  for (const a of arrs) {
+    out.set(a, off);
+    off += a.length;
+  }
+  return out;
+}
+
+async function hkdf(salt, ikm, info, length) {
+  const key = await crypto.subtle.importKey("raw", ikm, "HKDF", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits({ name: "HKDF", hash: "SHA-256", salt, info }, key, length * 8);
+  return new Uint8Array(bits);
+}
+
+// 取得（或第一次使用時自動產生並存起來）後台推播用的 VAPID 金鑰對
+export async function getOrCreateVapidKeys(env) {
+  const settings = await getSettingsObj(env);
+  if (settings.vapid_public_key && settings.vapid_private_jwk) {
+    const privateKey = await crypto.subtle.importKey(
+      "jwk",
+      JSON.parse(settings.vapid_private_jwk),
+      { name: "ECDSA", namedCurve: "P-256" },
+      false,
+      ["sign"]
+    );
+    return { publicKeyB64: settings.vapid_public_key, privateKey };
+  }
+
+  const kp = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+  const rawPub = new Uint8Array(await crypto.subtle.exportKey("raw", kp.publicKey));
+  const jwkPriv = await crypto.subtle.exportKey("jwk", kp.privateKey);
+  const publicKeyB64 = bytesToB64url(rawPub);
+
+  await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('vapid_public_key', ?)")
+    .bind(publicKeyB64)
+    .run();
+  await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('vapid_private_jwk', ?)")
+    .bind(JSON.stringify(jwkPriv))
+    .run();
+
+  const privateKey = await crypto.subtle.importKey(
+    "jwk",
+    jwkPriv,
+    { name: "ECDSA", namedCurve: "P-256" },
+    false,
+    ["sign"]
+  );
+  return { publicKeyB64, privateKey };
+}
+
+async function buildVapidAuthHeader(endpoint, privateKey, publicKeyB64, subject) {
+  const aud = new URL(endpoint).origin;
+  const header = { typ: "JWT", alg: "ES256" };
+  const payload = { aud, exp: Math.floor(Date.now() / 1000) + 12 * 3600, sub: subject };
+  const encHeader = bytesToB64url(new TextEncoder().encode(JSON.stringify(header)));
+  const encPayload = bytesToB64url(new TextEncoder().encode(JSON.stringify(payload)));
+  const signingInput = `${encHeader}.${encPayload}`;
+  const sigBuf = await crypto.subtle.sign(
+    { name: "ECDSA", hash: "SHA-256" },
+    privateKey,
+    new TextEncoder().encode(signingInput)
+  );
+  const jwt = `${signingInput}.${bytesToB64url(new Uint8Array(sigBuf))}`;
+  return `vapid t=${jwt}, k=${publicKeyB64}`;
+}
+
+async function encryptPushPayload(payloadText, p256dhB64, authB64) {
+  const clientPub = b64urlToBytes(p256dhB64);
+  const authSecret = b64urlToBytes(authB64);
+
+  const serverKeyPair = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+  const serverPubRaw = new Uint8Array(await crypto.subtle.exportKey("raw", serverKeyPair.publicKey));
+  const clientPubKey = await crypto.subtle.importKey("raw", clientPub, { name: "ECDH", namedCurve: "P-256" }, false, []);
+  const sharedSecret = new Uint8Array(
+    await crypto.subtle.deriveBits({ name: "ECDH", public: clientPubKey }, serverKeyPair.privateKey, 256)
+  );
+
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const authInfo = concatBytes(new TextEncoder().encode("WebPush: info\0"), clientPub, serverPubRaw);
+  const prk = await hkdf(authSecret, sharedSecret, authInfo, 32);
+  const cek = await hkdf(salt, prk, new TextEncoder().encode("Content-Encoding: aes128gcm\0"), 16);
+  const nonce = await hkdf(salt, prk, new TextEncoder().encode("Content-Encoding: nonce\0"), 12);
+
+  const padded = concatBytes(new TextEncoder().encode(payloadText), new Uint8Array([2]));
+  const cekKey = await crypto.subtle.importKey("raw", cek, "AES-GCM", false, ["encrypt"]);
+  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, cekKey, padded));
+
+  const rs = new Uint8Array(4);
+  new DataView(rs.buffer).setUint32(0, 4096);
+  const idlen = new Uint8Array([serverPubRaw.length]);
+
+  return concatBytes(salt, rs, idlen, serverPubRaw, ciphertext);
+}
+
+async function sendWebPush(sub, payloadText, env) {
+  const { publicKeyB64, privateKey } = await getOrCreateVapidKeys(env);
+  const subject = env.VAPID_SUBJECT || "mailto:admin@example.com";
+  const [authHeader, body] = await Promise.all([
+    buildVapidAuthHeader(sub.endpoint, privateKey, publicKeyB64, subject),
+    encryptPushPayload(payloadText, sub.p256dh, sub.auth),
+  ]);
+  return fetch(sub.endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/octet-stream",
+      "Content-Encoding": "aes128gcm",
+      TTL: "86400",
+      Authorization: authHeader,
+    },
+    body,
+  });
+}
+
+// 通知所有已訂閱推播的後台裝置：有新訂單進來了。單一裝置推播失敗（例如已解除訂閱）
+// 不應該影響下單流程本身，所以這裡整個函式吞掉錯誤，並順手清掉失效的訂閱。
+export async function notifyAdminsOfNewOrder(env, order) {
+  try {
+    const { results } = await env.DB.prepare("SELECT * FROM push_subscriptions").all();
+    if (!results || !results.length) return;
+
+    const payload = JSON.stringify({
+      title: "有新訂單",
+      body: `${order.member_name_snapshot} 送出自助下單，金額 $${order.amount}`,
+      url: "/admin",
+      tag: "order-" + order.id,
+    });
+
+    await Promise.all(
+      results.map(async (sub) => {
+        try {
+          const res = await sendWebPush(sub, payload, env);
+          if (res.status === 404 || res.status === 410) {
+            await env.DB.prepare("DELETE FROM push_subscriptions WHERE id=?").bind(sub.id).run();
+          }
+        } catch (e) {
+          // 單一裝置推播失敗略過即可
+        }
+      })
+    );
+  } catch (e) {
+    // 推播整體出錯也不應該影響下單本身
+  }
+}

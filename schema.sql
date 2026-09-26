@@ -53,6 +53,17 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT
 );
 
+-- 後台裝置的瀏覽器推播訂閱資訊（Web Push）。每個管理員在每台裝置/瀏覽器訂閱一次會有一筆。
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  admin_id INTEGER NOT NULL,
+  endpoint TEXT UNIQUE NOT NULL,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now')),
+  FOREIGN KEY (admin_id) REFERENCES admins(id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_orders_token ON orders(token);
 CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);

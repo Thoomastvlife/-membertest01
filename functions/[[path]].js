@@ -18,6 +18,8 @@ import {
   expireIfNeeded,
   isLinkHardExpired,
   getSettingsObj,
+  getOrCreateVapidKeys,
+  notifyAdminsOfNewOrder,
 } from "./_lib/helpers.js";
 
 // 付款連結建立後，最多可以被開啟／操作幾小時，超過就整條連結失效（跟訂單本身 3 小時付款時效是兩回事）。
@@ -638,16 +640,49 @@ async function handleMemberCreateOrder(session, request, env) {
   const ttlHours = parseInt(env.LINK_TTL_HOURS || "3", 10);
   const expiresAt = addHours(new Date(), ttlHours).toISOString().replace("T", " ").slice(0, 19);
 
-  await env.DB.prepare(
+  const inserted = await env.DB.prepare(
     `INSERT INTO orders (token, amount, member_id, member_name_snapshot, status, expires_at)
      VALUES (?, ?, ?, ?, 'pending_method', ?)`
   )
     .bind(token, amt, member.id, member.name, expiresAt)
     .run();
 
+  await notifyAdminsOfNewOrder(env, { id: inserted.meta.last_row_id, member_name_snapshot: member.name, amount: amt });
+
   const url = new URL(request.url);
   const link = `${url.origin}/pay/${token}`;
   return json({ ok: true, token, link, expires_at: expiresAt });
+}
+
+// ---- 後台推播通知（Web Push） ----
+
+async function handlePushPublicKey(env) {
+  const { publicKeyB64 } = await getOrCreateVapidKeys(env);
+  return json({ publicKey: publicKeyB64 });
+}
+
+async function handlePushSubscribe(session, request, env) {
+  const body = await request.json().catch(() => ({}));
+  const { endpoint, keys } = body;
+  if (!endpoint || !keys || !keys.p256dh || !keys.auth) {
+    return json({ error: "訂閱資料不正確" }, 400);
+  }
+  await env.DB.prepare(
+    `INSERT INTO push_subscriptions (admin_id, endpoint, p256dh, auth)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(endpoint) DO UPDATE SET admin_id=excluded.admin_id, p256dh=excluded.p256dh, auth=excluded.auth`
+  )
+    .bind(session.adminId, endpoint, keys.p256dh, keys.auth)
+    .run();
+  return json({ ok: true });
+}
+
+async function handlePushUnsubscribe(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const { endpoint } = body;
+  if (!endpoint) return json({ error: "缺少 endpoint" }, 400);
+  await env.DB.prepare("DELETE FROM push_subscriptions WHERE endpoint=?").bind(endpoint).run();
+  return json({ ok: true });
 }
 
 // ================= Pages Functions entrypoint =================
@@ -747,6 +782,10 @@ export async function onRequest(context) {
 
       if (path === "/api/admin/export" && method === "GET") return handleExport(request, env);
       if (path === "/api/admin/stats/monthly" && method === "GET") return handleMonthlyStats(request, env);
+
+      if (path === "/api/admin/push/public-key" && method === "GET") return handlePushPublicKey(env);
+      if (path === "/api/admin/push/subscribe" && method === "POST") return handlePushSubscribe(session, request, env);
+      if (path === "/api/admin/push/unsubscribe" && method === "POST") return handlePushUnsubscribe(request, env);
 
       return json({ error: "Not found" }, 404);
     }
