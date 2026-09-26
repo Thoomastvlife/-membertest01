@@ -1,4 +1,5 @@
 import { adminHtml, payHtml, memberHtml } from "./_lib/templates.js";
+import { getRateRules, saveRateRules, DEFAULT_RATE_RULES } from "./_lib/rates.js";
 import {
   jsonRes as json,
   htmlRes as html,
@@ -70,7 +71,7 @@ async function handleMe(session) {
   return json({ id: session.adminId, username: session.username });
 }
 
-// ---- Staff / admin accounts (由已登入的管理員新增其他員工帳號) ----
+// ---- Staff / admin accounts ----
 
 async function handleListStaff(env) {
   const { results } = await env.DB.prepare(
@@ -153,7 +154,6 @@ async function handleDeleteMember(id, env) {
   return json({ ok: true });
 }
 
-// 隨時可修改會員資料（姓名／電話／備註／帳號）。密碼修改走另一支 /password 端點。
 async function handleUpdateMember(id, request, env) {
   const existing = await env.DB.prepare("SELECT * FROM members WHERE id=?").bind(id).first();
   if (!existing) return json({ error: "找不到此會員" }, 404);
@@ -208,6 +208,34 @@ async function handleSaveSettings(request, env) {
         .run();
     }
   }
+  return json({ ok: true });
+}
+
+// ---- 費率設定 ----
+
+async function handlePublicRates(env) {
+  const rules = await getRateRules(env);
+  return json({ rules });
+}
+
+async function handleGetRates(env) {
+  const rules = await getRateRules(env);
+  return json({ rules, isDefault: JSON.stringify(rules) === JSON.stringify(DEFAULT_RATE_RULES) });
+}
+
+async function handleSaveRates(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const rules = body.rules;
+  if (!Array.isArray(rules) || rules.length === 0) {
+    return json({ error: "費率格式錯誤，需為陣列" }, 400);
+  }
+  for (const r of rules) {
+    if (typeof r.min !== "number" || typeof r.rate !== "number") {
+      return json({ error: "每筆費率需包含 min（數字）與 rate（數字）" }, 400);
+    }
+  }
+  rules.sort((a, b) => b.min - a.min);
+  await saveRateRules(env, rules);
   return json({ ok: true });
 }
 
@@ -318,7 +346,6 @@ async function handleCancelOrder(id, env) {
   return json({ ok: true });
 }
 
-// 徹底刪除訂單記錄（跟「取消」不同：取消只是改狀態、記錄還在；刪除會把這筆資料整個移除，無法復原）
 async function handleDeleteOrder(id, env) {
   const order = await env.DB.prepare("SELECT id FROM orders WHERE id=?").bind(id).first();
   if (!order) return json({ error: "找不到訂單" }, 404);
@@ -326,7 +353,6 @@ async function handleDeleteOrder(id, env) {
   return json({ ok: true });
 }
 
-// 訂單更正：修正金額 / 會員 / 付款方式打錯的情況。已取消或已結案的訂單不能再更正。
 async function handleCorrectOrder(id, request, env) {
   const order = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).first();
   if (!order) return json({ error: "找不到訂單" }, 404);
@@ -362,7 +388,6 @@ async function handleCorrectOrder(id, request, env) {
     if (method && !PAYMENT_METHODS.has(method)) return json({ error: "付款方式不正確" }, 400);
     if (method !== order.payment_method) {
       if (!method) {
-        // 重設為未選擇，讓客人可以重新選擇付款方式（同時清掉舊的條碼／付款證明）
         fields.push(
           "payment_method=?", "status=?", "method_selected_at=?",
           "bank_name=?", "bank_account_number=?", "bank_account_holder=?",
@@ -407,7 +432,6 @@ async function handleCorrectOrder(id, request, env) {
   return json({ ok: true });
 }
 
-// 訂單完成（結案）：純粹方便篩選哪些訂單已經處理完畢，不影響金流，只有已完成付款的訂單能標記
 async function handleCompleteOrder(id, env) {
   const order = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).first();
   if (!order) return json({ error: "找不到訂單" }, 404);
@@ -430,13 +454,11 @@ async function handleExport(request, env) {
     .bind(month)
     .all();
 
-  // === 將 UTC 時間轉為台灣時間 (UTC+8) 的格式化函式 ===
   const toTaipeiTime = (dateStr) => {
     if (!dateStr) return "";
     const isoStr = String(dateStr).replace(" ", "T") + "Z";
     return new Date(isoStr).toLocaleString("zh-TW", { timeZone: "Asia/Taipei", hour12: false });
   };
-  // ========================================================
 
   const PM_LABEL = { transfer: "轉帳", store_barcode: "超商條碼", taiwan_pay: "台灣Pay" };
   const STATUS_LABEL = {
@@ -482,8 +504,6 @@ async function handleExport(request, env) {
     },
   });
 }
-
-// ---- Monthly top-up stats ----
 
 async function handleMonthlyStats(request, env) {
   const url = new URL(request.url);
@@ -555,7 +575,6 @@ async function handleSelectMethod(token, request, env) {
   return json(publicOrderView(updated));
 }
 
-// 客人上傳轉帳截圖 / 填寫帳號末幾碼，方便店家核對款項（轉帳、超商繳費適用）
 async function handleUploadProof(token, request, env) {
   const body = await request.json().catch(() => ({}));
   const { image_base64, last_digits } = body;
@@ -589,7 +608,7 @@ async function handleUploadProof(token, request, env) {
   return json(publicOrderView(updated));
 }
 
-// ---- Member self-service (自助登入查詢) ----
+// ---- Member self-service ----
 
 async function handleMemberLogin(request, env) {
   const body = await request.json().catch(() => ({}));
@@ -634,8 +653,6 @@ async function handleMemberOrders(session, request, env) {
   return json(results);
 }
 
-// 會員自助下單：會員登入後自己輸入金額建立訂單，流程跟後台「結帳櫃檯」建立的訂單完全相同，
-// 建立後導向 /pay/{token} 選付款方式、上傳證明；member_id 一律鎖定為目前登入的會員，不能填別人。
 async function handleMemberCreateOrder(session, request, env) {
   const body = await request.json().catch(() => ({}));
   const amt = parseFloat(body.amount);
@@ -662,7 +679,7 @@ async function handleMemberCreateOrder(session, request, env) {
   return json({ ok: true, token, link, expires_at: expiresAt });
 }
 
-// ---- 後台推播通知（Web Push） ----
+// ---- 後台推播通知 ----
 
 async function handlePushPublicKey(env) {
   const { publicKeyB64 } = await getOrCreateVapidKeys(env);
@@ -696,7 +713,6 @@ async function handlePushUnsubscribe(request, env) {
 // ================= Pages Functions entrypoint =================
 
 export async function onRequest(context) {
-  // 加入 next，讓靜態資源可以通過
   const { request, env, next } = context;
   const url = new URL(request.url);
   const path = url.pathname;
@@ -768,6 +784,8 @@ export async function onRequest(context) {
     if (path === "/api/admin/login" && method === "POST") return handleLogin(request, env);
     if (path === "/api/admin/logout" && method === "POST") return handleLogout();
 
+    if (path === "/api/rates" && method === "GET") return handlePublicRates(env);
+
     if (path === "/api/member/login" && method === "POST") return handleMemberLogin(request, env);
     if (path === "/api/member/logout" && method === "POST") return handleMemberLogout();
 
@@ -780,7 +798,7 @@ export async function onRequest(context) {
     const proofMatch = path.match(/^\/api\/order\/([a-f0-9]+)\/proof$/);
     if (proofMatch && method === "POST") return handleUploadProof(proofMatch[1], request, env);
 
-    // ---- Member API (member session required) ----
+    // ---- Member API ----
     if (path.startsWith("/api/member/")) {
       const session = await requireMember(request, env);
       if (!session) return json({ error: "未登入或登入已過期" }, 401);
@@ -790,7 +808,7 @@ export async function onRequest(context) {
       return json({ error: "Not found" }, 404);
     }
 
-    // ---- Admin API (session required) ----
+    // ---- Admin API ----
     if (path.startsWith("/api/admin/")) {
       const session = await requireAdmin(request, env);
       if (!session) return json({ error: "未登入或登入已過期" }, 401);
@@ -819,6 +837,9 @@ export async function onRequest(context) {
 
       if (path === "/api/admin/settings" && method === "GET") return handleGetSettings(env);
       if (path === "/api/admin/settings" && method === "POST") return handleSaveSettings(request, env);
+
+      if (path === "/api/admin/rates" && method === "GET") return handleGetRates(env);
+      if (path === "/api/admin/rates" && method === "POST") return handleSaveRates(request, env);
 
       if (path === "/api/admin/orders" && method === "POST") return handleCreateOrder(request, env);
       if (path === "/api/admin/orders" && method === "GET") return handleListOrders(request, env);
