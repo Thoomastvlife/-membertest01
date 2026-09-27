@@ -30,6 +30,7 @@ member-checkout-pages/
 ├── migrate_v5.sql        # 既有 D1 資料庫升級：新增會員推薦碼 + 隱藏自助註冊連結所需欄位
 ├── migrate_v6.sql        # 既有 D1 資料庫升級：新增優惠碼功能所需資料表與訂單欄位
 ├── migrate_v7.sql        # 既有 D1 資料庫升級：優惠碼新增「直接折抵固定金額」選項 + 修正到期時間時區 bug
+├── migrate_v8.sql        # 既有 D1 資料庫升級：修正 coupons.discount_percent 殘留 NOT NULL 限制，讓固定金額折抵可以正常新增
 ├── public/
 │   └── robots.txt        # 純佔位檔案，讓 Pages 的靜態輸出資料夾不是空的
 └── functions/
