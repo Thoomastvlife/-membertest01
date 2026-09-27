@@ -113,6 +113,7 @@ export function adminHtml() {
     <button data-tab="members" onclick="showTab('members')">會員管理</button>
     <button data-tab="stats" onclick="showTab('stats')">儲值統計</button>
     <button data-tab="settings" onclick="showTab('settings')">付款設定</button>
+    <button data-tab="announcement" onclick="showTab('announcement')">系統公告</button>
     <button data-tab="export" onclick="showTab('export')">資料匯出</button>
     <button data-tab="staff" onclick="showTab('staff')">員工帳號</button>
     <button data-tab="rates" onclick="showTab('rates')">費率設定</button>
@@ -219,6 +220,41 @@ export function adminHtml() {
       </div>
     </section>
 
+    <section id="tab-announcement" class="tab hidden">
+      <div class="card">
+        <h2>系統公告（會員登入 /member 時彈出）</h2>
+        <label style="display:flex;align-items:center;gap:8px;">
+          <input type="checkbox" id="ann_enabled" style="width:auto;margin:0;" />
+          啟用公告彈窗
+        </label>
+        <label>公告標題（選填）</label>
+        <input id="ann_title" placeholder="例如：系統維護通知" maxlength="100" />
+        <label>公告類型</label>
+        <select id="ann_type" onchange="updateAnnouncementTypeView()">
+          <option value="text">文字公告</option>
+          <option value="image">圖片輪播</option>
+        </select>
+
+        <div id="ann_text_wrap">
+          <label>公告內容</label>
+          <textarea id="ann_text" rows="5" maxlength="2000" placeholder="輸入要顯示給會員看的公告文字"></textarea>
+        </div>
+
+        <div id="ann_image_wrap" class="hidden">
+          <label>公告圖片（可上傳多張，將自動輪播；建議單張小於 500KB，最多 10 張）</label>
+          <input type="file" id="ann_image_input" accept="image/*" multiple onchange="addAnnouncementImages(this)" />
+          <div id="ann_image_list" style="display:flex;flex-wrap:wrap;gap:10px;margin-top:12px;"></div>
+        </div>
+
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn" onclick="saveAnnouncement()">儲存</button>
+          <button class="btn secondary" onclick="previewAnnouncement()">預覽</button>
+        </div>
+        <div id="ann_msg" class="msg"></div>
+        <small class="hint">會員看過公告後選「今天不再顯示」，當天就不會再彈出；只要這裡重新按「儲存」，不論選過什麼，下次登入都會再顯示一次。</small>
+      </div>
+    </section>
+
     <section id="tab-export" class="tab hidden">
       <div class="card">
         <h2>匯出當月資料（CSV，可用 Excel 開啟）</h2>
@@ -291,6 +327,14 @@ export function adminHtml() {
       <button class="btn secondary" onclick="closeCorrect()">取消</button>
     </div>
     <div id="cor_msg" class="msg"></div>
+  </div>
+</div>
+
+<div id="announcePreviewModal" class="modal-overlay hidden">
+  <div class="modal-box" style="max-width:400px;text-align:center;">
+    <h2 id="ann_preview_title">公告</h2>
+    <div id="ann_preview_body" style="margin-bottom:14px;"></div>
+    <button class="btn secondary" onclick="closeAnnouncePreview()">關閉預覽</button>
   </div>
 </div>
 
@@ -435,6 +479,7 @@ function showTab(name){
   if (name==='members') loadMembers();
   if (name==='stats') loadStats();
   if (name==='settings') loadSettings();
+  if (name==='announcement') loadAnnouncement();
   if (name==='staff') loadStaff();
   if (name==='rates') loadRates();
 }
@@ -900,6 +945,108 @@ async function saveSettings(){
   }catch(e){ msg.textContent=e.message; msg.className='msg err'; }
 }
 
+// ---- 系統公告 ----
+let annImages = [];
+
+function updateAnnouncementTypeView(){
+  const isImage = document.getElementById('ann_type').value === 'image';
+  document.getElementById('ann_text_wrap').classList.toggle('hidden', isImage);
+  document.getElementById('ann_image_wrap').classList.toggle('hidden', !isImage);
+}
+
+function renderAnnouncementImageList(){
+  const wrap = document.getElementById('ann_image_list');
+  wrap.innerHTML = annImages.map((src, i) => \`
+    <div style="position:relative;">
+      <img src="\${src}" style="width:90px;height:90px;object-fit:cover;border-radius:8px;border:1px solid var(--border);display:block;">
+      <button type="button" onclick="removeAnnouncementImage(\${i})" title="移除" style="position:absolute;top:-6px;right:-6px;background:var(--danger);color:#fff;border:none;border-radius:50%;width:22px;height:22px;cursor:pointer;font-size:12px;line-height:1;">✖</button>
+      \${i>0 ? \`<button type="button" onclick="moveAnnouncementImage(\${i},-1)" title="往前移" style="position:absolute;bottom:-6px;left:-6px;background:#fff;border:1px solid var(--border);border-radius:50%;width:22px;height:22px;cursor:pointer;font-size:12px;line-height:1;">◀</button>\` : ''}
+      \${i<annImages.length-1 ? \`<button type="button" onclick="moveAnnouncementImage(\${i},1)" title="往後移" style="position:absolute;bottom:-6px;right:-6px;background:#fff;border:1px solid var(--border);border-radius:50%;width:22px;height:22px;cursor:pointer;font-size:12px;line-height:1;">▶</button>\` : ''}
+    </div>
+  \`).join('') || '<small class="hint">尚未上傳任何圖片</small>';
+}
+
+function removeAnnouncementImage(i){
+  annImages.splice(i,1);
+  renderAnnouncementImageList();
+}
+
+function moveAnnouncementImage(i, dir){
+  const j = i + dir;
+  if (j < 0 || j >= annImages.length) return;
+  [annImages[i], annImages[j]] = [annImages[j], annImages[i]];
+  renderAnnouncementImageList();
+}
+
+function addAnnouncementImages(input){
+  const files = Array.from(input.files || []);
+  if (files.length === 0) return;
+  let remaining = files.length;
+  files.forEach(file => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (annImages.length < 10) annImages.push(reader.result);
+      remaining--;
+      if (remaining === 0) { renderAnnouncementImageList(); input.value = ''; }
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function loadAnnouncement(){
+  const msg = document.getElementById('ann_msg');
+  msg.textContent = ''; msg.className = 'msg';
+  try{
+    const a = await api('/api/admin/announcement');
+    document.getElementById('ann_enabled').checked = !!a.enabled;
+    document.getElementById('ann_title').value = a.title || '';
+    document.getElementById('ann_type').value = a.type === 'image' ? 'image' : 'text';
+    document.getElementById('ann_text').value = a.text || '';
+    annImages = Array.isArray(a.images) ? a.images.slice() : [];
+    renderAnnouncementImageList();
+    updateAnnouncementTypeView();
+  }catch(e){ msg.textContent = e.message; msg.className = 'msg err'; }
+}
+
+async function saveAnnouncement(){
+  const msg = document.getElementById('ann_msg');
+  msg.textContent = ''; msg.className = 'msg';
+  const type = document.getElementById('ann_type').value;
+  try{
+    await api('/api/admin/announcement', {method:'POST', body: JSON.stringify({
+      enabled: document.getElementById('ann_enabled').checked,
+      type,
+      title: document.getElementById('ann_title').value.trim(),
+      text: document.getElementById('ann_text').value,
+      images: annImages,
+    })});
+    msg.textContent = '已儲存，會員下次登入會看到最新公告'; msg.className = 'msg ok';
+  }catch(e){ msg.textContent = e.message; msg.className = 'msg err'; }
+}
+
+function previewAnnouncement(){
+  const type = document.getElementById('ann_type').value;
+  const title = document.getElementById('ann_title').value.trim() || '公告';
+  document.getElementById('ann_preview_title').textContent = title;
+  const body = document.getElementById('ann_preview_body');
+  if (type === 'image') {
+    if (annImages.length === 0) {
+      body.innerHTML = '<small class="hint">尚未上傳圖片</small>';
+    } else {
+      body.innerHTML = \`<img src="\${annImages[0]}" style="width:100%;max-height:280px;object-fit:contain;border-radius:8px;background:#f4f4f4;">\` +
+        (annImages.length > 1 ? \`<div style="margin-top:8px;font-size:12px;color:var(--muted);">共 \${annImages.length} 張，會員畫面會自動輪播</div>\` : '');
+    }
+  } else {
+    const text = document.getElementById('ann_text').value.trim();
+    body.innerHTML = \`<p style="white-space:pre-wrap;text-align:left;font-size:14px;">\${text ? text.replace(/</g,'&lt;') : '（尚未輸入公告內容）'}</p>\`;
+  }
+  document.getElementById('announcePreviewModal').classList.remove('hidden');
+}
+
+function closeAnnouncePreview(){
+  document.getElementById('announcePreviewModal').classList.add('hidden');
+}
+
 function exportCsv(){
   const month = document.getElementById('exp_month').value || new Date().toISOString().slice(0,7);
   window.location.href = '/api/admin/export?month='+encodeURIComponent(month);
@@ -1317,6 +1464,22 @@ export function memberHtml() {
   .popup button.btn{width:100%;margin-top:0;}
   #popup-close{position:absolute;top:10px;right:12px;background:transparent;color:var(--muted);font-size:18px;border:none;cursor:pointer;padding:4px 8px;border-radius:50%;width:32px;height:32px;line-height:1;margin:0;}
   #popup-close:hover{background:var(--neutral-soft);}
+
+  /* === 系統公告彈窗 === */
+  .announce-popup{max-width:420px;text-align:left;}
+  .announce-popup h3{text-align:center;font-size:17px;}
+  .announce-carousel{position:relative;width:100%;border-radius:10px;overflow:hidden;margin-bottom:14px;background:#f1f2f6;}
+  .announce-track{display:flex;transition:transform .35s ease;}
+  .announce-track img{width:100%;flex:0 0 100%;max-height:320px;object-fit:contain;display:block;background:#f1f2f6;}
+  .announce-arrow{position:absolute;top:50%;transform:translateY(-50%);background:rgba(24,27,46,.45);color:#fff;border:none;width:30px;height:30px;border-radius:50%;cursor:pointer;font-size:16px;line-height:1;padding:0;margin:0;}
+  .announce-arrow:hover{background:rgba(24,27,46,.7);}
+  .announce-arrow.prev{left:8px;} .announce-arrow.next{right:8px;}
+  .announce-dots{display:flex;justify-content:center;gap:6px;margin-bottom:14px;}
+  .announce-dot{width:7px;height:7px;border-radius:50%;background:var(--line);cursor:pointer;padding:0;border:none;}
+  .announce-dot.active{background:var(--accent);}
+  .announce-text{color:var(--ink);font-size:14.5px;line-height:1.8;white-space:pre-wrap;text-align:left;margin:0 0 18px;}
+  .announce-actions{display:flex;gap:10px;}
+  .announce-actions .btn{flex:1;margin-top:0;}
 </style>
 </head>
 <body>
@@ -1414,6 +1577,24 @@ export function memberHtml() {
     <h3 id="popup-title">提醒</h3>
     <p id="popup-message">其他金額請私信</p>
     <button class="btn" onclick="hidePopup()">我知道了</button>
+  </div>
+</div>
+
+<!-- === 系統公告彈窗（會員登入後顯示） === -->
+<div class="modal-backdrop" id="announce-backdrop">
+  <div class="popup announce-popup" id="announce-popup">
+    <h3 id="announce-title">公告</h3>
+    <div class="announce-carousel hidden" id="announce-carousel">
+      <div class="announce-track" id="announce-track"></div>
+      <button type="button" class="announce-arrow prev hidden" id="announce-prev" onclick="announceNav(-1)">‹</button>
+      <button type="button" class="announce-arrow next hidden" id="announce-next" onclick="announceNav(1)">›</button>
+    </div>
+    <div class="announce-dots hidden" id="announce-dots"></div>
+    <p class="announce-text hidden" id="announce-text"></p>
+    <div class="announce-actions">
+      <button class="btn secondary" onclick="dismissAnnounceToday()">今天不再顯示</button>
+      <button class="btn" onclick="closeAnnounce()">了解</button>
+    </div>
   </div>
 </div>
 
@@ -1618,7 +1799,104 @@ async function checkSession(){
     await loadRates();
     loadOrders();
     startOrdersPolling();
+    checkAnnouncement();
   }catch(e){ /* 尚未登入，維持登入畫面 */ }
+}
+
+// === 系統公告彈窗 ===
+let announceData = null;
+let announceIndex = 0;
+let announceTimer = null;
+
+function announceTodayStr(){
+  const d = new Date();
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+
+async function checkAnnouncement(){
+  try{
+    const data = await api('/api/member/announcement');
+    if (!data.enabled) return;
+    const key = 'announce_dismissed_'+(data.version||'')+'_'+announceTodayStr();
+    try{ if (localStorage.getItem(key) === '1') return; }catch(e){}
+    showAnnounce(data);
+  }catch(e){ /* 公告載入失敗不影響其他功能 */ }
+}
+
+function showAnnounce(data){
+  announceData = data;
+  announceIndex = 0;
+  document.getElementById('announce-title').textContent = data.title || '公告';
+  const carousel = document.getElementById('announce-carousel');
+  const dots = document.getElementById('announce-dots');
+  const prevBtn = document.getElementById('announce-prev');
+  const nextBtn = document.getElementById('announce-next');
+  const textEl = document.getElementById('announce-text');
+
+  if (announceTimer) { clearInterval(announceTimer); announceTimer = null; }
+
+  if (data.type === 'image' && Array.isArray(data.images) && data.images.length > 0) {
+    textEl.classList.add('hidden');
+    carousel.classList.remove('hidden');
+    document.getElementById('announce-track').innerHTML = data.images.map(src => \`<img src="\${src}">\`).join('');
+    const multi = data.images.length > 1;
+    dots.classList.toggle('hidden', !multi);
+    prevBtn.classList.toggle('hidden', !multi);
+    nextBtn.classList.toggle('hidden', !multi);
+    dots.innerHTML = multi ? data.images.map((_, i) => \`<button type="button" class="announce-dot" onclick="announceGoTo(\${i})"></button>\`).join('') : '';
+    renderAnnounceSlide();
+    if (multi) announceTimer = setInterval(()=>announceNav(1), 4000);
+  } else {
+    carousel.classList.add('hidden');
+    dots.classList.add('hidden');
+    prevBtn.classList.add('hidden');
+    nextBtn.classList.add('hidden');
+    textEl.classList.remove('hidden');
+    textEl.textContent = data.text || '';
+  }
+
+  const backdrop = document.getElementById('announce-backdrop');
+  const popup = document.getElementById('announce-popup');
+  backdrop.classList.add('show');
+  setTimeout(()=>popup.classList.add('show'), 10);
+}
+
+function renderAnnounceSlide(){
+  const track = document.getElementById('announce-track');
+  track.style.transform = 'translateX(-'+(announceIndex*100)+'%)';
+  document.querySelectorAll('#announce-dots .announce-dot').forEach((d,i)=>d.classList.toggle('active', i===announceIndex));
+}
+
+function announceNav(dir){
+  if (!announceData || !Array.isArray(announceData.images) || announceData.images.length === 0) return;
+  const len = announceData.images.length;
+  announceIndex = (announceIndex + dir + len) % len;
+  renderAnnounceSlide();
+}
+
+function announceGoTo(i){
+  announceIndex = i;
+  renderAnnounceSlide();
+}
+
+function hideAnnounce(){
+  if (announceTimer) { clearInterval(announceTimer); announceTimer = null; }
+  const backdrop = document.getElementById('announce-backdrop');
+  const popup = document.getElementById('announce-popup');
+  popup.classList.remove('show');
+  setTimeout(()=>backdrop.classList.remove('show'), 250);
+}
+
+function closeAnnounce(){
+  hideAnnounce();
+}
+
+function dismissAnnounceToday(){
+  if (announceData) {
+    const key = 'announce_dismissed_'+(announceData.version||'')+'_'+announceTodayStr();
+    try{ localStorage.setItem(key, '1'); }catch(e){}
+  }
+  hideAnnounce();
 }
 
 function copyMyReferralLink(){

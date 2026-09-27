@@ -231,6 +231,70 @@ async function handleSaveSettings(request, env) {
   return json({ ok: true });
 }
 
+// ---- 系統公告（會員登入 /member 時彈出） ----
+const DEFAULT_ANNOUNCEMENT = { enabled: false, type: "text", title: "", text: "", images: [], updated_at: null };
+
+async function handleGetAnnouncement(env) {
+  const settings = await getSettingsObj(env);
+  let ann = DEFAULT_ANNOUNCEMENT;
+  if (settings.announcement) {
+    try {
+      ann = { ...DEFAULT_ANNOUNCEMENT, ...JSON.parse(settings.announcement) };
+    } catch {
+      ann = DEFAULT_ANNOUNCEMENT;
+    }
+  }
+  return json(ann);
+}
+
+async function handleSaveAnnouncement(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const enabled = !!body.enabled;
+  const type = body.type === "image" ? "image" : "text";
+  const title = typeof body.title === "string" ? body.title.slice(0, 100) : "";
+  const text = typeof body.text === "string" ? body.text.slice(0, 2000) : "";
+  let images = Array.isArray(body.images)
+    ? body.images.filter((s) => typeof s === "string" && s.startsWith("data:image"))
+    : [];
+  images = images.slice(0, 10); // 最多 10 張，避免單一設定值過大
+
+  if (enabled && type === "text" && !text.trim()) {
+    return json({ error: "公告內容不能空白" }, 400);
+  }
+  if (enabled && type === "image" && images.length === 0) {
+    return json({ error: "請至少上傳一張公告圖片" }, 400);
+  }
+
+  const ann = { enabled, type, title, text, images, updated_at: nowIso() };
+  await env.DB.prepare(
+    "INSERT INTO settings (key, value) VALUES ('announcement', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value"
+  )
+    .bind(JSON.stringify(ann))
+    .run();
+  return json({ ok: true });
+}
+
+// 會員端只需要「是否啟用」與顯示所需的內容，並附上 version（=最後儲存時間）供前端判斷「今天不再顯示」是否該重新彈出
+async function handleMemberAnnouncement(env) {
+  const settings = await getSettingsObj(env);
+  if (!settings.announcement) return json({ enabled: false });
+  let ann;
+  try {
+    ann = JSON.parse(settings.announcement);
+  } catch {
+    return json({ enabled: false });
+  }
+  if (!ann.enabled) return json({ enabled: false });
+  return json({
+    enabled: true,
+    type: ann.type === "image" ? "image" : "text",
+    title: ann.title || "",
+    text: ann.text || "",
+    images: Array.isArray(ann.images) ? ann.images : [],
+    version: ann.updated_at || "",
+  });
+}
+
 // ---- 費率設定 ----
 
 async function handlePublicRates(env) {
@@ -872,6 +936,7 @@ export async function onRequest(context) {
       if (path === "/api/member/me" && method === "GET") return handleMemberMe(session, env);
       if (path === "/api/member/orders" && method === "GET") return handleMemberOrders(session, request, env);
       if (path === "/api/member/orders" && method === "POST") return handleMemberCreateOrder(session, request, env);
+      if (path === "/api/member/announcement" && method === "GET") return handleMemberAnnouncement(env);
       return json({ error: "Not found" }, 404);
     }
 
@@ -904,6 +969,9 @@ export async function onRequest(context) {
 
       if (path === "/api/admin/settings" && method === "GET") return handleGetSettings(env);
       if (path === "/api/admin/settings" && method === "POST") return handleSaveSettings(request, env);
+
+      if (path === "/api/admin/announcement" && method === "GET") return handleGetAnnouncement(env);
+      if (path === "/api/admin/announcement" && method === "POST") return handleSaveAnnouncement(request, env);
 
       if (path === "/api/admin/rates" && method === "GET") return handleGetRates(env);
       if (path === "/api/admin/rates" && method === "POST") return handleSaveRates(request, env);
