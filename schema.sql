@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS orders (
   original_amount REAL,                -- 套用優惠碼前的原始金額；未使用優惠碼則為 NULL
   coupon_code TEXT,                    -- 使用的優惠碼（快照，不受之後優惠碼變更/刪除影響）
   coupon_discount REAL,                -- 此筆訂單實際折抵的金額；未使用優惠碼則為 NULL
+  platform TEXT,                       -- 儲值平台：tiktok | kuaishou | xiaohongshu | douyin，NULL 表示未指定
   FOREIGN KEY (member_id) REFERENCES members(id)
 );
 

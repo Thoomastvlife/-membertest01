@@ -122,6 +122,10 @@ export function parseTaipeiDatetimeLocalToUtc(value) {
 
 export const PAYMENT_METHODS = new Set(["transfer", "store_barcode", "taiwan_pay"]);
 
+// 儲值平台：訂單要儲值到哪個平台的帳號（純資訊記錄，不影響金流/付款方式）
+export const PLATFORMS = new Set(["tiktok", "kuaishou", "xiaohongshu", "douyin"]);
+export const PLATFORM_LABEL = { tiktok: "TikTok", kuaishou: "快手", xiaohongshu: "小紅書", douyin: "陸抖" };
+
 // 推薦碼字母表：去掉容易混淆的 0/O、1/I/L
 const REFERRAL_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 
@@ -178,6 +182,7 @@ export function publicOrderView(o) {
     amount: o.amount,
     member_name_snapshot: o.member_name_snapshot,
     payment_method: o.payment_method,
+    platform: o.platform || null,
     status: o.status,
     bank_name: o.bank_name,
     bank_account_number: o.bank_account_number,

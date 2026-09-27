@@ -17,6 +17,8 @@ import {
   nowIso,
   addHours,
   PAYMENT_METHODS,
+  PLATFORMS,
+  PLATFORM_LABEL,
   PROOF_ELIGIBLE_METHODS,
   publicOrderView,
   expireIfNeeded,
@@ -524,11 +526,12 @@ async function handleCouponPreview(request, env) {
 
 async function handleCreateOrder(request, env) {
   const body = await request.json().catch(() => ({}));
-  const { amount, member_id, non_member_name, payment_method, coupon_code } = body;
+  const { amount, member_id, non_member_name, payment_method, coupon_code, platform } = body;
 
   const amt = parseFloat(amount);
   if (!amt || amt <= 0) return json({ error: "金額不正確" }, 400);
   if (payment_method && !PAYMENT_METHODS.has(payment_method)) return json({ error: "付款方式不正確" }, 400);
+  if (platform && !PLATFORMS.has(platform)) return json({ error: "儲值平台不正確" }, 400);
 
   let memberNameSnapshot = non_member_name && non_member_name.trim() ? non_member_name.trim() : "非會員";
   let memberId = null;
@@ -571,8 +574,8 @@ async function handleCreateOrder(request, env) {
   const insertResult = await env.DB.prepare(
     `INSERT INTO orders (token, amount, member_id, member_name_snapshot, payment_method, status,
       bank_name, bank_account_number, bank_account_holder, expires_at, method_selected_at,
-      original_amount, coupon_code, coupon_discount)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      original_amount, coupon_code, coupon_discount, platform)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       token,
@@ -588,7 +591,8 @@ async function handleCreateOrder(request, env) {
       methodSelectedAt,
       couponResult ? amt : null,
       couponResult ? couponResult.coupon.code : null,
-      couponResult ? couponResult.discount : null
+      couponResult ? couponResult.discount : null,
+      platform || null
     )
     .run();
 
@@ -696,6 +700,13 @@ async function handleCorrectOrder(id, request, env) {
     }
   }
 
+  if (body.platform !== undefined) {
+    const platform = body.platform || null;
+    if (platform && !PLATFORMS.has(platform)) return json({ error: "儲值平台不正確" }, 400);
+    fields.push("platform=?");
+    binds.push(platform);
+  }
+
   if (body.payment_method !== undefined) {
     const method = body.payment_method || null;
     if (method && !PAYMENT_METHODS.has(method)) return json({ error: "付款方式不正確" }, 400);
@@ -784,11 +795,12 @@ async function handleExport(request, env) {
     cancelled: "已取消",
   };
 
-  const header = ["訂單編號", "建立時間", "會員/客人", "原始金額", "優惠碼", "折抵金額", "實付金額", "付款方式", "狀態", "訂單完成(結案)", "付款證明末幾碼", "付款方式選擇時間", "完成付款時間", "到期時間"];
+  const header = ["訂單編號", "建立時間", "會員/客人", "儲值平台", "原始金額", "優惠碼", "折抵金額", "實付金額", "付款方式", "狀態", "訂單完成(結案)", "付款證明末幾碼", "付款方式選擇時間", "完成付款時間", "到期時間"];
   const rows = results.map((o) => [
     formatOrderNo(o.id),
     toTaipeiTime(o.created_at),
     o.member_name_snapshot,
+    PLATFORM_LABEL[o.platform] || "未指定",
     o.original_amount != null ? o.original_amount : "",
     o.coupon_code || "",
     o.coupon_discount != null ? o.coupon_discount : "",
@@ -1003,7 +1015,7 @@ async function handleMemberOrders(session, request, env) {
   const url = new URL(request.url);
   const month = url.searchParams.get("month");
   let query =
-    "SELECT id, token, amount, payment_method, status, is_completed, created_at, paid_at, expires_at, original_amount, coupon_code, coupon_discount FROM orders WHERE member_id=?";
+    "SELECT id, token, amount, platform, payment_method, status, is_completed, created_at, paid_at, expires_at, original_amount, coupon_code, coupon_discount FROM orders WHERE member_id=?";
   const binds = [session.memberId];
   if (month) {
     query += " AND strftime('%Y-%m', created_at) = ?";
@@ -1019,6 +1031,8 @@ async function handleMemberCreateOrder(session, request, env) {
   const amt = parseFloat(body.amount);
   if (!amt || amt <= 0) return json({ error: "金額不正確" }, 400);
   if (amt < MIN_ORDER_AMOUNT) return json({ error: `訂單金額不可低於 ${MIN_ORDER_AMOUNT} 元` }, 400);
+  const platform = body.platform;
+  if (!platform || !PLATFORMS.has(platform)) return json({ error: "請選擇要儲值的平台" }, 400);
 
   const member = await env.DB.prepare("SELECT * FROM members WHERE id=?").bind(session.memberId).first();
   if (!member) return json({ error: "會員不存在，請重新登入" }, 404);
@@ -1037,8 +1051,8 @@ async function handleMemberCreateOrder(session, request, env) {
 
   const inserted = await env.DB.prepare(
     `INSERT INTO orders (token, amount, member_id, member_name_snapshot, status, expires_at,
-      original_amount, coupon_code, coupon_discount)
-     VALUES (?, ?, ?, ?, 'pending_method', ?, ?, ?, ?)`
+      original_amount, coupon_code, coupon_discount, platform)
+     VALUES (?, ?, ?, ?, 'pending_method', ?, ?, ?, ?, ?)`
   )
     .bind(
       token,
@@ -1048,7 +1062,8 @@ async function handleMemberCreateOrder(session, request, env) {
       expiresAt,
       couponResult ? amt : null,
       couponResult ? couponResult.coupon.code : null,
-      couponResult ? couponResult.discount : null
+      couponResult ? couponResult.discount : null,
+      platform
     )
     .run();
 

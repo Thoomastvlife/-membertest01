@@ -137,6 +137,14 @@ export function adminHtml() {
           <label>非會員名稱（選填，方便辨識）</label>
           <input id="co_nonmember_name" placeholder="例如：現場客人" />
         </div>
+        <label>儲值平台（選填）</label>
+        <select id="co_platform">
+          <option value="">-- 不指定 --</option>
+          <option value="tiktok">TikTok</option>
+          <option value="kuaishou">快手</option>
+          <option value="xiaohongshu">小紅書</option>
+          <option value="douyin">陸抖</option>
+        </select>
         <label>付款方式（選填，不指定則由前台客人自行選擇）</label>
         <select id="co_method">
           <option value="">-- 不指定 --</option>
@@ -178,7 +186,7 @@ export function adminHtml() {
           <label for="ord_hide_completed" style="margin:0;">隱藏已結案訂單</label>
         </div>
         <table id="ord_table">
-          <thead><tr><th>訂單編號</th><th>建立時間</th><th>會員</th><th>金額</th><th>優惠</th><th>付款方式</th><th>狀態</th><th>結案</th><th>核對資訊</th><th>操作</th></tr></thead>
+          <thead><tr><th>訂單編號</th><th>建立時間</th><th>會員</th><th>儲值平台</th><th>金額</th><th>優惠</th><th>付款方式</th><th>狀態</th><th>結案</th><th>核對資訊</th><th>操作</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -362,6 +370,15 @@ export function adminHtml() {
       <label>非會員名稱</label>
       <input id="cor_nonmember_name" placeholder="例如：現場客人" />
     </div>
+    <label>儲值平台</label>
+    <select id="cor_platform">
+      <option value="__keep__">-- 不變 --</option>
+      <option value="tiktok">改為：TikTok</option>
+      <option value="kuaishou">改為：快手</option>
+      <option value="xiaohongshu">改為：小紅書</option>
+      <option value="douyin">改為：陸抖</option>
+      <option value="">重設為未指定</option>
+    </select>
     <label>付款方式</label>
     <select id="cor_method">
       <option value="__keep__">-- 不變 --</option>
@@ -389,6 +406,7 @@ export function adminHtml() {
 
 <script>
 const PM_LABEL = {transfer:'轉帳', store_barcode:'超商條碼', taiwan_pay:'TWQR'};
+const PLATFORM_LABEL = {tiktok:'TikTok', kuaishou:'快手', xiaohongshu:'小紅書', douyin:'陸抖'};
 const STATUS_LABEL = {
   pending_method:['待選付款方式','b-pending'],
   awaiting_payment:['等待客人付款(轉帳)','b-await'],
@@ -668,13 +686,14 @@ async function createOrder(){
   const amount = parseFloat(document.getElementById('co_amount').value);
   const member_id = document.getElementById('co_member').value || null;
   const non_member_name = document.getElementById('co_nonmember_name').value.trim();
+  const platform = document.getElementById('co_platform').value || null;
   const payment_method = document.getElementById('co_method').value || null;
   const coupon_code = document.getElementById('co_coupon').value.trim() || null;
   const msg = document.getElementById('co_msg');
   msg.textContent=''; msg.className='msg';
   if (!amount || amount<=0){ msg.textContent='請輸入正確金額'; msg.className='msg err'; return; }
   try{
-    const r = await api('/api/admin/orders', {method:'POST', body: JSON.stringify({amount, member_id, non_member_name, payment_method, coupon_code})});
+    const r = await api('/api/admin/orders', {method:'POST', body: JSON.stringify({amount, member_id, non_member_name, platform, payment_method, coupon_code})});
     document.getElementById('co_result').classList.remove('hidden');
     document.getElementById('co_link').value = r.link;
     document.getElementById('co_coupon').value = '';
@@ -761,6 +780,7 @@ function renderOrders(){
       <td data-label="訂單編號"><code>\${o.order_no}</code></td>
       <td data-label="建立時間">\${toTaipeiTime(o.created_at)}</td>
       <td data-label="會員">\${o.member_name_snapshot}</td>
+      <td data-label="儲值平台">\${PLATFORM_LABEL[o.platform]||'<span class="muted" style="color:var(--muted)">未指定</span>'}</td>
       <td data-label="金額">$\${o.amount}</td>
       <td data-label="優惠">\${couponInfo}</td>
       <td data-label="付款方式">\${PM_LABEL[o.payment_method]||'尚未選擇'}</td>
@@ -769,7 +789,7 @@ function renderOrders(){
       <td data-label="核對資訊">\${proofInfo}</td>
       <td data-label="操作">\${actions}</td>
     </tr>\`;
-  }).join('') || '<tr><td colspan="10">本月尚無訂單</td></tr>';
+  }).join('') || '<tr><td colspan="11">本月尚無訂單</td></tr>';
 }
 
 function viewLink(token){
@@ -804,6 +824,7 @@ function openCorrect(id){
   const member = o.member_id ? membersCache.find(m=>m.id===o.member_id) : null;
   corMemberPicker.selectMember(o.member_id || '', member ? member.name : '');
   document.getElementById('cor_nonmember_name').value = o.member_id ? '' : o.member_name_snapshot;
+  document.getElementById('cor_platform').value = '__keep__';
   document.getElementById('cor_method').value = '__keep__';
   document.getElementById('cor_msg').textContent = '';
   document.getElementById('correctModal').classList.remove('hidden');
@@ -821,6 +842,8 @@ async function submitCorrect(){
   const memberSel = document.getElementById('cor_member');
   const body = { amount, member_id: memberSel.value || null };
   if (!memberSel.value) body.non_member_name = document.getElementById('cor_nonmember_name').value.trim();
+  const platformVal = document.getElementById('cor_platform').value;
+  if (platformVal !== '__keep__') body.platform = platformVal;
   const methodVal = document.getElementById('cor_method').value;
   if (methodVal !== '__keep__') body.payment_method = methodVal;
   try{
@@ -1478,6 +1501,7 @@ export function payHtml() {
 <script>
 const token = location.pathname.split('/').pop();
 const PM_LABEL = {transfer:'轉帳', store_barcode:'超商條碼', taiwan_pay:'TWQR'};
+const PLATFORM_LABEL = {tiktok:'TikTok', kuaishou:'快手', xiaohongshu:'小紅書', douyin:'陸抖'};
 let pollTimer=null;
 
 // === 將 UTC 時間轉為台灣時間 (UTC+8) ===
@@ -1518,6 +1542,9 @@ function render(o){
   }
   html += '<div class="amount">$'+o.amount+'</div>';
   html += '<div class="row"><span>付款對象</span><span>'+o.member_name_snapshot+'</span></div>';
+  if (o.platform) {
+    html += '<div class="row"><span>儲值平台</span><span>'+(PLATFORM_LABEL[o.platform]||o.platform)+'</span></div>';
+  }
 
   if (o.status === 'expired') {
     if (pollTimer){ clearInterval(pollTimer); pollTimer=null; }
@@ -1861,6 +1888,14 @@ export function memberHtml() {
       </div>
       <input id="new_amount" type="number" min="200" step="1" placeholder="請輸入金額（最低 200 元）" class="hidden" />
       <div class="estimate-badge hidden" id="estimateBadge"></div>
+      <label>儲值平台</label>
+      <select id="new_platform">
+        <option value="">請選擇儲值平台</option>
+        <option value="tiktok">TikTok</option>
+        <option value="kuaishou">快手</option>
+        <option value="xiaohongshu">小紅書</option>
+        <option value="douyin">陸抖</option>
+      </select>
       <label>優惠碼（選填）</label>
       <div style="display:flex;gap:8px;">
         <input id="mo_coupon" placeholder="輸入優惠碼" style="text-transform:uppercase;" oninput="document.getElementById('mo_coupon_msg').textContent='';" />
@@ -1882,7 +1917,7 @@ export function memberHtml() {
       <input id="ord_month" type="month" />
       <button class="btn secondary" onclick="loadOrders()">查詢</button>
       <table id="ord_table">
-        <thead><tr><th>訂單編號</th><th>建立時間</th><th>金額</th><th>優惠</th><th>付款方式</th><th>狀態</th><th>操作</th></tr></thead>
+        <thead><tr><th>訂單編號</th><th>建立時間</th><th>儲值平台</th><th>金額</th><th>優惠</th><th>付款方式</th><th>狀態</th><th>操作</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -1919,6 +1954,7 @@ export function memberHtml() {
 
 <script>
 const PM_LABEL = {transfer:'轉帳', store_barcode:'超商條碼', taiwan_pay:'TWQR'};
+const PLATFORM_LABEL = {tiktok:'TikTok', kuaishou:'快手', xiaohongshu:'小紅書', douyin:'陸抖'};
 const STATUS_LABEL = {
   pending_method:['待選付款方式','b-pending'],
   awaiting_payment:['等待付款(轉帳)','b-await'],
@@ -2269,17 +2305,20 @@ async function createOrder(){
   const btn = document.getElementById('newOrderBtn');
   const msg = document.getElementById('newOrderMsg');
   const amount = document.getElementById('new_amount').value;
+  const platform = document.getElementById('new_platform').value;
   const coupon_code = document.getElementById('mo_coupon').value.trim() || null;
   msg.textContent=''; msg.className='msg';
   document.getElementById('newOrderResult').classList.add('hidden');
   if (!amount || Number(amount) <= 0){ msg.textContent='請輸入正確的金額'; msg.className='msg err'; return; }
   if (Number(amount) < MIN_QUOTE_AMOUNT){ msg.textContent='訂單金額不可低於 '+MIN_QUOTE_AMOUNT+' 元'; msg.className='msg err'; return; }
+  if (!platform){ msg.textContent='請選擇儲值平台'; msg.className='msg err'; return; }
   btn.disabled = true;
   try{
-    const res = await api('/api/member/orders', {method:'POST', body: JSON.stringify({amount, coupon_code})});
+    const res = await api('/api/member/orders', {method:'POST', body: JSON.stringify({amount, platform, coupon_code})});
     document.getElementById('new_amount').value = '';
     document.getElementById('new_amount').classList.add('hidden');
     document.getElementById('estimateBadge').classList.add('hidden');
+    document.getElementById('new_platform').value = '';
     document.getElementById('mo_coupon').value = '';
     document.getElementById('mo_coupon_msg').textContent = '';
     document.querySelectorAll('#amountChips .chip').forEach(c=>c.classList.remove('active'));
@@ -2329,13 +2368,14 @@ async function loadOrders(){
     return \`<tr>
       <td><code>\${o.order_no}</code></td>
       <td>\${toTaipeiTime(o.created_at)}</td>
+      <td>\${PLATFORM_LABEL[o.platform]||'-'}</td>
       <td>$\${o.amount}</td>
       <td>\${couponInfo}</td>
       <td>\${PM_LABEL[o.payment_method]||'尚未選擇'}</td>
       <td><span class="badge \${st[1]}">\${st[0]}</span>\${completedTag}</td>
       <td>\${action}</td>
     </tr>\`;
-  }).join('') || '<tr><td colspan="7">尚無訂單記錄</td></tr>';
+  }).join('') || '<tr><td colspan="8">尚無訂單記錄</td></tr>';
 }
 
 // 頁面載入時就先抓費率（不管有沒有登入）
