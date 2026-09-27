@@ -164,7 +164,13 @@ export function adminHtml() {
     <section id="tab-orders" class="tab hidden">
       <div class="card">
         <h2>訂單列表</h2>
-        <label>月份</label>
+        <label>訂單編號快速搜尋（例如 TW210007，不分月份都能找到）</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <input id="ord_search" placeholder="輸入訂單編號" style="flex:1;min-width:160px;" onkeydown="if(event.key==='Enter')searchOrderByNo();" />
+          <button class="btn secondary" onclick="searchOrderByNo()">搜尋</button>
+          <button class="btn secondary hidden" id="ord_search_clear" onclick="clearOrderSearch()">清除搜尋，回到本月列表</button>
+        </div>
+        <label style="margin-top:14px;">月份</label>
         <input id="ord_month" type="month" />
         <button class="btn secondary" onclick="loadOrders()">查詢</button>
         <div class="filter-row">
@@ -172,7 +178,7 @@ export function adminHtml() {
           <label for="ord_hide_completed" style="margin:0;">隱藏已結案訂單</label>
         </div>
         <table id="ord_table">
-          <thead><tr><th>ID</th><th>建立時間</th><th>會員</th><th>金額</th><th>優惠</th><th>付款方式</th><th>狀態</th><th>結案</th><th>核對資訊</th><th>操作</th></tr></thead>
+          <thead><tr><th>訂單編號</th><th>建立時間</th><th>會員</th><th>金額</th><th>優惠</th><th>付款方式</th><th>狀態</th><th>結案</th><th>核對資訊</th><th>操作</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -342,7 +348,7 @@ export function adminHtml() {
 
 <div id="correctModal" class="modal-overlay hidden">
   <div class="modal-box">
-    <h2>更正訂單 #<span id="cor_id"></span></h2>
+    <h2>更正訂單 <span id="cor_id"></span></h2>
     <label>金額</label>
     <input id="cor_amount" type="number" min="1" step="1" />
     <label>會員</label>
@@ -673,7 +679,8 @@ async function createOrder(){
     document.getElementById('co_link').value = r.link;
     document.getElementById('co_coupon').value = '';
     document.getElementById('co_coupon_msg').textContent = '';
-    msg.textContent = r.discount ? \`連結已建立，已折抵 $\${r.discount}，實付 $\${r.amount}，3 小時內有效\` : '連結已建立，3 小時內有效';
+    const discountNote = r.discount ? \`，已折抵 $\${r.discount}，實付 $\${r.amount}\` : '';
+    msg.textContent = \`訂單編號 \${r.order_no}，連結已建立\${discountNote}，3 小時內有效\`;
     msg.className='msg ok';
   }catch(e){ msg.textContent = e.message; msg.className='msg err'; }
 }
@@ -684,11 +691,33 @@ function copyLink(){
 }
 
 async function loadOrders(){
+  clearOrderSearchState();
   const monthInput = document.getElementById('ord_month');
   if (!monthInput.value) monthInput.value = new Date().toISOString().slice(0,7);
   const month = monthInput.value;
   ordersCache = await api('/api/admin/orders?month='+encodeURIComponent(month));
   renderOrders();
+}
+
+function clearOrderSearchState(){
+  document.getElementById('ord_search_clear').classList.add('hidden');
+}
+
+async function searchOrderByNo(){
+  const raw = document.getElementById('ord_search').value.trim();
+  if (!raw){ alert('請輸入要查詢的訂單編號'); return; }
+  try{
+    const results = await api('/api/admin/orders?order_no='+encodeURIComponent(raw));
+    if (!results.length){ alert('查無此訂單編號：'+raw); return; }
+    ordersCache = results;
+    document.getElementById('ord_search_clear').classList.remove('hidden');
+    renderOrders();
+  }catch(e){ alert(e.message); }
+}
+
+function clearOrderSearch(){
+  document.getElementById('ord_search').value = '';
+  loadOrders();
 }
 
 function renderOrders(){
@@ -729,7 +758,7 @@ function renderOrders(){
       : '<span class="muted" style="color:var(--muted)">-</span>';
 
     return \`<tr>
-      <td data-label="ID">\${o.id}</td>
+      <td data-label="訂單編號"><code>\${o.order_no}</code></td>
       <td data-label="建立時間">\${toTaipeiTime(o.created_at)}</td>
       <td data-label="會員">\${o.member_name_snapshot}</td>
       <td data-label="金額">$\${o.amount}</td>
@@ -770,7 +799,7 @@ function openCorrect(id){
   const o = ordersCache.find(x=>x.id===id);
   if (!o) return;
   correctingId = id;
-  document.getElementById('cor_id').textContent = id;
+  document.getElementById('cor_id').textContent = o.order_no || id;
   document.getElementById('cor_amount').value = o.amount;
   const member = o.member_id ? membersCache.find(m=>m.id===o.member_id) : null;
   corMemberPicker.selectMember(o.member_id || '', member ? member.name : '');
@@ -1480,6 +1509,9 @@ const PROOF_ELIGIBLE = ['transfer', 'store_barcode'];
 function render(o){
   const app = document.getElementById('app');
   let html = '<h1>付款資訊</h1>';
+  if (o.order_no) {
+    html += '<div class="row"><span>訂單編號</span><span><code>'+o.order_no+'</code></span></div>';
+  }
   if (o.coupon_code) {
     html += '<div class="row"><span>原始金額</span><span>$'+o.original_amount+'</span></div>';
     html += '<div class="row"><span>優惠碼 '+o.coupon_code+'</span><span>-$'+o.coupon_discount+'</span></div>';
@@ -1850,7 +1882,7 @@ export function memberHtml() {
       <input id="ord_month" type="month" />
       <button class="btn secondary" onclick="loadOrders()">查詢</button>
       <table id="ord_table">
-        <thead><tr><th>建立時間</th><th>金額</th><th>優惠</th><th>付款方式</th><th>狀態</th><th>操作</th></tr></thead>
+        <thead><tr><th>訂單編號</th><th>建立時間</th><th>金額</th><th>優惠</th><th>付款方式</th><th>狀態</th><th>操作</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -2254,7 +2286,8 @@ async function createOrder(){
     const linkEl = document.getElementById('newOrderLink');
     linkEl.href = res.link;
     document.getElementById('newOrderResult').classList.remove('hidden');
-    document.getElementById('newOrderMsg').textContent = res.discount ? \`已折抵 $\${res.discount}，實付 $\${res.amount}\` : '';
+    const discountNote = res.discount ? \`，已折抵 $\${res.discount}，實付 $\${res.amount}\` : '';
+    document.getElementById('newOrderMsg').textContent = \`訂單編號 \${res.order_no}\${discountNote}\`;
     document.getElementById('newOrderMsg').className = 'msg ok';
     loadOrders();
   }catch(e){ msg.textContent = e.message; msg.className='msg err'; }
@@ -2294,6 +2327,7 @@ async function loadOrders(){
       ? \`<code>\${o.coupon_code}</code><br/><span class="msg" style="margin:0;color:var(--muted);">-$\${o.coupon_discount}</span>\`
       : '-';
     return \`<tr>
+      <td><code>\${o.order_no}</code></td>
       <td>\${toTaipeiTime(o.created_at)}</td>
       <td>$\${o.amount}</td>
       <td>\${couponInfo}</td>
@@ -2301,7 +2335,7 @@ async function loadOrders(){
       <td><span class="badge \${st[1]}">\${st[0]}</span>\${completedTag}</td>
       <td>\${action}</td>
     </tr>\`;
-  }).join('') || '<tr><td colspan="6">尚無訂單記錄</td></tr>';
+  }).join('') || '<tr><td colspan="7">尚無訂單記錄</td></tr>';
 }
 
 // 頁面載入時就先抓費率（不管有沒有登入）

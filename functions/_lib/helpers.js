@@ -147,8 +147,34 @@ export async function ensureMemberReferralCode(env, member) {
   throw new Error("無法產生推薦碼，請稍後再試");
 }
 
+// ========================================================================
+// 訂單編號（給人看的顯示用編號，固定格式 TW21 + 至少4碼流水號，例如 TW210007）
+// 直接以資料庫的 orders.id（AUTOINCREMENT，刪除也不會重複使用）往前補 0 產生，
+// 不需要另外的資料表欄位；超過 9999 筆之後會自然變成 5 碼、6 碼...不會截斷。
+// ========================================================================
+
+export function formatOrderNo(id) {
+  return "TW21" + String(id).padStart(4, "0");
+}
+
+// 把使用者輸入的訂單編號（可能是完整的 TW210007，也可能只打數字部分）反解回資料庫 id。
+// 找不到合理數字就回傳 null。
+export function parseOrderNo(raw) {
+  if (raw === null || raw === undefined) return null;
+  let s = String(raw).trim().toUpperCase().replace(/\s+/g, "");
+  if (!s) return null;
+  if (s.startsWith("TW")) s = s.slice(2);
+  if (s.startsWith("21") && s.length > 4) s = s.slice(2);
+  s = s.replace(/\D/g, "");
+  if (!s) return null;
+  const n = parseInt(s, 10);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
+}
+
 export function publicOrderView(o) {
   return {
+    order_no: formatOrderNo(o.id),
     amount: o.amount,
     member_name_snapshot: o.member_name_snapshot,
     payment_method: o.payment_method,

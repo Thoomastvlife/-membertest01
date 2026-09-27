@@ -29,6 +29,8 @@ import {
   applyCouponToAmount,
   incrementCouponUsage,
   parseTaipeiDatetimeLocalToUtc,
+  formatOrderNo,
+  parseOrderNo,
 } from "./_lib/helpers.js";
 
 // 付款連結建立後，最多可以被開啟／操作幾小時，超過就整條連結失效（跟訂單本身 3 小時付款時效是兩回事）。
@@ -566,7 +568,7 @@ async function handleCreateOrder(request, env) {
 
   const methodSelectedAt = payment_method ? nowIso() : null;
 
-  await env.DB.prepare(
+  const insertResult = await env.DB.prepare(
     `INSERT INTO orders (token, amount, member_id, member_name_snapshot, payment_method, status,
       bank_name, bank_account_number, bank_account_holder, expires_at, method_selected_at,
       original_amount, coupon_code, coupon_discount)
@@ -594,12 +596,30 @@ async function handleCreateOrder(request, env) {
 
   const url = new URL(request.url);
   const link = `${url.origin}/pay/${token}`;
-  return json({ ok: true, token, link, expires_at: expiresAt, amount: finalAmount, discount: couponResult ? couponResult.discount : 0 });
+  return json({
+    ok: true,
+    token,
+    link,
+    expires_at: expiresAt,
+    amount: finalAmount,
+    discount: couponResult ? couponResult.discount : 0,
+    order_no: formatOrderNo(insertResult.meta.last_row_id),
+  });
 }
 
 async function handleListOrders(request, env) {
   const url = new URL(request.url);
   const month = url.searchParams.get("month");
+  const orderNoParam = url.searchParams.get("order_no");
+
+  // 用訂單編號（例如 TW210007，或只打數字部分也可以）快速查詢單一訂單，不受月份篩選限制
+  if (orderNoParam && orderNoParam.trim()) {
+    const id = parseOrderNo(orderNoParam);
+    if (!id) return json([]);
+    const { results } = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).all();
+    return json(results.map((o) => ({ ...o, order_no: formatOrderNo(o.id) })));
+  }
+
   let query = "SELECT * FROM orders";
   const binds = [];
   if (month) {
@@ -609,7 +629,7 @@ async function handleListOrders(request, env) {
   query += " ORDER BY created_at DESC";
   const stmt = binds.length ? env.DB.prepare(query).bind(...binds) : env.DB.prepare(query);
   const { results } = await stmt.all();
-  return json(results);
+  return json(results.map((o) => ({ ...o, order_no: formatOrderNo(o.id) })));
 }
 
 async function handleUploadBarcode(id, request, env) {
@@ -766,7 +786,7 @@ async function handleExport(request, env) {
 
   const header = ["訂單編號", "建立時間", "會員/客人", "原始金額", "優惠碼", "折抵金額", "實付金額", "付款方式", "狀態", "訂單完成(結案)", "付款證明末幾碼", "付款方式選擇時間", "完成付款時間", "到期時間"];
   const rows = results.map((o) => [
-    o.id,
+    formatOrderNo(o.id),
     toTaipeiTime(o.created_at),
     o.member_name_snapshot,
     o.original_amount != null ? o.original_amount : "",
@@ -991,7 +1011,7 @@ async function handleMemberOrders(session, request, env) {
   }
   query += " ORDER BY created_at DESC LIMIT 200";
   const { results } = await env.DB.prepare(query).bind(...binds).all();
-  return json(results);
+  return json(results.map((o) => ({ ...o, order_no: formatOrderNo(o.id) })));
 }
 
 async function handleMemberCreateOrder(session, request, env) {
@@ -1038,7 +1058,15 @@ async function handleMemberCreateOrder(session, request, env) {
 
   const url = new URL(request.url);
   const link = `${url.origin}/pay/${token}`;
-  return json({ ok: true, token, link, expires_at: expiresAt, amount: finalAmount, discount: couponResult ? couponResult.discount : 0 });
+  return json({
+    ok: true,
+    token,
+    link,
+    expires_at: expiresAt,
+    amount: finalAmount,
+    discount: couponResult ? couponResult.discount : 0,
+    order_no: formatOrderNo(inserted.meta.last_row_id),
+  });
 }
 
 // ---- 後台推播通知 ----
