@@ -36,9 +36,12 @@ export function getRate(rules, amount) {
   return null;
 }
 
+// 最低購買金額（查價／自助下單共用，前後端都要保持一致）
+export const MIN_QUOTE_AMOUNT = 200;
+
 // 計算抖幣
 export function calcCoins(rules, amount) {
-  if (isNaN(amount) || amount < 150 || amount > 50000) return null;
+  if (isNaN(amount) || amount < MIN_QUOTE_AMOUNT || amount > 50000) return null;
   const rate = getRate(rules, amount);
   if (!rate) return null;
   return { amount, rate, coins: (amount * rate).toFixed(2) };

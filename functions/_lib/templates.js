@@ -1524,7 +1524,7 @@ export function memberHtml() {
         <label>輸入金額（可新增多筆）</label>
         <div class="quote-inputs" id="quoteInputs">
           <div class="quote-input-row">
-            <input type="number" class="quote-amount" placeholder="輸入金額 (150~50000)" min="150" max="50000" step="1">
+            <input type="number" class="quote-amount" placeholder="輸入金額 (200~50000)" min="200" max="50000" step="1">
           </div>
         </div>
         <div class="quote-actions">
@@ -1538,15 +1538,16 @@ export function memberHtml() {
     <!-- === 自助下單 === -->
     <div class="card">
       <h2>自助下單</h2>
+      <div class="msg" style="color:var(--muted);margin-top:0;">單筆訂購金額最低 200 元</div>
       <label>金額</label>
       <div class="chips" id="amountChips">
-        <button type="button" class="chip" data-amount="100">$100</button>
+        <button type="button" class="chip" data-amount="200">$200</button>
         <button type="button" class="chip" data-amount="300">$300</button>
         <button type="button" class="chip" data-amount="500">$500</button>
         <button type="button" class="chip" data-amount="1000">$1000</button>
         <button type="button" class="chip chip-custom" id="chipCustom">其他金額</button>
       </div>
-      <input id="new_amount" type="number" min="1" step="1" placeholder="請輸入金額" class="hidden" />
+      <input id="new_amount" type="number" min="200" step="1" placeholder="請輸入金額（最低 200 元）" class="hidden" />
       <div class="estimate-badge hidden" id="estimateBadge"></div>
       <button class="btn" id="newOrderBtn" onclick="createOrder()">建立訂單</button>
       <div id="newOrderMsg" class="msg"></div>
@@ -1610,6 +1611,9 @@ const STATUS_LABEL = {
   cancelled:['已取消','b-cancel'],
 };
 
+// 最低購買金額（查價與自助下單共用同一個門檻，兩邊要保持一致）
+const MIN_QUOTE_AMOUNT = 200;
+
 // === 匯率規則（從 API 讀取） ===
 let rateRules = [];
 
@@ -1633,7 +1637,7 @@ function getRate(amount) {
 
 // 計算抖幣
 function calcCoins(amount) {
-  if (isNaN(amount) || amount < 150 || amount > 50000) return null;
+  if (isNaN(amount) || amount < MIN_QUOTE_AMOUNT || amount > 50000) return null;
   const rate = getRate(amount);
   if (!rate) return null;
   return { amount, rate, coins: (amount * rate).toFixed(2) };
@@ -1676,7 +1680,7 @@ function addQuoteInput() {
   const row = document.createElement('div');
   row.className = 'quote-input-row';
   row.innerHTML = \`
-    <input type="number" class="quote-amount" placeholder="輸入金額 (150~50000)" min="150" max="50000" step="1">
+    <input type="number" class="quote-amount" placeholder="輸入金額 (200~50000)" min="200" max="50000" step="1">
     <button type="button" class="remove-btn" onclick="this.parentElement.remove()">✖</button>
   \`;
   container.appendChild(row);
@@ -1720,7 +1724,7 @@ function calculateQuotes() {
   \`).join('');
 
   if (hasInvalid) {
-    showPopup('部分金額超出範圍', '超出 150~50000 的金額請私信');
+    showPopup('部分金額超出範圍', '超出 '+MIN_QUOTE_AMOUNT+'~50000 的金額請私信');
   }
 }
 
@@ -1935,6 +1939,7 @@ async function createOrder(){
   msg.textContent=''; msg.className='msg';
   document.getElementById('newOrderResult').classList.add('hidden');
   if (!amount || Number(amount) <= 0){ msg.textContent='請輸入正確的金額'; msg.className='msg err'; return; }
+  if (Number(amount) < MIN_QUOTE_AMOUNT){ msg.textContent='訂單金額不可低於 '+MIN_QUOTE_AMOUNT+' 元'; msg.className='msg err'; return; }
   btn.disabled = true;
   try{
     const res = await api('/api/member/orders', {method:'POST', body: JSON.stringify({amount})});

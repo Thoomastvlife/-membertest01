@@ -1,5 +1,8 @@
 import { adminHtml, payHtml, memberHtml, memberRegisterHtml } from "./_lib/templates.js";
-import { getRateRules, saveRateRules, DEFAULT_RATE_RULES } from "./_lib/rates.js";
+import { getRateRules, saveRateRules, DEFAULT_RATE_RULES, MIN_QUOTE_AMOUNT } from "./_lib/rates.js";
+
+// 會員自助下單的最低金額，跟查價系統的最低查詢金額保持一致
+const MIN_ORDER_AMOUNT = MIN_QUOTE_AMOUNT;
 import {
   jsonRes as json,
   htmlRes as html,
@@ -786,6 +789,7 @@ async function handleMemberCreateOrder(session, request, env) {
   const body = await request.json().catch(() => ({}));
   const amt = parseFloat(body.amount);
   if (!amt || amt <= 0) return json({ error: "金額不正確" }, 400);
+  if (amt < MIN_ORDER_AMOUNT) return json({ error: `訂單金額不可低於 ${MIN_ORDER_AMOUNT} 元` }, 400);
 
   const member = await env.DB.prepare("SELECT * FROM members WHERE id=?").bind(session.memberId).first();
   if (!member) return json({ error: "會員不存在，請重新登入" }, 404);
