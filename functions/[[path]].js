@@ -727,7 +727,7 @@ async function handleExport(request, env) {
     return new Date(isoStr).toLocaleString("zh-TW", { timeZone: "Asia/Taipei", hour12: false });
   };
 
-  const PM_LABEL = { transfer: "轉帳", store_barcode: "超商條碼", taiwan_pay: "台灣Pay" };
+  const PM_LABEL = { transfer: "轉帳", store_barcode: "超商條碼", taiwan_pay: "TWQR" };
   const STATUS_LABEL = {
     pending_method: "待選付款方式",
     awaiting_payment: "等待轉帳付款",

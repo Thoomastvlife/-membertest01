@@ -142,7 +142,7 @@ export function adminHtml() {
           <option value="">-- 不指定 --</option>
           <option value="transfer">轉帳</option>
           <option value="store_barcode">超商條碼</option>
-          <option value="taiwan_pay">台灣Pay</option>
+          <option value="taiwan_pay">TWQR</option>
         </select>
         <label>優惠碼（選填）</label>
         <div style="display:flex;gap:8px;">
@@ -355,7 +355,7 @@ export function adminHtml() {
       <option value="__keep__">-- 不變 --</option>
       <option value="transfer">改為：轉帳</option>
       <option value="store_barcode">改為：超商條碼</option>
-      <option value="taiwan_pay">改為：台灣Pay</option>
+      <option value="taiwan_pay">改為：TWQR</option>
       <option value="">重設為未選擇（讓客人重新選）</option>
     </select>
     <small class="hint">提醒：變更付款方式會清除已上傳的條碼與付款證明，請確認後再送出。</small>
@@ -376,7 +376,7 @@ export function adminHtml() {
 </div>
 
 <script>
-const PM_LABEL = {transfer:'轉帳', store_barcode:'超商條碼', taiwan_pay:'台灣Pay'};
+const PM_LABEL = {transfer:'轉帳', store_barcode:'超商條碼', taiwan_pay:'TWQR'};
 const STATUS_LABEL = {
   pending_method:['待選付款方式','b-pending'],
   awaiting_payment:['等待客人付款(轉帳)','b-await'],
@@ -507,7 +507,8 @@ async function togglePush(){
   }catch(e){ alert('開啟通知失敗: ' + e.message); }
 }
 
-function showTab(name){
+function showTab(name, opts){
+  opts = opts || {};
   document.querySelectorAll('.tab').forEach(t=>t.classList.add('hidden'));
   document.getElementById('tab-'+name).classList.remove('hidden');
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active', b.dataset.tab===name));
@@ -516,7 +517,7 @@ function showTab(name){
   if (name==='members') loadMembers();
   if (name==='stats') loadStats();
   if (name==='settings') loadSettings();
-  if (name==='announcement') loadAnnouncement();
+  if (name==='announcement' && !opts.skipAnnouncementLoad) loadAnnouncement();
   if (name==='staff') loadStaff();
   if (name==='rates') loadRates();
   if (name==='coupons') loadCoupons();
@@ -1230,6 +1231,7 @@ function renderCoupons(){
       <td data-label="操作">
         <button class="btn secondary small" onclick="editCoupon(\${c.id})">編輯</button>
         <button class="btn secondary small" onclick="toggleCouponActive(\${c.id}, \${c.is_active})">\${c.is_active ? '停用' : '啟用'}</button>
+        <button class="btn small" onclick="broadcastCoupon(\${c.id})">發送給會員</button>
         <button class="btn danger small" onclick="deleteCoupon(\${c.id})">刪除</button>
       </td>
     </tr>\`;
@@ -1330,6 +1332,37 @@ async function deleteCoupon(id){
   }catch(e){ alert(e.message); }
 }
 
+// 一鍵把優惠碼內容帶入「系統公告」，統一透過既有的會員公告彈窗發送給所有會員
+async function broadcastCoupon(id){
+  const c = couponsCache.find(x=>x.id===id);
+  if (!c) return;
+  if (!confirm('會把「系統公告」分頁換成這組優惠碼的宣傳文字（會先覆蓋掉目前公告內容），帶入後還要到該分頁按「儲存」才會真的發送給會員，是否繼續？')) return;
+
+  const lines = [];
+  lines.push('🎉 優惠碼上線：'+c.code);
+  lines.push('折扣：現折 '+c.discount_percent+'%'+(c.max_discount_amount != null ? '（最高折抵 $'+c.max_discount_amount+'）' : ''));
+  lines.push(c.min_order_amount ? ('訂單滿 $'+c.min_order_amount+' 元即可使用') : '無金額門檻，即可使用');
+  if (c.usage_limit != null) lines.push('限量 '+c.usage_limit+' 次，用完為止，把握機會！');
+  if (c.expires_at) lines.push('使用期限至：'+toTaipeiTime(c.expires_at));
+  if (c.note) lines.push(c.note);
+  lines.push('下單時輸入優惠碼「'+c.code+'」即可折抵，數量有限，手刀搶用！');
+
+  try{ await loadAnnouncement(); }catch(e){ /* 帶不到目前公告也沒關係，直接用新內容覆蓋 */ }
+
+  document.getElementById('ann_enabled').checked = true;
+  document.getElementById('ann_title').value = '優惠碼上線：'+c.code;
+  document.getElementById('ann_type').value = 'text';
+  document.getElementById('ann_text').value = lines.join('\\n');
+  annImages = [];
+  renderAnnouncementImageList();
+  updateAnnouncementTypeView();
+
+  showTab('announcement', {skipAnnouncementLoad: true});
+  const msg = document.getElementById('ann_msg');
+  msg.textContent = '已帶入優惠碼「'+c.code+'」的宣傳文字，確認內容無誤後請按「儲存」，會員下次登入 /member 才會看到';
+  msg.className = 'msg ok';
+}
+
 coMemberPicker = setupMemberPicker('co', (id)=>{ document.getElementById('co_nonmember_wrap').style.display = id ? 'none':'block'; });
 corMemberPicker = setupMemberPicker('cor', (id)=>{ document.getElementById('cor_nonmember_wrap').style.display = id ? 'none':'block'; });
 checkSession();
@@ -1359,7 +1392,11 @@ export function payHtml() {
   .methods button{padding:14px;border-radius:8px;border:1px solid #2f6fed;background:#fff;color:#2f6fed;font-size:15px;cursor:pointer;}
   .methods button:hover{background:#eef3ff;}
   .info-box{background:#f0f2f5;border-radius:8px;padding:14px;margin-top:16px;font-size:14px;line-height:1.8;}
-  img.barcode{max-width:100%;margin-top:12px;border:1px solid #e2e4e8;border-radius:8px;}
+  img.barcode{max-width:100%;margin-top:12px;border:1px solid #e2e4e8;border-radius:8px;display:block;}
+  .barcode-wrap{position:relative;display:inline-block;max-width:100%;}
+  .barcode-watermark{position:absolute;top:12px;left:0;right:0;bottom:0;pointer-events:none;border-radius:8px;overflow:hidden;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='160'><text x='-10' y='95' font-size='24' fill='rgba(200,40,30,0.35)' font-weight='700' font-family='sans-serif' transform='rotate(-28 110 80)'>咖啡代儲用</text></svg>");
+    background-repeat:repeat;}
   .center{text-align:center;}
   .muted{color:#6b7280;font-size:13px;}
   .error{color:#e0453c;text-align:center;margin-top:40px;}
@@ -1375,7 +1412,7 @@ export function payHtml() {
 <div class="card" id="app">載入中...</div>
 <script>
 const token = location.pathname.split('/').pop();
-const PM_LABEL = {transfer:'轉帳', store_barcode:'超商條碼', taiwan_pay:'台灣Pay'};
+const PM_LABEL = {transfer:'轉帳', store_barcode:'超商條碼', taiwan_pay:'TWQR'};
 let pollTimer=null;
 
 // === 將 UTC 時間轉為台灣時間 (UTC+8) ===
@@ -1439,7 +1476,7 @@ function render(o){
     html += '<div class="methods">'+
       '<button onclick="selectMethod(\\'transfer\\')">轉帳</button>'+
       '<button onclick="selectMethod(\\'store_barcode\\')">超商條碼</button>'+
-      '<button onclick="selectMethod(\\'taiwan_pay\\')">台灣Pay</button>'+
+      '<button onclick="selectMethod(\\'taiwan_pay\\')">TWQR</button>'+
     '</div>';
     app.innerHTML = html;
     return;
@@ -1458,7 +1495,7 @@ function render(o){
     if (o.status === 'awaiting_barcode') {
       html += '<div class="info-box center">店家正在準備付款條碼，請稍候（頁面會自動更新）</div>';
     } else if (o.status === 'ready_to_pay' && o.barcode_image) {
-      html += '<div class="center"><img class="barcode" src="'+o.barcode_image+'" /></div>';
+      html += '<div class="center"><div class="barcode-wrap"><img class="barcode" src="'+o.barcode_image+'" /><div class="barcode-watermark"></div></div></div>';
       html += '<div class="muted center" style="margin-top:8px;">請出示以上條碼給店家掃描付款</div>';
     }
   }
@@ -1813,7 +1850,7 @@ export function memberHtml() {
 </div>
 
 <script>
-const PM_LABEL = {transfer:'轉帳', store_barcode:'超商條碼', taiwan_pay:'台灣Pay'};
+const PM_LABEL = {transfer:'轉帳', store_barcode:'超商條碼', taiwan_pay:'TWQR'};
 const STATUS_LABEL = {
   pending_method:['待選付款方式','b-pending'],
   awaiting_payment:['等待付款(轉帳)','b-await'],
