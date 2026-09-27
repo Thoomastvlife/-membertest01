@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS orders (
   platform TEXT,                       -- 儲值平台：tiktok | kuaishou | xiaohongshu | douyin，NULL 表示未指定
   platform_account TEXT,               -- 客人填寫的儲值平台帳號/ID，供店家登入該帳號進行儲值
   platform_password TEXT,              -- 客人填寫的儲值平台密碼（明碼儲存，供店家實際登入儲值使用，非會員登入密碼）
+  coins REAL,                          -- 依下單當下的費率試算出的預計獲得幣數（以優惠碼折抵前的金額計算），NULL 表示未計算（例如未指定平台或金額不在範圍）
   FOREIGN KEY (member_id) REFERENCES members(id)
 );
 

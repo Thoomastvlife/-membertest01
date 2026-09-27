@@ -186,7 +186,7 @@ export function adminHtml() {
           <label for="ord_hide_completed" style="margin:0;">隱藏已結案訂單</label>
         </div>
         <table id="ord_table">
-          <thead><tr><th>訂單編號</th><th>建立時間</th><th>會員</th><th>儲值平台</th><th>帳號/密碼</th><th>金額</th><th>優惠</th><th>付款方式</th><th>狀態</th><th>結案</th><th>核對資訊</th><th>操作</th></tr></thead>
+          <thead><tr><th>訂單編號</th><th>建立時間</th><th>會員</th><th>儲值平台</th><th>帳號/密碼</th><th>金額</th><th>預計幣數</th><th>優惠</th><th>付款方式</th><th>狀態</th><th>結案</th><th>核對資訊</th><th>操作</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -787,6 +787,7 @@ function renderOrders(){
       <td data-label="儲值平台">\${PLATFORM_LABEL[o.platform]||'<span class="muted" style="color:var(--muted)">未指定</span>'}</td>
       <td data-label="帳號/密碼">\${accountInfo}</td>
       <td data-label="金額">$\${o.amount}</td>
+      <td data-label="預計幣數">\${o.coins != null ? ('🪙 '+Number(o.coins).toLocaleString()) : '<span class="muted" style="color:var(--muted)">-</span>'}</td>
       <td data-label="優惠">\${couponInfo}</td>
       <td data-label="付款方式">\${PM_LABEL[o.payment_method]||'尚未選擇'}</td>
       <td data-label="狀態"><span class="badge \${st[1]}">\${st[0]}</span></td>
@@ -794,7 +795,7 @@ function renderOrders(){
       <td data-label="核對資訊">\${proofInfo}</td>
       <td data-label="操作">\${actions}</td>
     </tr>\`;
-  }).join('') || '<tr><td colspan="12">本月尚無訂單</td></tr>';
+  }).join('') || '<tr><td colspan="13">本月尚無訂單</td></tr>';
 }
 
 function viewLink(token){
@@ -1550,6 +1551,9 @@ function render(o){
   if (o.platform) {
     html += '<div class="row"><span>儲值平台</span><span>'+(PLATFORM_LABEL[o.platform]||o.platform)+'</span></div>';
   }
+  if (o.coins != null) {
+    html += '<div class="row"><span>預計獲得</span><span>🪙 '+Number(o.coins).toLocaleString()+' 抖幣</span></div>';
+  }
 
   if (o.status === 'expired') {
     if (pollTimer){ clearInterval(pollTimer); pollTimer=null; }
@@ -1883,6 +1887,14 @@ export function memberHtml() {
     <div class="card">
       <h2>自助下單</h2>
       <div class="msg" style="color:var(--muted);margin-top:0;">單筆訂購金額最低 200 元</div>
+      <label>儲值平台</label>
+      <select id="new_platform">
+        <option value="">請選擇儲值平台</option>
+        <option value="tiktok">TikTok</option>
+        <option value="kuaishou">快手</option>
+        <option value="xiaohongshu">小紅書</option>
+        <option value="douyin">陸抖</option>
+      </select>
       <label>金額</label>
       <div class="chips" id="amountChips">
         <button type="button" class="chip" data-amount="200">$200</button>
@@ -1893,14 +1905,6 @@ export function memberHtml() {
       </div>
       <input id="new_amount" type="number" min="200" step="1" placeholder="請輸入金額（最低 200 元）" class="hidden" />
       <div class="estimate-badge hidden" id="estimateBadge"></div>
-      <label>儲值平台</label>
-      <select id="new_platform">
-        <option value="">請選擇儲值平台</option>
-        <option value="tiktok">TikTok</option>
-        <option value="kuaishou">快手</option>
-        <option value="xiaohongshu">小紅書</option>
-        <option value="douyin">陸抖</option>
-      </select>
       <label>帳號/ID</label>
       <input id="new_platform_account" placeholder="請輸入要儲值平台的帳號/ID" autocomplete="off" />
       <label>密碼</label>
@@ -1926,7 +1930,7 @@ export function memberHtml() {
       <input id="ord_month" type="month" />
       <button class="btn secondary" onclick="loadOrders()">查詢</button>
       <table id="ord_table">
-        <thead><tr><th>訂單編號</th><th>建立時間</th><th>儲值平台</th><th>金額</th><th>優惠</th><th>付款方式</th><th>狀態</th><th>操作</th></tr></thead>
+        <thead><tr><th>訂單編號</th><th>建立時間</th><th>儲值平台</th><th>金額</th><th>預計幣數</th><th>優惠</th><th>付款方式</th><th>狀態</th><th>操作</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -2091,6 +2095,26 @@ function calculateQuotes() {
   }
 }
 
+// === 更新「預估可獲得」徽章：必須同時選了儲值平台 + 有效金額才顯示 ===
+function updateEstimateBadge() {
+  const badge = document.getElementById('estimateBadge');
+  const platform = document.getElementById('new_platform').value;
+  const input = document.getElementById('new_amount');
+  const val = parseFloat(input.value);
+
+  if (!platform) {
+    badge.classList.add('hidden');
+    return;
+  }
+  const res = calcCoins(val);
+  if (res) {
+    badge.textContent = \`預估可獲得 🪙 \${Number(res.coins).toLocaleString()} 抖幣\`;
+    badge.classList.remove('hidden');
+  } else {
+    badge.classList.add('hidden');
+  }
+}
+
 // === 選擇查價結果 → 帶入自助下單金額 ===
 function selectQuote(amount, coins) {
   const input = document.getElementById('new_amount');
@@ -2101,16 +2125,19 @@ function selectQuote(amount, coins) {
       chip.classList.add('active');
     }
   });
-  const badge = document.getElementById('estimateBadge');
-  badge.textContent = \`預估可獲得 🪙 \${Number(coins).toLocaleString()} 抖幣\`;
-  badge.classList.remove('hidden');
-  document.getElementById('new_amount').scrollIntoView({behavior:'smooth', block:'center'});
+  updateEstimateBadge();
+  if (!document.getElementById('new_platform').value) {
+    document.getElementById('new_platform').scrollIntoView({behavior:'smooth', block:'center'});
+  } else {
+    document.getElementById('new_amount').scrollIntoView({behavior:'smooth', block:'center'});
+  }
 }
 
 // === 金額 chip 點擊 ===
 function initAmountChips() {
   const wrap = document.getElementById('amountChips');
   const input = document.getElementById('new_amount');
+  const platformSelect = document.getElementById('new_platform');
   const badge = document.getElementById('estimateBadge');
   if (!wrap || !input) return;
   wrap.querySelectorAll('.chip').forEach(chip => {
@@ -2125,27 +2152,13 @@ function initAmountChips() {
       } else {
         input.classList.add('hidden');
         input.value = chip.dataset.amount;
-        const res = calcCoins(parseFloat(chip.dataset.amount));
-        if (res) {
-          badge.textContent = \`預估可獲得 🪙 \${Number(res.coins).toLocaleString()} 抖幣\`;
-          badge.classList.remove('hidden');
-        } else {
-          badge.classList.add('hidden');
-        }
+        updateEstimateBadge();
       }
     });
   });
 
-  input.addEventListener('input', () => {
-    const val = parseFloat(input.value);
-    const res = calcCoins(val);
-    if (res) {
-      badge.textContent = \`預估可獲得 🪙 \${Number(res.coins).toLocaleString()} 抖幣\`;
-      badge.classList.remove('hidden');
-    } else {
-      badge.classList.add('hidden');
-    }
-  });
+  input.addEventListener('input', updateEstimateBadge);
+  if (platformSelect) platformSelect.addEventListener('change', updateEstimateBadge);
 }
 initAmountChips();
 
@@ -2341,7 +2354,8 @@ async function createOrder(){
     linkEl.href = res.link;
     document.getElementById('newOrderResult').classList.remove('hidden');
     const discountNote = res.discount ? \`，已折抵 $\${res.discount}，實付 $\${res.amount}\` : '';
-    document.getElementById('newOrderMsg').textContent = \`訂單編號 \${res.order_no}\${discountNote}\`;
+    const coinsNote = res.coins != null ? \`，預計獲得 🪙 \${Number(res.coins).toLocaleString()} 抖幣\` : '';
+    document.getElementById('newOrderMsg').textContent = \`訂單編號 \${res.order_no}\${discountNote}\${coinsNote}\`;
     document.getElementById('newOrderMsg').className = 'msg ok';
     loadOrders();
   }catch(e){ msg.textContent = e.message; msg.className='msg err'; }
@@ -2385,12 +2399,13 @@ async function loadOrders(){
       <td>\${toTaipeiTime(o.created_at)}</td>
       <td>\${PLATFORM_LABEL[o.platform]||'-'}</td>
       <td>$\${o.amount}</td>
+      <td>\${o.coins != null ? ('🪙 '+Number(o.coins).toLocaleString()) : '-'}</td>
       <td>\${couponInfo}</td>
       <td>\${PM_LABEL[o.payment_method]||'尚未選擇'}</td>
       <td><span class="badge \${st[1]}">\${st[0]}</span>\${completedTag}</td>
       <td>\${action}</td>
     </tr>\`;
-  }).join('') || '<tr><td colspan="8">尚無訂單記錄</td></tr>';
+  }).join('') || '<tr><td colspan="9">尚無訂單記錄</td></tr>';
 }
 
 // 頁面載入時就先抓費率（不管有沒有登入）

@@ -1,5 +1,5 @@
 import { adminHtml, payHtml, memberHtml, memberRegisterHtml } from "./_lib/templates.js";
-import { getRateRules, saveRateRules, DEFAULT_RATE_RULES, MIN_QUOTE_AMOUNT } from "./_lib/rates.js";
+import { getRateRules, saveRateRules, DEFAULT_RATE_RULES, MIN_QUOTE_AMOUNT, calcCoins } from "./_lib/rates.js";
 
 // 會員自助下單的最低金額，跟查價系統的最低查詢金額保持一致
 const MIN_ORDER_AMOUNT = MIN_QUOTE_AMOUNT;
@@ -550,6 +550,14 @@ async function handleCreateOrder(request, env) {
     finalAmount = couponResult.finalAmount;
   }
 
+  // 預計獲得幣數：只有指定了儲值平台才試算（跟自助下單邏輯一致，各平台共用同一套費率）
+  let coins = null;
+  if (platform) {
+    const rateRules = await getRateRules(env);
+    const coinsResult = calcCoins(rateRules, amt);
+    coins = coinsResult ? coinsResult.coins : null;
+  }
+
   const token = randomToken(24);
   const ttlHours = parseInt(env.LINK_TTL_HOURS || "3", 10);
   const expiresAt = addHours(new Date(), ttlHours).toISOString().replace("T", " ").slice(0, 19);
@@ -574,8 +582,8 @@ async function handleCreateOrder(request, env) {
   const insertResult = await env.DB.prepare(
     `INSERT INTO orders (token, amount, member_id, member_name_snapshot, payment_method, status,
       bank_name, bank_account_number, bank_account_holder, expires_at, method_selected_at,
-      original_amount, coupon_code, coupon_discount, platform)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      original_amount, coupon_code, coupon_discount, platform, coins)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       token,
@@ -592,7 +600,8 @@ async function handleCreateOrder(request, env) {
       couponResult ? amt : null,
       couponResult ? couponResult.coupon.code : null,
       couponResult ? couponResult.discount : null,
-      platform || null
+      platform || null,
+      coins
     )
     .run();
 
@@ -795,7 +804,7 @@ async function handleExport(request, env) {
     cancelled: "已取消",
   };
 
-  const header = ["訂單編號", "建立時間", "會員/客人", "儲值平台", "儲值帳號", "儲值密碼", "原始金額", "優惠碼", "折抵金額", "實付金額", "付款方式", "狀態", "訂單完成(結案)", "付款證明末幾碼", "付款方式選擇時間", "完成付款時間", "到期時間"];
+  const header = ["訂單編號", "建立時間", "會員/客人", "儲值平台", "儲值帳號", "儲值密碼", "原始金額", "優惠碼", "折抵金額", "實付金額", "預計獲得幣數", "付款方式", "狀態", "訂單完成(結案)", "付款證明末幾碼", "付款方式選擇時間", "完成付款時間", "到期時間"];
   const rows = results.map((o) => [
     formatOrderNo(o.id),
     toTaipeiTime(o.created_at),
@@ -807,6 +816,7 @@ async function handleExport(request, env) {
     o.coupon_code || "",
     o.coupon_discount != null ? o.coupon_discount : "",
     o.amount,
+    o.coins != null ? o.coins : "",
     PM_LABEL[o.payment_method] || "",
     STATUS_LABEL[o.status] || o.status,
     o.is_completed ? "是" : "否",
@@ -1017,7 +1027,7 @@ async function handleMemberOrders(session, request, env) {
   const url = new URL(request.url);
   const month = url.searchParams.get("month");
   let query =
-    "SELECT id, token, amount, platform, payment_method, status, is_completed, created_at, paid_at, expires_at, original_amount, coupon_code, coupon_discount FROM orders WHERE member_id=?";
+    "SELECT id, token, amount, platform, payment_method, status, is_completed, created_at, paid_at, expires_at, original_amount, coupon_code, coupon_discount, coins FROM orders WHERE member_id=?";
   const binds = [session.memberId];
   if (month) {
     query += " AND strftime('%Y-%m', created_at) = ?";
@@ -1051,14 +1061,20 @@ async function handleMemberCreateOrder(session, request, env) {
     finalAmount = couponResult.finalAmount;
   }
 
+  // 預計獲得幣數：以優惠碼折抵前的金額（amt）+ 下單當下的費率試算，跟平台無關（各平台共用同一套費率）。
+  // 一律由伺服器端計算，不採信前端送來的數字，避免被竄改。
+  const rateRules = await getRateRules(env);
+  const coinsResult = calcCoins(rateRules, amt);
+  const coins = coinsResult ? coinsResult.coins : null;
+
   const token = randomToken(24);
   const ttlHours = parseInt(env.LINK_TTL_HOURS || "3", 10);
   const expiresAt = addHours(new Date(), ttlHours).toISOString().replace("T", " ").slice(0, 19);
 
   const inserted = await env.DB.prepare(
     `INSERT INTO orders (token, amount, member_id, member_name_snapshot, status, expires_at,
-      original_amount, coupon_code, coupon_discount, platform, platform_account, platform_password)
-     VALUES (?, ?, ?, ?, 'pending_method', ?, ?, ?, ?, ?, ?, ?)`
+      original_amount, coupon_code, coupon_discount, platform, platform_account, platform_password, coins)
+     VALUES (?, ?, ?, ?, 'pending_method', ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       token,
@@ -1071,7 +1087,8 @@ async function handleMemberCreateOrder(session, request, env) {
       couponResult ? couponResult.discount : null,
       platform,
       platformAccount,
-      platformPassword
+      platformPassword,
+      coins
     )
     .run();
 
@@ -1088,6 +1105,7 @@ async function handleMemberCreateOrder(session, request, env) {
     expires_at: expiresAt,
     amount: finalAmount,
     discount: couponResult ? couponResult.discount : 0,
+    coins,
     order_no: formatOrderNo(inserted.meta.last_row_id),
   });
 }
