@@ -117,6 +117,7 @@ export function adminHtml() {
     <button data-tab="export" onclick="showTab('export')">資料匯出</button>
     <button data-tab="staff" onclick="showTab('staff')">員工帳號</button>
     <button data-tab="rates" onclick="showTab('rates')">費率設定</button>
+    <button data-tab="coupons" onclick="showTab('coupons')">優惠碼</button>
   </nav>
   <main>
 
@@ -143,6 +144,12 @@ export function adminHtml() {
           <option value="store_barcode">超商條碼</option>
           <option value="taiwan_pay">台灣Pay</option>
         </select>
+        <label>優惠碼（選填）</label>
+        <div style="display:flex;gap:8px;">
+          <input id="co_coupon" placeholder="輸入優惠碼" style="text-transform:uppercase;" oninput="document.getElementById('co_coupon_msg').textContent='';" />
+          <button type="button" class="btn secondary" style="white-space:nowrap;" onclick="previewCoupon('co')">套用</button>
+        </div>
+        <div id="co_coupon_msg" class="msg"></div>
         <button class="btn" onclick="createOrder()">產生前台連結（3 小時內有效）</button>
         <div id="co_result" class="hidden">
           <div class="link-box">
@@ -165,7 +172,7 @@ export function adminHtml() {
           <label for="ord_hide_completed" style="margin:0;">隱藏已結案訂單</label>
         </div>
         <table id="ord_table">
-          <thead><tr><th>ID</th><th>建立時間</th><th>會員</th><th>金額</th><th>付款方式</th><th>狀態</th><th>結案</th><th>核對資訊</th><th>操作</th></tr></thead>
+          <thead><tr><th>ID</th><th>建立時間</th><th>會員</th><th>金額</th><th>優惠</th><th>付款方式</th><th>狀態</th><th>結案</th><th>核對資訊</th><th>操作</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -291,6 +298,36 @@ export function adminHtml() {
         <button class="btn" onclick="saveRates()">儲存費率</button>
         <button class="btn secondary" onclick="resetRates()">還原預設值</button>
         <div id="rates_msg" class="msg"></div>
+      </div>
+    </section>
+
+    <section id="tab-coupons" class="tab hidden">
+      <div class="card">
+        <h2 id="cp_form_title">新增優惠碼</h2>
+        <label>優惠碼 *</label>
+        <input id="cp_code" placeholder="例如：WELCOME10" style="text-transform:uppercase;" />
+        <div class="grid2">
+          <div><label>折扣百分比 (%) *</label><input id="cp_percent" type="number" min="1" max="100" step="1" placeholder="例如：10" /></div>
+          <div><label>最高優惠金額（選填，不限請留空）</label><input id="cp_max" type="number" min="0" step="1" placeholder="不限" /></div>
+        </div>
+        <div class="grid2">
+          <div><label>最低使用金額（訂單金額需達到此金額才可使用，選填）</label><input id="cp_min" type="number" min="0" step="1" placeholder="0（不限）" /></div>
+          <div><label>使用次數上限（選填，不限請留空）</label><input id="cp_limit" type="number" min="1" step="1" placeholder="不限" /></div>
+        </div>
+        <label>到期時間（選填，不設定則永久有效）</label>
+        <input id="cp_expires" type="datetime-local" />
+        <label>備註（選填）</label>
+        <input id="cp_note" placeholder="例如：新會員首購優惠" />
+        <button class="btn" id="cp_submit_btn" onclick="submitCoupon()">新增</button>
+        <button class="btn secondary hidden" id="cp_cancel_btn" onclick="cancelEditCoupon()">取消編輯</button>
+        <div id="cp_msg" class="msg"></div>
+      </div>
+      <div class="card">
+        <h2>優惠碼列表</h2>
+        <table id="cp_table">
+          <thead><tr><th>代碼</th><th>折扣</th><th>上限/門檻</th><th>使用狀況</th><th>到期時間</th><th>狀態</th><th>操作</th></tr></thead>
+          <tbody></tbody>
+        </table>
       </div>
     </section>
 
@@ -482,6 +519,7 @@ function showTab(name){
   if (name==='announcement') loadAnnouncement();
   if (name==='staff') loadStaff();
   if (name==='rates') loadRates();
+  if (name==='coupons') loadCoupons();
 }
 
 // ---- 訂單自動更新（輪詢）----
@@ -598,19 +636,38 @@ function clearMemberPicker(prefix){
 
 let coMemberPicker, corMemberPicker;
 
+// 試算優惠碼折抵金額（結帳櫃檯用），prefix 對應的欄位需要有 _amount / _coupon / _coupon_msg 三個 id
+async function previewCoupon(prefix){
+  const amount = parseFloat(document.getElementById(prefix+'_amount').value);
+  const code = document.getElementById(prefix+'_coupon').value.trim();
+  const msg = document.getElementById(prefix+'_coupon_msg');
+  msg.textContent=''; msg.className='msg';
+  if (!amount || amount<=0){ msg.textContent='請先輸入金額'; msg.className='msg err'; return; }
+  if (!code){ msg.textContent='請輸入優惠碼'; msg.className='msg err'; return; }
+  try{
+    const r = await api('/api/coupons/preview', {method:'POST', body: JSON.stringify({code, amount})});
+    msg.textContent = \`優惠碼 \${r.code} 可折抵 $\${r.discount}，實付 $\${r.final_amount}\`;
+    msg.className = 'msg ok';
+  }catch(e){ msg.textContent = e.message; msg.className='msg err'; }
+}
+
 async function createOrder(){
   const amount = parseFloat(document.getElementById('co_amount').value);
   const member_id = document.getElementById('co_member').value || null;
   const non_member_name = document.getElementById('co_nonmember_name').value.trim();
   const payment_method = document.getElementById('co_method').value || null;
+  const coupon_code = document.getElementById('co_coupon').value.trim() || null;
   const msg = document.getElementById('co_msg');
   msg.textContent=''; msg.className='msg';
   if (!amount || amount<=0){ msg.textContent='請輸入正確金額'; msg.className='msg err'; return; }
   try{
-    const r = await api('/api/admin/orders', {method:'POST', body: JSON.stringify({amount, member_id, non_member_name, payment_method})});
+    const r = await api('/api/admin/orders', {method:'POST', body: JSON.stringify({amount, member_id, non_member_name, payment_method, coupon_code})});
     document.getElementById('co_result').classList.remove('hidden');
     document.getElementById('co_link').value = r.link;
-    msg.textContent = '連結已建立，3 小時內有效'; msg.className='msg ok';
+    document.getElementById('co_coupon').value = '';
+    document.getElementById('co_coupon_msg').textContent = '';
+    msg.textContent = r.discount ? \`連結已建立，已折抵 $\${r.discount}，實付 $\${r.amount}，3 小時內有效\` : '連結已建立，3 小時內有效';
+    msg.className='msg ok';
   }catch(e){ msg.textContent = e.message; msg.className='msg err'; }
 }
 
@@ -660,18 +717,23 @@ function renderOrders(){
     if (o.proof_image) proofInfo += \`<img class="proof-thumb" src="\${o.proof_image}" onclick="viewProof(\${o.id})" />\`;
     if (!proofInfo) proofInfo = '<span class="muted" style="color:var(--muted)">-</span>';
 
+    const couponInfo = o.coupon_code
+      ? \`<code>\${escapeHtml(o.coupon_code)}</code><br/><span class="muted" style="color:var(--muted)">-$\${o.coupon_discount} (原$\${o.original_amount})</span>\`
+      : '<span class="muted" style="color:var(--muted)">-</span>';
+
     return \`<tr>
       <td data-label="ID">\${o.id}</td>
       <td data-label="建立時間">\${toTaipeiTime(o.created_at)}</td>
       <td data-label="會員">\${o.member_name_snapshot}</td>
       <td data-label="金額">$\${o.amount}</td>
+      <td data-label="優惠">\${couponInfo}</td>
       <td data-label="付款方式">\${PM_LABEL[o.payment_method]||'尚未選擇'}</td>
       <td data-label="狀態"><span class="badge \${st[1]}">\${st[0]}</span></td>
       <td data-label="結案">\${o.is_completed ? '<span class="badge b-completed">已結案</span>' : ''}</td>
       <td data-label="核對資訊">\${proofInfo}</td>
       <td data-label="操作">\${actions}</td>
     </tr>\`;
-  }).join('') || '<tr><td colspan="9">本月尚無訂單</td></tr>';
+  }).join('') || '<tr><td colspan="10">本月尚無訂單</td></tr>';
 }
 
 function viewLink(token){
@@ -1127,6 +1189,147 @@ async function resetRates() {
   } catch (e) { msg.textContent = e.message; msg.className = 'msg err'; }
 }
 
+// ---- 優惠碼 ----
+
+let couponsCache = [];
+let editingCouponId = null;
+
+async function loadCoupons(){
+  const msg = document.getElementById('cp_msg');
+  try{
+    couponsCache = await api('/api/admin/coupons');
+    renderCoupons();
+  }catch(e){ msg.textContent = e.message; msg.className='msg err'; }
+}
+
+function renderCoupons(){
+  const tbody = document.querySelector('#cp_table tbody');
+  tbody.innerHTML = couponsCache.map(c=>{
+    const now = new Date();
+    const expired = c.expires_at && new Date(c.expires_at.replace(' ','T')+'Z') < now;
+    const usedUp = c.usage_limit != null && c.used_count >= c.usage_limit;
+    let statusBadge;
+    if (!c.is_active) statusBadge = '<span class="badge b-cancel">已停用</span>';
+    else if (expired) statusBadge = '<span class="badge b-expired">已過期</span>';
+    else if (usedUp) statusBadge = '<span class="badge b-expired">已用完</span>';
+    else statusBadge = '<span class="badge b-ready">啟用中</span>';
+
+    const limitInfo = [
+      c.max_discount_amount != null ? ('上限 $'+c.max_discount_amount) : '上限不限',
+      c.min_order_amount ? ('滿 $'+c.min_order_amount+' 可用') : '無門檻',
+    ].join('<br/>');
+    const usageInfo = c.used_count + ' / ' + (c.usage_limit != null ? c.usage_limit : '不限');
+
+    return \`<tr>
+      <td data-label="代碼"><code>\${escapeHtml(c.code)}</code>\${c.note ? '<br/><span class="muted" style="color:var(--muted);font-size:12px;">'+escapeHtml(c.note)+'</span>' : ''}</td>
+      <td data-label="折扣">\${c.discount_percent}%</td>
+      <td data-label="上限/門檻">\${limitInfo}</td>
+      <td data-label="使用狀況">\${usageInfo}</td>
+      <td data-label="到期時間">\${c.expires_at ? toTaipeiTime(c.expires_at) : '不過期'}</td>
+      <td data-label="狀態">\${statusBadge}</td>
+      <td data-label="操作">
+        <button class="btn secondary small" onclick="editCoupon(\${c.id})">編輯</button>
+        <button class="btn secondary small" onclick="toggleCouponActive(\${c.id}, \${c.is_active})">\${c.is_active ? '停用' : '啟用'}</button>
+        <button class="btn danger small" onclick="deleteCoupon(\${c.id})">刪除</button>
+      </td>
+    </tr>\`;
+  }).join('') || '<tr><td colspan="7">尚無優惠碼</td></tr>';
+}
+
+function toDatetimeLocalValue(dateStr){
+  if (!dateStr) return '';
+  const iso = String(dateStr).replace(' ','T') + 'Z';
+  const d = new Date(iso);
+  const pad = n => String(n).padStart(2,'0');
+  return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes());
+}
+
+function editCoupon(id){
+  const c = couponsCache.find(x=>x.id===id);
+  if (!c) return;
+  editingCouponId = id;
+  document.getElementById('cp_code').value = c.code;
+  document.getElementById('cp_percent').value = c.discount_percent;
+  document.getElementById('cp_max').value = c.max_discount_amount != null ? c.max_discount_amount : '';
+  document.getElementById('cp_min').value = c.min_order_amount || '';
+  document.getElementById('cp_limit').value = c.usage_limit != null ? c.usage_limit : '';
+  document.getElementById('cp_expires').value = toDatetimeLocalValue(c.expires_at);
+  document.getElementById('cp_note').value = c.note || '';
+  document.getElementById('cp_form_title').textContent = '編輯優惠碼：' + c.code;
+  document.getElementById('cp_submit_btn').textContent = '儲存修改';
+  document.getElementById('cp_cancel_btn').classList.remove('hidden');
+  document.getElementById('cp_msg').textContent = '';
+  document.getElementById('cp_code').scrollIntoView({behavior:'smooth', block:'center'});
+}
+
+function cancelEditCoupon(){
+  editingCouponId = null;
+  document.getElementById('cp_code').value = '';
+  document.getElementById('cp_percent').value = '';
+  document.getElementById('cp_max').value = '';
+  document.getElementById('cp_min').value = '';
+  document.getElementById('cp_limit').value = '';
+  document.getElementById('cp_expires').value = '';
+  document.getElementById('cp_note').value = '';
+  document.getElementById('cp_form_title').textContent = '新增優惠碼';
+  document.getElementById('cp_submit_btn').textContent = '新增';
+  document.getElementById('cp_cancel_btn').classList.add('hidden');
+  document.getElementById('cp_msg').textContent = '';
+}
+
+async function submitCoupon(){
+  const msg = document.getElementById('cp_msg');
+  msg.textContent=''; msg.className='msg';
+  const code = document.getElementById('cp_code').value.trim();
+  const discount_percent = parseFloat(document.getElementById('cp_percent').value);
+  const maxVal = document.getElementById('cp_max').value.trim();
+  const minVal = document.getElementById('cp_min').value.trim();
+  const limitVal = document.getElementById('cp_limit').value.trim();
+  const expiresVal = document.getElementById('cp_expires').value;
+  const note = document.getElementById('cp_note').value.trim();
+
+  if (!code){ msg.textContent='請輸入優惠碼'; msg.className='msg err'; return; }
+  if (!discount_percent || discount_percent<=0 || discount_percent>100){ msg.textContent='折扣百分比需介於 0~100'; msg.className='msg err'; return; }
+
+  const body = {
+    code,
+    discount_percent,
+    max_discount_amount: maxVal === '' ? null : parseFloat(maxVal),
+    min_order_amount: minVal === '' ? 0 : parseFloat(minVal),
+    usage_limit: limitVal === '' ? null : parseInt(limitVal, 10),
+    expires_at: expiresVal || null,
+    note: note || null,
+  };
+
+  try{
+    if (editingCouponId){
+      await api('/api/admin/coupons/'+editingCouponId, {method:'PATCH', body: JSON.stringify(body)});
+      msg.textContent='已儲存修改'; msg.className='msg ok';
+      cancelEditCoupon();
+    } else {
+      await api('/api/admin/coupons', {method:'POST', body: JSON.stringify(body)});
+      cancelEditCoupon();
+      msg.textContent='已新增優惠碼'; msg.className='msg ok';
+    }
+    loadCoupons();
+  }catch(e){ msg.textContent=e.message; msg.className='msg err'; }
+}
+
+async function toggleCouponActive(id, currentlyActive){
+  try{
+    await api('/api/admin/coupons/'+id, {method:'PATCH', body: JSON.stringify({is_active: !currentlyActive})});
+    loadCoupons();
+  }catch(e){ alert(e.message); }
+}
+
+async function deleteCoupon(id){
+  if (!confirm('確定永久刪除此優惠碼？已使用過此優惠碼的訂單記錄不會受影響。')) return;
+  try{
+    await api('/api/admin/coupons/'+id, {method:'DELETE'});
+    loadCoupons();
+  }catch(e){ alert(e.message); }
+}
+
 coMemberPicker = setupMemberPicker('co', (id)=>{ document.getElementById('co_nonmember_wrap').style.display = id ? 'none':'block'; });
 corMemberPicker = setupMemberPicker('cor', (id)=>{ document.getElementById('cor_nonmember_wrap').style.display = id ? 'none':'block'; });
 checkSession();
@@ -1204,6 +1407,10 @@ const PROOF_ELIGIBLE = ['transfer', 'store_barcode'];
 function render(o){
   const app = document.getElementById('app');
   let html = '<h1>付款資訊</h1>';
+  if (o.coupon_code) {
+    html += '<div class="row"><span>原始金額</span><span>$'+o.original_amount+'</span></div>';
+    html += '<div class="row"><span>優惠碼 '+o.coupon_code+'</span><span>-$'+o.coupon_discount+'</span></div>';
+  }
   html += '<div class="amount">$'+o.amount+'</div>';
   html += '<div class="row"><span>付款對象</span><span>'+o.member_name_snapshot+'</span></div>';
 
@@ -1549,6 +1756,12 @@ export function memberHtml() {
       </div>
       <input id="new_amount" type="number" min="200" step="1" placeholder="請輸入金額（最低 200 元）" class="hidden" />
       <div class="estimate-badge hidden" id="estimateBadge"></div>
+      <label>優惠碼（選填）</label>
+      <div style="display:flex;gap:8px;">
+        <input id="mo_coupon" placeholder="輸入優惠碼" style="text-transform:uppercase;" oninput="document.getElementById('mo_coupon_msg').textContent='';" />
+        <button type="button" class="btn secondary" style="white-space:nowrap;" onclick="previewCoupon('mo')">套用</button>
+      </div>
+      <div id="mo_coupon_msg" class="msg"></div>
       <button class="btn" id="newOrderBtn" onclick="createOrder()">建立訂單</button>
       <div id="newOrderMsg" class="msg"></div>
       <div id="newOrderResult" class="hidden">
@@ -1564,7 +1777,7 @@ export function memberHtml() {
       <input id="ord_month" type="month" />
       <button class="btn secondary" onclick="loadOrders()">查詢</button>
       <table id="ord_table">
-        <thead><tr><th>建立時間</th><th>金額</th><th>付款方式</th><th>狀態</th><th>操作</th></tr></thead>
+        <thead><tr><th>建立時間</th><th>金額</th><th>優惠</th><th>付款方式</th><th>狀態</th><th>操作</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -1932,24 +2145,44 @@ async function doLogout(){
   location.reload();
 }
 
+// 試算優惠碼折抵金額（會員自助下單用）
+async function previewCoupon(prefix){
+  const amount = parseFloat(document.getElementById('new_amount').value);
+  const code = document.getElementById(prefix+'_coupon').value.trim();
+  const msg = document.getElementById(prefix+'_coupon_msg');
+  msg.textContent=''; msg.className='msg';
+  if (!amount || amount<=0){ msg.textContent='請先輸入金額'; msg.className='msg err'; return; }
+  if (!code){ msg.textContent='請輸入優惠碼'; msg.className='msg err'; return; }
+  try{
+    const r = await api('/api/coupons/preview', {method:'POST', body: JSON.stringify({code, amount})});
+    msg.textContent = \`優惠碼 \${r.code} 可折抵 $\${r.discount}，實付 $\${r.final_amount}\`;
+    msg.className = 'msg ok';
+  }catch(e){ msg.textContent = e.message; msg.className='msg err'; }
+}
+
 async function createOrder(){
   const btn = document.getElementById('newOrderBtn');
   const msg = document.getElementById('newOrderMsg');
   const amount = document.getElementById('new_amount').value;
+  const coupon_code = document.getElementById('mo_coupon').value.trim() || null;
   msg.textContent=''; msg.className='msg';
   document.getElementById('newOrderResult').classList.add('hidden');
   if (!amount || Number(amount) <= 0){ msg.textContent='請輸入正確的金額'; msg.className='msg err'; return; }
   if (Number(amount) < MIN_QUOTE_AMOUNT){ msg.textContent='訂單金額不可低於 '+MIN_QUOTE_AMOUNT+' 元'; msg.className='msg err'; return; }
   btn.disabled = true;
   try{
-    const res = await api('/api/member/orders', {method:'POST', body: JSON.stringify({amount})});
+    const res = await api('/api/member/orders', {method:'POST', body: JSON.stringify({amount, coupon_code})});
     document.getElementById('new_amount').value = '';
     document.getElementById('new_amount').classList.add('hidden');
     document.getElementById('estimateBadge').classList.add('hidden');
+    document.getElementById('mo_coupon').value = '';
+    document.getElementById('mo_coupon_msg').textContent = '';
     document.querySelectorAll('#amountChips .chip').forEach(c=>c.classList.remove('active'));
     const linkEl = document.getElementById('newOrderLink');
     linkEl.href = res.link;
     document.getElementById('newOrderResult').classList.remove('hidden');
+    document.getElementById('newOrderMsg').textContent = res.discount ? \`已折抵 $\${res.discount}，實付 $\${res.amount}\` : '';
+    document.getElementById('newOrderMsg').className = 'msg ok';
     loadOrders();
   }catch(e){ msg.textContent = e.message; msg.className='msg err'; }
   finally{ btn.disabled = false; }
@@ -1984,14 +2217,18 @@ async function loadOrders(){
     const action = ACTIVE.has(o.status)
       ? \`<a href="/pay/\${o.token}" target="_blank">前往付款</a>\`
       : \`<a href="/pay/\${o.token}" target="_blank">查看</a>\`;
+    const couponInfo = o.coupon_code
+      ? \`<code>\${o.coupon_code}</code><br/><span class="msg" style="margin:0;color:var(--muted);">-$\${o.coupon_discount}</span>\`
+      : '-';
     return \`<tr>
       <td>\${toTaipeiTime(o.created_at)}</td>
       <td>$\${o.amount}</td>
+      <td>\${couponInfo}</td>
       <td>\${PM_LABEL[o.payment_method]||'尚未選擇'}</td>
       <td><span class="badge \${st[1]}">\${st[0]}</span>\${completedTag}</td>
       <td>\${action}</td>
     </tr>\`;
-  }).join('') || '<tr><td colspan="5">尚無訂單記錄</td></tr>';
+  }).join('') || '<tr><td colspan="6">尚無訂單記錄</td></tr>';
 }
 
 // 頁面載入時就先抓費率（不管有沒有登入）

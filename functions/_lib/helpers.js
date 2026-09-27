@@ -148,7 +148,46 @@ export function publicOrderView(o) {
     proof_last_digits: o.proof_last_digits || null,
     proof_uploaded_at: o.proof_uploaded_at || null,
     has_proof_image: !!o.proof_image,
+    original_amount: o.original_amount ?? null,
+    coupon_code: o.coupon_code || null,
+    coupon_discount: o.coupon_discount ?? null,
   };
+}
+
+// ========================================================================
+// 優惠碼
+// ========================================================================
+
+// 檢查某個優惠碼是否可套用在給定金額上，並算出折抵金額（不會寫入資料庫、不會增加使用次數）。
+// 回傳 { ok:true, coupon, discount, finalAmount } 或 { ok:false, error }
+export async function applyCouponToAmount(env, rawCode, amount) {
+  const code = (rawCode || "").trim().toUpperCase();
+  if (!code) return { ok: false, error: "請輸入優惠碼" };
+
+  const coupon = await env.DB.prepare("SELECT * FROM coupons WHERE UPPER(code)=?").bind(code).first();
+  if (!coupon) return { ok: false, error: "優惠碼不存在" };
+  if (!coupon.is_active) return { ok: false, error: "此優惠碼已停用" };
+  if (coupon.expires_at && new Date() > new Date(coupon.expires_at + "Z")) {
+    return { ok: false, error: "此優惠碼已過期" };
+  }
+  if (coupon.usage_limit != null && coupon.used_count >= coupon.usage_limit) {
+    return { ok: false, error: "此優惠碼使用次數已達上限" };
+  }
+  if (coupon.min_order_amount && amount < coupon.min_order_amount) {
+    return { ok: false, error: `訂單金額需滿 ${coupon.min_order_amount} 元才可使用此優惠碼` };
+  }
+
+  let discount = Math.round((amount * coupon.discount_percent) / 100);
+  if (coupon.max_discount_amount != null) discount = Math.min(discount, Math.round(coupon.max_discount_amount));
+  discount = Math.max(0, Math.min(discount, amount));
+
+  const finalAmount = amount - discount;
+  return { ok: true, coupon, discount, finalAmount };
+}
+
+// 套用優惠碼成功後（訂單已建立）呼叫，把該優惠碼的已使用次數 +1。
+export async function incrementCouponUsage(env, couponId) {
+  await env.DB.prepare("UPDATE coupons SET used_count = used_count + 1 WHERE id=?").bind(couponId).run();
 }
 
 export const PROOF_ELIGIBLE_METHODS = new Set(["transfer", "store_barcode"]);

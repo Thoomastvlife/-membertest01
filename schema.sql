@@ -48,7 +48,25 @@ CREATE TABLE IF NOT EXISTS orders (
   proof_image TEXT,                    -- 客人上傳的轉帳/繳費證明截圖 (base64 data URL)
   proof_last_digits TEXT,              -- 客人填寫的帳號末幾碼，方便店家核對
   proof_uploaded_at TEXT,
+  original_amount REAL,                -- 套用優惠碼前的原始金額；未使用優惠碼則為 NULL
+  coupon_code TEXT,                    -- 使用的優惠碼（快照，不受之後優惠碼變更/刪除影響）
+  coupon_discount REAL,                -- 此筆訂單實際折抵的金額；未使用優惠碼則為 NULL
   FOREIGN KEY (member_id) REFERENCES members(id)
+);
+
+-- 優惠碼（僅支援百分比折扣，可設定折扣上限、最低訂單金額門檻、使用次數上限、到期時間）
+CREATE TABLE IF NOT EXISTS coupons (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  code TEXT UNIQUE NOT NULL,
+  discount_percent REAL NOT NULL,      -- 折扣百分比，例如 10 代表 9 折(折抵 10%)
+  max_discount_amount REAL,            -- 最高優惠金額（折抵金額不會超過此上限），NULL 表示不限
+  min_order_amount REAL NOT NULL DEFAULT 0,  -- 最低訂單金額門檻，訂單金額需達到此金額才可使用
+  usage_limit INTEGER,                 -- 總使用次數上限，NULL 表示不限
+  used_count INTEGER NOT NULL DEFAULT 0,     -- 已使用次數
+  expires_at TEXT,                     -- 到期時間，NULL 表示不過期
+  is_active INTEGER NOT NULL DEFAULT 1,      -- 是否啟用（可手動停用而不刪除）
+  note TEXT,                           -- 備註
+  created_at TEXT DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS settings (

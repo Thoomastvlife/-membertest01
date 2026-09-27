@@ -26,6 +26,8 @@ import {
   notifyAdminsOfNewOrder,
   generateReferralCode,
   ensureMemberReferralCode,
+  applyCouponToAmount,
+  incrementCouponUsage,
 } from "./_lib/helpers.js";
 
 // 付款連結建立後，最多可以被開啟／操作幾小時，超過就整條連結失效（跟訂單本身 3 小時付款時效是兩回事）。
@@ -326,11 +328,175 @@ async function handleSaveRates(request, env) {
   return json({ ok: true });
 }
 
+// ---- 優惠碼 ----
+
+function couponPublicView(c) {
+  return {
+    id: c.id,
+    code: c.code,
+    discount_percent: c.discount_percent,
+    max_discount_amount: c.max_discount_amount,
+    min_order_amount: c.min_order_amount,
+    usage_limit: c.usage_limit,
+    used_count: c.used_count,
+    expires_at: c.expires_at,
+    is_active: !!c.is_active,
+    note: c.note,
+    created_at: c.created_at,
+  };
+}
+
+async function handleListCoupons(env) {
+  const { results } = await env.DB.prepare("SELECT * FROM coupons ORDER BY created_at DESC").all();
+  return json(results.map(couponPublicView));
+}
+
+async function handleCreateCoupon(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const code = (body.code || "").trim().toUpperCase();
+  if (!code) return json({ error: "請輸入優惠碼" }, 400);
+
+  const discountPercent = parseFloat(body.discount_percent);
+  if (!discountPercent || discountPercent <= 0 || discountPercent > 100) {
+    return json({ error: "折扣百分比需介於 0~100 之間" }, 400);
+  }
+
+  const maxDiscountAmount =
+    body.max_discount_amount !== undefined && body.max_discount_amount !== null && String(body.max_discount_amount).trim() !== ""
+      ? parseFloat(body.max_discount_amount)
+      : null;
+  if (maxDiscountAmount !== null && (isNaN(maxDiscountAmount) || maxDiscountAmount < 0)) {
+    return json({ error: "最高優惠金額不正確" }, 400);
+  }
+
+  const minOrderAmount =
+    body.min_order_amount !== undefined && body.min_order_amount !== null && String(body.min_order_amount).trim() !== ""
+      ? parseFloat(body.min_order_amount)
+      : 0;
+  if (isNaN(minOrderAmount) || minOrderAmount < 0) return json({ error: "最低訂單金額不正確" }, 400);
+
+  const usageLimit =
+    body.usage_limit !== undefined && body.usage_limit !== null && String(body.usage_limit).trim() !== ""
+      ? parseInt(body.usage_limit, 10)
+      : null;
+  if (usageLimit !== null && (isNaN(usageLimit) || usageLimit <= 0)) return json({ error: "使用次數上限不正確" }, 400);
+
+  let expiresAt = null;
+  if (body.expires_at && String(body.expires_at).trim()) {
+    const d = new Date(body.expires_at);
+    if (isNaN(d.getTime())) return json({ error: "到期時間格式不正確" }, 400);
+    expiresAt = d.toISOString().replace("T", " ").slice(0, 19);
+  }
+
+  try {
+    const r = await env.DB.prepare(
+      `INSERT INTO coupons (code, discount_percent, max_discount_amount, min_order_amount, usage_limit, expires_at, note)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+      .bind(code, discountPercent, maxDiscountAmount, minOrderAmount, usageLimit, expiresAt, body.note || null)
+      .run();
+    return json({ ok: true, id: r.meta.last_row_id });
+  } catch (err) {
+    if (String(err.message || "").includes("UNIQUE")) return json({ error: "此優惠碼已存在，請換一個代碼" }, 400);
+    throw err;
+  }
+}
+
+async function handleUpdateCoupon(id, request, env) {
+  const existing = await env.DB.prepare("SELECT * FROM coupons WHERE id=?").bind(id).first();
+  if (!existing) return json({ error: "找不到此優惠碼" }, 404);
+
+  const body = await request.json().catch(() => ({}));
+  const fields = [];
+  const binds = [];
+
+  if (body.code !== undefined) {
+    const code = (body.code || "").trim().toUpperCase();
+    if (!code) return json({ error: "優惠碼不可為空白" }, 400);
+    fields.push("code=?");
+    binds.push(code);
+  }
+  if (body.discount_percent !== undefined) {
+    const v = parseFloat(body.discount_percent);
+    if (!v || v <= 0 || v > 100) return json({ error: "折扣百分比需介於 0~100 之間" }, 400);
+    fields.push("discount_percent=?");
+    binds.push(v);
+  }
+  if (body.max_discount_amount !== undefined) {
+    const v = body.max_discount_amount === null || String(body.max_discount_amount).trim() === "" ? null : parseFloat(body.max_discount_amount);
+    if (v !== null && (isNaN(v) || v < 0)) return json({ error: "最高優惠金額不正確" }, 400);
+    fields.push("max_discount_amount=?");
+    binds.push(v);
+  }
+  if (body.min_order_amount !== undefined) {
+    const v = body.min_order_amount === null || String(body.min_order_amount).trim() === "" ? 0 : parseFloat(body.min_order_amount);
+    if (isNaN(v) || v < 0) return json({ error: "最低訂單金額不正確" }, 400);
+    fields.push("min_order_amount=?");
+    binds.push(v);
+  }
+  if (body.usage_limit !== undefined) {
+    const v = body.usage_limit === null || String(body.usage_limit).trim() === "" ? null : parseInt(body.usage_limit, 10);
+    if (v !== null && (isNaN(v) || v <= 0)) return json({ error: "使用次數上限不正確" }, 400);
+    fields.push("usage_limit=?");
+    binds.push(v);
+  }
+  if (body.expires_at !== undefined) {
+    let expiresAt = null;
+    if (body.expires_at && String(body.expires_at).trim()) {
+      const d = new Date(body.expires_at);
+      if (isNaN(d.getTime())) return json({ error: "到期時間格式不正確" }, 400);
+      expiresAt = d.toISOString().replace("T", " ").slice(0, 19);
+    }
+    fields.push("expires_at=?");
+    binds.push(expiresAt);
+  }
+  if (body.note !== undefined) {
+    fields.push("note=?");
+    binds.push(body.note || null);
+  }
+  if (body.is_active !== undefined) {
+    fields.push("is_active=?");
+    binds.push(body.is_active ? 1 : 0);
+  }
+
+  if (!fields.length) return json({ error: "沒有要更新的內容" }, 400);
+
+  try {
+    binds.push(id);
+    await env.DB.prepare(`UPDATE coupons SET ${fields.join(", ")} WHERE id=?`).bind(...binds).run();
+    return json({ ok: true });
+  } catch (err) {
+    if (String(err.message || "").includes("UNIQUE")) return json({ error: "此優惠碼已存在，請換一個代碼" }, 400);
+    throw err;
+  }
+}
+
+async function handleDeleteCoupon(id, env) {
+  await env.DB.prepare("DELETE FROM coupons WHERE id=?").bind(id).run();
+  return json({ ok: true });
+}
+
+// 試算優惠碼折抵金額（結帳櫃檯 / 會員自助下單都會用到，下單前先預覽，不會真的扣用次數）
+async function handleCouponPreview(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const amt = parseFloat(body.amount);
+  if (!amt || amt <= 0) return json({ error: "金額不正確" }, 400);
+
+  const result = await applyCouponToAmount(env, body.code, amt);
+  if (!result.ok) return json({ error: result.error }, 400);
+  return json({
+    ok: true,
+    code: result.coupon.code,
+    discount: result.discount,
+    final_amount: result.finalAmount,
+  });
+}
+
 // ---- Orders (admin) ----
 
 async function handleCreateOrder(request, env) {
   const body = await request.json().catch(() => ({}));
-  const { amount, member_id, non_member_name, payment_method } = body;
+  const { amount, member_id, non_member_name, payment_method, coupon_code } = body;
 
   const amt = parseFloat(amount);
   if (!amt || amt <= 0) return json({ error: "金額不正確" }, 400);
@@ -343,6 +509,14 @@ async function handleCreateOrder(request, env) {
     if (!m) return json({ error: "找不到指定會員" }, 400);
     memberId = m.id;
     memberNameSnapshot = m.name;
+  }
+
+  let finalAmount = amt;
+  let couponResult = null;
+  if (coupon_code && coupon_code.trim()) {
+    couponResult = await applyCouponToAmount(env, coupon_code, amt);
+    if (!couponResult.ok) return json({ error: couponResult.error }, 400);
+    finalAmount = couponResult.finalAmount;
   }
 
   const token = randomToken(24);
@@ -368,12 +542,13 @@ async function handleCreateOrder(request, env) {
 
   await env.DB.prepare(
     `INSERT INTO orders (token, amount, member_id, member_name_snapshot, payment_method, status,
-      bank_name, bank_account_number, bank_account_holder, expires_at, method_selected_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      bank_name, bank_account_number, bank_account_holder, expires_at, method_selected_at,
+      original_amount, coupon_code, coupon_discount)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       token,
-      amt,
+      finalAmount,
       memberId,
       memberNameSnapshot,
       payment_method || null,
@@ -382,13 +557,18 @@ async function handleCreateOrder(request, env) {
       bankFields.bank_account_number,
       bankFields.bank_account_holder,
       expiresAt,
-      methodSelectedAt
+      methodSelectedAt,
+      couponResult ? amt : null,
+      couponResult ? couponResult.coupon.code : null,
+      couponResult ? couponResult.discount : null
     )
     .run();
 
+  if (couponResult) await incrementCouponUsage(env, couponResult.coupon.id);
+
   const url = new URL(request.url);
   const link = `${url.origin}/pay/${token}`;
-  return json({ ok: true, token, link, expires_at: expiresAt });
+  return json({ ok: true, token, link, expires_at: expiresAt, amount: finalAmount, discount: couponResult ? couponResult.discount : 0 });
 }
 
 async function handleListOrders(request, env) {
@@ -558,11 +738,14 @@ async function handleExport(request, env) {
     cancelled: "已取消",
   };
 
-  const header = ["訂單編號", "建立時間", "會員/客人", "金額", "付款方式", "狀態", "訂單完成(結案)", "付款證明末幾碼", "付款方式選擇時間", "完成付款時間", "到期時間"];
+  const header = ["訂單編號", "建立時間", "會員/客人", "原始金額", "優惠碼", "折抵金額", "實付金額", "付款方式", "狀態", "訂單完成(結案)", "付款證明末幾碼", "付款方式選擇時間", "完成付款時間", "到期時間"];
   const rows = results.map((o) => [
     o.id,
     toTaipeiTime(o.created_at),
     o.member_name_snapshot,
+    o.original_amount != null ? o.original_amount : "",
+    o.coupon_code || "",
+    o.coupon_discount != null ? o.coupon_discount : "",
     o.amount,
     PM_LABEL[o.payment_method] || "",
     STATUS_LABEL[o.status] || o.status,
@@ -774,7 +957,7 @@ async function handleMemberOrders(session, request, env) {
   const url = new URL(request.url);
   const month = url.searchParams.get("month");
   let query =
-    "SELECT id, token, amount, payment_method, status, is_completed, created_at, paid_at, expires_at FROM orders WHERE member_id=?";
+    "SELECT id, token, amount, payment_method, status, is_completed, created_at, paid_at, expires_at, original_amount, coupon_code, coupon_discount FROM orders WHERE member_id=?";
   const binds = [session.memberId];
   if (month) {
     query += " AND strftime('%Y-%m', created_at) = ?";
@@ -794,22 +977,42 @@ async function handleMemberCreateOrder(session, request, env) {
   const member = await env.DB.prepare("SELECT * FROM members WHERE id=?").bind(session.memberId).first();
   if (!member) return json({ error: "會員不存在，請重新登入" }, 404);
 
+  let finalAmount = amt;
+  let couponResult = null;
+  if (body.coupon_code && body.coupon_code.trim()) {
+    couponResult = await applyCouponToAmount(env, body.coupon_code, amt);
+    if (!couponResult.ok) return json({ error: couponResult.error }, 400);
+    finalAmount = couponResult.finalAmount;
+  }
+
   const token = randomToken(24);
   const ttlHours = parseInt(env.LINK_TTL_HOURS || "3", 10);
   const expiresAt = addHours(new Date(), ttlHours).toISOString().replace("T", " ").slice(0, 19);
 
   const inserted = await env.DB.prepare(
-    `INSERT INTO orders (token, amount, member_id, member_name_snapshot, status, expires_at)
-     VALUES (?, ?, ?, ?, 'pending_method', ?)`
+    `INSERT INTO orders (token, amount, member_id, member_name_snapshot, status, expires_at,
+      original_amount, coupon_code, coupon_discount)
+     VALUES (?, ?, ?, ?, 'pending_method', ?, ?, ?, ?)`
   )
-    .bind(token, amt, member.id, member.name, expiresAt)
+    .bind(
+      token,
+      finalAmount,
+      member.id,
+      member.name,
+      expiresAt,
+      couponResult ? amt : null,
+      couponResult ? couponResult.coupon.code : null,
+      couponResult ? couponResult.discount : null
+    )
     .run();
 
-  await notifyAdminsOfNewOrder(env, { id: inserted.meta.last_row_id, member_name_snapshot: member.name, amount: amt });
+  if (couponResult) await incrementCouponUsage(env, couponResult.coupon.id);
+
+  await notifyAdminsOfNewOrder(env, { id: inserted.meta.last_row_id, member_name_snapshot: member.name, amount: finalAmount });
 
   const url = new URL(request.url);
   const link = `${url.origin}/pay/${token}`;
-  return json({ ok: true, token, link, expires_at: expiresAt });
+  return json({ ok: true, token, link, expires_at: expiresAt, amount: finalAmount, discount: couponResult ? couponResult.discount : 0 });
 }
 
 // ---- 後台推播通知 ----
@@ -920,6 +1123,10 @@ export async function onRequest(context) {
 
     if (path === "/api/rates" && method === "GET") return handlePublicRates(env);
 
+    // 優惠碼試算：結帳櫃檯(admin，已登入才看得到畫面)跟會員自助下單(member)都會呼叫到，
+    // 這裡只回傳「這個碼折多少錢」，不會洩漏其他優惠碼資訊，所以不需要另外驗證登入身份。
+    if (path === "/api/coupons/preview" && method === "POST") return handleCouponPreview(request, env);
+
     if (path === "/api/member/login" && method === "POST") return handleMemberLogin(request, env);
     if (path === "/api/member/register" && method === "POST") return handleMemberRegister(request, env);
     if (path === "/api/member/logout" && method === "POST") return handleMemberLogout();
@@ -979,6 +1186,13 @@ export async function onRequest(context) {
 
       if (path === "/api/admin/rates" && method === "GET") return handleGetRates(env);
       if (path === "/api/admin/rates" && method === "POST") return handleSaveRates(request, env);
+
+      if (path === "/api/admin/coupons" && method === "GET") return handleListCoupons(env);
+      if (path === "/api/admin/coupons" && method === "POST") return handleCreateCoupon(request, env);
+
+      const couponMatch = path.match(/^\/api\/admin\/coupons\/(\d+)$/);
+      if (couponMatch && method === "PATCH") return handleUpdateCoupon(couponMatch[1], request, env);
+      if (couponMatch && method === "DELETE") return handleDeleteCoupon(couponMatch[1], env);
 
       if (path === "/api/admin/orders" && method === "POST") return handleCreateOrder(request, env);
       if (path === "/api/admin/orders" && method === "GET") return handleListOrders(request, env);
