@@ -305,13 +305,22 @@ export function adminHtml() {
 
     <section id="tab-rates" class="tab hidden">
       <div class="card">
-        <h2>抖幣費率設定</h2>
-        <small class="hint">符合金額 ≥ min 時，套用該 rate。系統會自動由大到小排序。修改後儲存即生效，會員下次登入會看到新費率。</small>
-        <div id="rates_list" style="margin-top:14px;"></div>
-        <button class="btn secondary" onclick="addRateRow()">➕ 新增一筆</button>
-        <button class="btn" onclick="saveRates()">儲存費率</button>
-        <button class="btn secondary" onclick="resetRates()">還原預設值</button>
-        <div id="rates_msg" class="msg"></div>
+        <h2>TikTok 抖幣費率設定</h2>
+        <small class="hint">符合金額 ≥ min 時，套用該 rate。系統會自動由大到小排序。修改後儲存即生效，僅適用於 TikTok 平台的訂單。</small>
+        <div id="rates_list_tiktok" style="margin-top:14px;"></div>
+        <button class="btn secondary" onclick="addRateRow('tiktok')">➕ 新增一筆</button>
+        <button class="btn" onclick="saveRates('tiktok')">儲存費率</button>
+        <button class="btn secondary" onclick="resetRates('tiktok')">還原預設值</button>
+        <div id="rates_msg_tiktok" class="msg"></div>
+      </div>
+      <div class="card">
+        <h2>快手 / 小紅書 / 陸抖 費率設定</h2>
+        <small class="hint">符合金額 ≥ min 時，套用該 rate。系統會自動由大到小排序。修改後儲存即生效，快手、小紅書、陸抖三個平台共用這組費率。</small>
+        <div id="rates_list_other" style="margin-top:14px;"></div>
+        <button class="btn secondary" onclick="addRateRow('other')">➕ 新增一筆</button>
+        <button class="btn" onclick="saveRates('other')">儲存費率</button>
+        <button class="btn secondary" onclick="resetRates('other')">還原預設值</button>
+        <div id="rates_msg_other" class="msg"></div>
       </div>
     </section>
 
@@ -1181,75 +1190,81 @@ function exportCsv(){
 
 // ---- 費率設定 ----
 
-let rateRows = [];
+let rateRowsByGroup = { tiktok: [], other: [] };
 
 async function loadRates() {
-  const msg = document.getElementById('rates_msg');
+  await Promise.all(['tiktok', 'other'].map(loadRatesGroup));
+}
+
+async function loadRatesGroup(group) {
+  const msg = document.getElementById('rates_msg_'+group);
   msg.textContent = '';
   try {
-    const data = await api('/api/admin/rates');
-    rateRows = data.rules || [];
-    renderRateRows();
+    const data = await api('/api/admin/rates?group='+group);
+    rateRowsByGroup[group] = data.rules || [];
+    renderRateRows(group);
   } catch (e) {
     msg.textContent = e.message; msg.className = 'msg err';
   }
 }
 
-function renderRateRows() {
-  const container = document.getElementById('rates_list');
-  if (!rateRows.length) {
+function renderRateRows(group) {
+  const container = document.getElementById('rates_list_'+group);
+  const rows = rateRowsByGroup[group];
+  if (!rows.length) {
     container.innerHTML = '<div class="msg">尚無費率，請點「新增一筆」</div>';
     return;
   }
-  container.innerHTML = rateRows.map((r, i) => \`
+  container.innerHTML = rows.map((r, i) => \`
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
       <span style="min-width:80px;font-size:13px;color:var(--muted);">金額 ≥</span>
-      <input type="number" value="\${r.min}" onchange="updateRate(\${i},'min',this.value)" style="max-width:140px;">
+      <input type="number" value="\${r.min}" onchange="updateRate('\${group}',\${i},'min',this.value)" style="max-width:140px;">
       <span style="font-size:13px;color:var(--muted);">→ 匯率</span>
-      <input type="number" step="0.001" value="\${r.rate}" onchange="updateRate(\${i},'rate',this.value)" style="max-width:120px;">
-      <button class="btn danger small" onclick="removeRate(\${i})">刪除</button>
+      <input type="number" step="0.001" value="\${r.rate}" onchange="updateRate('\${group}',\${i},'rate',this.value)" style="max-width:120px;">
+      <button class="btn danger small" onclick="removeRate('\${group}',\${i})">刪除</button>
     </div>
   \`).join('');
 }
 
-function updateRate(index, field, value) {
+function updateRate(group, index, field, value) {
   const num = parseFloat(value);
   if (isNaN(num)) return;
-  rateRows[index][field] = num;
+  rateRowsByGroup[group][index][field] = num;
 }
 
-function removeRate(index) {
-  rateRows.splice(index, 1);
-  renderRateRows();
+function removeRate(group, index) {
+  rateRowsByGroup[group].splice(index, 1);
+  renderRateRows(group);
 }
 
-function addRateRow() {
-  rateRows.push({ min: 0, rate: 1.0 });
-  renderRateRows();
+function addRateRow(group) {
+  rateRowsByGroup[group].push({ min: 0, rate: 1.0 });
+  renderRateRows(group);
 }
 
-async function saveRates() {
-  const msg = document.getElementById('rates_msg');
+async function saveRates(group) {
+  const msg = document.getElementById('rates_msg_'+group);
   msg.textContent = '';
-  if (!rateRows.length) {
+  const rows = rateRowsByGroup[group];
+  if (!rows.length) {
     msg.textContent = '至少需要一筆費率'; msg.className = 'msg err'; return;
   }
   try {
-    await api('/api/admin/rates', {method:'POST', body: JSON.stringify({rules: rateRows})});
+    await api('/api/admin/rates', {method:'POST', body: JSON.stringify({group, rules: rows})});
     msg.textContent = '已儲存，會員下次登入即生效'; msg.className = 'msg ok';
-    loadRates();
+    loadRatesGroup(group);
   } catch (e) { msg.textContent = e.message; msg.className = 'msg err'; }
 }
 
-async function resetRates() {
+async function resetRates(group) {
   if (!confirm('確定還原成程式預設的費率嗎？此動作會覆蓋資料庫目前的設定。')) return;
-  const msg = document.getElementById('rates_msg');
+  const msg = document.getElementById('rates_msg_'+group);
   try {
-    rateRows = [
+    rateRowsByGroup[group] = [
       { min: 0, rate: 2.500 }
     ];
-    renderRateRows();
-    await api('/api/admin/rates', {method:'POST', body: JSON.stringify({rules: rateRows})});
+    renderRateRows(group);
+    await api('/api/admin/rates', {method:'POST', body: JSON.stringify({group, rules: rateRowsByGroup[group]})});
     msg.textContent = '已還原預設值'; msg.className = 'msg ok';
   } catch (e) { msg.textContent = e.message; msg.className = 'msg err'; }
 }
@@ -1869,6 +1884,14 @@ export function memberHtml() {
         <span class="arrow">▼</span>
       </div>
       <div class="quote-panel hidden" id="quotePanel">
+        <label>儲值平台</label>
+        <select id="quote_platform">
+          <option value="">請選擇儲值平台</option>
+          <option value="tiktok">TikTok</option>
+          <option value="kuaishou">快手</option>
+          <option value="xiaohongshu">小紅書</option>
+          <option value="douyin">陸抖</option>
+        </select>
         <label>輸入金額（可新增多筆）</label>
         <div class="quote-inputs" id="quoteInputs">
           <div class="quote-input-row">
@@ -1981,31 +2004,37 @@ const STATUS_LABEL = {
 // 最低購買金額（查價與自助下單共用同一個門檻，兩邊要保持一致）
 const MIN_QUOTE_AMOUNT = 200;
 
-// === 匯率規則（從 API 讀取） ===
-let rateRules = [];
+// === 匯率規則（從 API 讀取，分兩組：tiktok 專用 / 快手小紅書陸抖共用） ===
+let rateRulesByGroup = { tiktok: [], other: [] };
 
 async function loadRates() {
   try {
     const data = await api('/api/rates');
-    rateRules = data.rules || [];
+    rateRulesByGroup = data.groups || { tiktok: [], other: [] };
   } catch (e) {
     console.warn('讀取費率失敗', e);
-    rateRules = [];
+    rateRulesByGroup = { tiktok: [], other: [] };
   }
 }
 
+// 依平台代碼取得對應的費率群組（tiktok 自己一組，其餘平台共用 other 這組）
+function getRateGroupForPlatform(platform) {
+  return platform === 'tiktok' ? 'tiktok' : 'other';
+}
+
 // 取得對應匯率
-function getRate(amount) {
-  for (const rule of rateRules) {
+function getRate(amount, platform) {
+  const rules = rateRulesByGroup[getRateGroupForPlatform(platform)] || [];
+  for (const rule of rules) {
     if (amount >= rule.min) return rule.rate;
   }
   return null;
 }
 
 // 計算抖幣
-function calcCoins(amount) {
+function calcCoins(amount, platform) {
   if (isNaN(amount) || amount < MIN_QUOTE_AMOUNT || amount > 50000) return null;
-  const rate = getRate(amount);
+  const rate = getRate(amount, platform);
   if (!rate) return null;
   return { amount, rate, coins: (amount * rate).toFixed(2) };
 }
@@ -2055,6 +2084,11 @@ function addQuoteInput() {
 
 // === 查價專區：計算 ===
 function calculateQuotes() {
+  const platform = document.getElementById('quote_platform').value;
+  if (!platform) {
+    showPopup('請先選擇儲值平台', '不同平台費率不同，請先選擇要儲值的平台再計算');
+    return;
+  }
   const inputs = document.querySelectorAll('.quote-amount');
   const results = [];
   let hasInvalid = false;
@@ -2063,7 +2097,7 @@ function calculateQuotes() {
     const raw = input.value.trim();
     if (!raw) return;
     const amount = parseFloat(raw);
-    const res = calcCoins(amount);
+    const res = calcCoins(amount, platform);
     if (!res) { hasInvalid = true; return; }
     results.push(res);
   });
@@ -2086,7 +2120,7 @@ function calculateQuotes() {
         <div class="rate">兌換比例：1 : \${r.rate}</div>
         <div class="coins">🪙 \${Number(r.coins).toLocaleString()} 抖幣</div>
       </div>
-      <button class="select-btn" onclick="selectQuote(\${r.amount}, '\${r.coins}')">選擇此金額</button>
+      <button class="select-btn" onclick="selectQuote(\${r.amount}, '\${r.coins}', '\${platform}')">選擇此金額</button>
     </div>
   \`).join('');
 
@@ -2106,7 +2140,7 @@ function updateEstimateBadge() {
     badge.classList.add('hidden');
     return;
   }
-  const res = calcCoins(val);
+  const res = calcCoins(val, platform);
   if (res) {
     badge.textContent = \`預估可獲得 🪙 \${Number(res.coins).toLocaleString()} 抖幣\`;
     badge.classList.remove('hidden');
@@ -2115,8 +2149,8 @@ function updateEstimateBadge() {
   }
 }
 
-// === 選擇查價結果 → 帶入自助下單金額 ===
-function selectQuote(amount, coins) {
+// === 選擇查價結果 → 帶入自助下單金額與平台 ===
+function selectQuote(amount, coins, platform) {
   const input = document.getElementById('new_amount');
   input.value = amount;
   document.querySelectorAll('#amountChips .chip').forEach(c => c.classList.remove('active'));
@@ -2125,12 +2159,11 @@ function selectQuote(amount, coins) {
       chip.classList.add('active');
     }
   });
-  updateEstimateBadge();
-  if (!document.getElementById('new_platform').value) {
-    document.getElementById('new_platform').scrollIntoView({behavior:'smooth', block:'center'});
-  } else {
-    document.getElementById('new_amount').scrollIntoView({behavior:'smooth', block:'center'});
+  if (platform) {
+    document.getElementById('new_platform').value = platform;
   }
+  updateEstimateBadge();
+  document.getElementById('new_amount').scrollIntoView({behavior:'smooth', block:'center'});
 }
 
 // === 金額 chip 點擊 ===

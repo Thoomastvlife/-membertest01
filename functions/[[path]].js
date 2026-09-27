@@ -1,5 +1,5 @@
 import { adminHtml, payHtml, memberHtml, memberRegisterHtml } from "./_lib/templates.js";
-import { getRateRules, saveRateRules, DEFAULT_RATE_RULES, MIN_QUOTE_AMOUNT, calcCoins } from "./_lib/rates.js";
+import { getRateRules, saveRateRules, getAllRateRules, getRateGroupForPlatform, RATE_GROUPS, DEFAULT_RATE_RULES, MIN_QUOTE_AMOUNT, calcCoins } from "./_lib/rates.js";
 
 // 會員自助下單的最低金額，跟查價系統的最低查詢金額保持一致
 const MIN_ORDER_AMOUNT = MIN_QUOTE_AMOUNT;
@@ -308,17 +308,20 @@ async function handleMemberAnnouncement(env) {
 // ---- 費率設定 ----
 
 async function handlePublicRates(env) {
-  const rules = await getRateRules(env);
-  return json({ rules });
+  const groups = await getAllRateRules(env);
+  return json({ groups });
 }
 
-async function handleGetRates(env) {
-  const rules = await getRateRules(env);
-  return json({ rules, isDefault: JSON.stringify(rules) === JSON.stringify(DEFAULT_RATE_RULES) });
+async function handleGetRates(request, env) {
+  const url = new URL(request.url);
+  const group = RATE_GROUPS.includes(url.searchParams.get("group")) ? url.searchParams.get("group") : "tiktok";
+  const rules = await getRateRules(env, group);
+  return json({ rules, group, isDefault: JSON.stringify(rules) === JSON.stringify(DEFAULT_RATE_RULES) });
 }
 
 async function handleSaveRates(request, env) {
   const body = await request.json().catch(() => ({}));
+  const group = RATE_GROUPS.includes(body.group) ? body.group : "tiktok";
   const rules = body.rules;
   if (!Array.isArray(rules) || rules.length === 0) {
     return json({ error: "費率格式錯誤，需為陣列" }, 400);
@@ -329,8 +332,8 @@ async function handleSaveRates(request, env) {
     }
   }
   rules.sort((a, b) => b.min - a.min);
-  await saveRateRules(env, rules);
-  return json({ ok: true });
+  await saveRateRules(env, rules, group);
+  return json({ ok: true, group });
 }
 
 // ---- 優惠碼 ----
@@ -550,10 +553,10 @@ async function handleCreateOrder(request, env) {
     finalAmount = couponResult.finalAmount;
   }
 
-  // 預計獲得幣數：只有指定了儲值平台才試算（跟自助下單邏輯一致，各平台共用同一套費率）
+  // 預計獲得幣數：只有指定了儲值平台才試算（TikTok 用自己一組費率，快手/小紅書/陸抖 共用另一組）
   let coins = null;
   if (platform) {
-    const rateRules = await getRateRules(env);
+    const rateRules = await getRateRules(env, getRateGroupForPlatform(platform));
     const coinsResult = calcCoins(rateRules, amt);
     coins = coinsResult ? coinsResult.coins : null;
   }
@@ -1061,9 +1064,10 @@ async function handleMemberCreateOrder(session, request, env) {
     finalAmount = couponResult.finalAmount;
   }
 
-  // 預計獲得幣數：以優惠碼折抵前的金額（amt）+ 下單當下的費率試算，跟平台無關（各平台共用同一套費率）。
+  // 預計獲得幣數：以優惠碼折抵前的金額（amt）+ 下單當下的費率試算。
+  // TikTok 用自己的一組費率，快手/小紅書/陸抖 共用另一組。
   // 一律由伺服器端計算，不採信前端送來的數字，避免被竄改。
-  const rateRules = await getRateRules(env);
+  const rateRules = await getRateRules(env, getRateGroupForPlatform(platform));
   const coinsResult = calcCoins(rateRules, amt);
   const coins = coinsResult ? coinsResult.coins : null;
 
@@ -1279,7 +1283,7 @@ export async function onRequest(context) {
       if (path === "/api/admin/announcement" && method === "GET") return handleGetAnnouncement(env);
       if (path === "/api/admin/announcement" && method === "POST") return handleSaveAnnouncement(request, env);
 
-      if (path === "/api/admin/rates" && method === "GET") return handleGetRates(env);
+      if (path === "/api/admin/rates" && method === "GET") return handleGetRates(request, env);
       if (path === "/api/admin/rates" && method === "POST") return handleSaveRates(request, env);
 
       if (path === "/api/admin/coupons" && method === "GET") return handleListCoupons(env);
