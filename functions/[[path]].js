@@ -28,6 +28,7 @@ import {
   ensureMemberReferralCode,
   applyCouponToAmount,
   incrementCouponUsage,
+  parseTaipeiDatetimeLocalToUtc,
 } from "./_lib/helpers.js";
 
 // 付款連結建立後，最多可以被開啟／操作幾小時，超過就整條連結失效（跟訂單本身 3 小時付款時效是兩回事）。
@@ -334,7 +335,9 @@ function couponPublicView(c) {
   return {
     id: c.id,
     code: c.code,
+    discount_type: c.discount_type || "percent",
     discount_percent: c.discount_percent,
+    discount_amount: c.discount_amount,
     max_discount_amount: c.max_discount_amount,
     min_order_amount: c.min_order_amount,
     usage_limit: c.usage_limit,
@@ -356,12 +359,24 @@ async function handleCreateCoupon(request, env) {
   const code = (body.code || "").trim().toUpperCase();
   if (!code) return json({ error: "請輸入優惠碼" }, 400);
 
-  const discountPercent = parseFloat(body.discount_percent);
-  if (!discountPercent || discountPercent <= 0 || discountPercent > 100) {
-    return json({ error: "折扣百分比需介於 0~100 之間" }, 400);
+  const discountType = body.discount_type === "fixed" ? "fixed" : "percent";
+
+  let discountPercent = null;
+  let discountAmount = null;
+  if (discountType === "percent") {
+    discountPercent = parseFloat(body.discount_percent);
+    if (!discountPercent || discountPercent <= 0 || discountPercent > 100) {
+      return json({ error: "折扣百分比需介於 0~100 之間" }, 400);
+    }
+  } else {
+    discountAmount = parseFloat(body.discount_amount);
+    if (!discountAmount || discountAmount <= 0) {
+      return json({ error: "折抵金額需大於 0" }, 400);
+    }
   }
 
   const maxDiscountAmount =
+    discountType === "percent" &&
     body.max_discount_amount !== undefined && body.max_discount_amount !== null && String(body.max_discount_amount).trim() !== ""
       ? parseFloat(body.max_discount_amount)
       : null;
@@ -383,17 +398,17 @@ async function handleCreateCoupon(request, env) {
 
   let expiresAt = null;
   if (body.expires_at && String(body.expires_at).trim()) {
-    const d = new Date(body.expires_at);
-    if (isNaN(d.getTime())) return json({ error: "到期時間格式不正確" }, 400);
-    expiresAt = d.toISOString().replace("T", " ").slice(0, 19);
+    const parsed = parseTaipeiDatetimeLocalToUtc(body.expires_at);
+    if (parsed.error) return json({ error: "到期時間格式不正確" }, 400);
+    expiresAt = parsed.value;
   }
 
   try {
     const r = await env.DB.prepare(
-      `INSERT INTO coupons (code, discount_percent, max_discount_amount, min_order_amount, usage_limit, expires_at, note)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO coupons (code, discount_type, discount_percent, discount_amount, max_discount_amount, min_order_amount, usage_limit, expires_at, note)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-      .bind(code, discountPercent, maxDiscountAmount, minOrderAmount, usageLimit, expiresAt, body.note || null)
+      .bind(code, discountType, discountPercent, discountAmount, maxDiscountAmount, minOrderAmount, usageLimit, expiresAt, body.note || null)
       .run();
     return json({ ok: true, id: r.meta.last_row_id });
   } catch (err) {
@@ -416,10 +431,21 @@ async function handleUpdateCoupon(id, request, env) {
     fields.push("code=?");
     binds.push(code);
   }
+  if (body.discount_type !== undefined) {
+    const dt = body.discount_type === "fixed" ? "fixed" : "percent";
+    fields.push("discount_type=?");
+    binds.push(dt);
+  }
   if (body.discount_percent !== undefined) {
-    const v = parseFloat(body.discount_percent);
-    if (!v || v <= 0 || v > 100) return json({ error: "折扣百分比需介於 0~100 之間" }, 400);
+    const v = body.discount_percent === null || String(body.discount_percent).trim() === "" ? null : parseFloat(body.discount_percent);
+    if (v !== null && (isNaN(v) || v <= 0 || v > 100)) return json({ error: "折扣百分比需介於 0~100 之間" }, 400);
     fields.push("discount_percent=?");
+    binds.push(v);
+  }
+  if (body.discount_amount !== undefined) {
+    const v = body.discount_amount === null || String(body.discount_amount).trim() === "" ? null : parseFloat(body.discount_amount);
+    if (v !== null && (isNaN(v) || v <= 0)) return json({ error: "折抵金額需大於 0" }, 400);
+    fields.push("discount_amount=?");
     binds.push(v);
   }
   if (body.max_discount_amount !== undefined) {
@@ -443,9 +469,9 @@ async function handleUpdateCoupon(id, request, env) {
   if (body.expires_at !== undefined) {
     let expiresAt = null;
     if (body.expires_at && String(body.expires_at).trim()) {
-      const d = new Date(body.expires_at);
-      if (isNaN(d.getTime())) return json({ error: "到期時間格式不正確" }, 400);
-      expiresAt = d.toISOString().replace("T", " ").slice(0, 19);
+      const parsed = parseTaipeiDatetimeLocalToUtc(body.expires_at);
+      if (parsed.error) return json({ error: "到期時間格式不正確" }, 400);
+      expiresAt = parsed.value;
     }
     fields.push("expires_at=?");
     binds.push(expiresAt);

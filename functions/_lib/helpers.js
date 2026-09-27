@@ -106,6 +106,20 @@ export function addHours(date, hours) {
   return new Date(date.getTime() + hours * 3600 * 1000);
 }
 
+// 後台的 <input type="datetime-local"> 送出的字串（例如 "2026-10-01T00:00"）沒有時區資訊，
+// 店家肉眼輸入的其實是「台灣時間」。如果直接丟給 new Date() 解析，Cloudflare Workers
+// 執行環境會把它當成 UTC 時間處理，存進資料庫的時間就會整整差 8 小時。
+// 這裡明確補上 +08:00（台北時區）再轉換，並換算回 UTC 字串存進資料庫，
+// 這樣 toTaipeiTime() 顯示時再 +8 小時換算回去，才會顯示出店家原本輸入的時間。
+export function parseTaipeiDatetimeLocalToUtc(value) {
+  if (!value || !String(value).trim()) return { value: null };
+  const v = String(value).trim();
+  const withOffset = /[Zz]|[+-]\d{2}:\d{2}$/.test(v) ? v : v + "+08:00";
+  const d = new Date(withOffset);
+  if (isNaN(d.getTime())) return { error: true };
+  return { value: d.toISOString().replace("T", " ").slice(0, 19) };
+}
+
 export const PAYMENT_METHODS = new Set(["transfer", "store_barcode", "taiwan_pay"]);
 
 // 推薦碼字母表：去掉容易混淆的 0/O、1/I/L
@@ -177,8 +191,13 @@ export async function applyCouponToAmount(env, rawCode, amount) {
     return { ok: false, error: `訂單金額需滿 ${coupon.min_order_amount} 元才可使用此優惠碼` };
   }
 
-  let discount = Math.round((amount * coupon.discount_percent) / 100);
-  if (coupon.max_discount_amount != null) discount = Math.min(discount, Math.round(coupon.max_discount_amount));
+  let discount;
+  if (coupon.discount_type === "fixed") {
+    discount = Math.round(coupon.discount_amount || 0);
+  } else {
+    discount = Math.round((amount * (coupon.discount_percent || 0)) / 100);
+    if (coupon.max_discount_amount != null) discount = Math.min(discount, Math.round(coupon.max_discount_amount));
+  }
   discount = Math.max(0, Math.min(discount, amount));
 
   const finalAmount = amount - discount;

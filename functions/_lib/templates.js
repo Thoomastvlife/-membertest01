@@ -306,9 +306,15 @@ export function adminHtml() {
         <h2 id="cp_form_title">新增優惠碼</h2>
         <label>優惠碼 *</label>
         <input id="cp_code" placeholder="例如：WELCOME10" style="text-transform:uppercase;" />
+        <label>折扣類型 *</label>
+        <select id="cp_type" onchange="updateCouponTypeView()">
+          <option value="percent">百分比折扣（例如打 9 折）</option>
+          <option value="fixed">直接折抵固定金額（例如折 $50）</option>
+        </select>
         <div class="grid2">
-          <div><label>折扣百分比 (%) *</label><input id="cp_percent" type="number" min="1" max="100" step="1" placeholder="例如：10" /></div>
-          <div><label>最高優惠金額（選填，不限請留空）</label><input id="cp_max" type="number" min="0" step="1" placeholder="不限" /></div>
+          <div id="cp_percent_wrap"><label>折扣百分比 (%) *</label><input id="cp_percent" type="number" min="1" max="100" step="1" placeholder="例如：10" /></div>
+          <div id="cp_amount_wrap" class="hidden"><label>折抵金額 ($) *</label><input id="cp_amount" type="number" min="1" step="1" placeholder="例如：50" /></div>
+          <div id="cp_max_wrap"><label>最高優惠金額（選填，不限請留空）</label><input id="cp_max" type="number" min="0" step="1" placeholder="不限" /></div>
         </div>
         <div class="grid2">
           <div><label>最低使用金額（訂單金額需達到此金額才可使用，選填）</label><input id="cp_min" type="number" min="0" step="1" placeholder="0（不限）" /></div>
@@ -1215,16 +1221,20 @@ function renderCoupons(){
     else if (usedUp) statusBadge = '<span class="badge b-expired">已用完</span>';
     else statusBadge = '<span class="badge b-ready">啟用中</span>';
 
-    const limitInfo = [
-      c.max_discount_amount != null ? ('上限 $'+c.max_discount_amount) : '上限不限',
-      c.min_order_amount ? ('滿 $'+c.min_order_amount+' 可用') : '無門檻',
-    ].join('<br/>');
+    const isFixed = c.discount_type === 'fixed';
+    const discountLabel = isFixed ? ('折抵 $'+c.discount_amount) : (c.discount_percent+'%');
+    const limitInfo = isFixed
+      ? [c.min_order_amount ? ('滿 $'+c.min_order_amount+' 可用') : '無門檻']
+      : [
+          c.max_discount_amount != null ? ('上限 $'+c.max_discount_amount) : '上限不限',
+          c.min_order_amount ? ('滿 $'+c.min_order_amount+' 可用') : '無門檻',
+        ];
     const usageInfo = c.used_count + ' / ' + (c.usage_limit != null ? c.usage_limit : '不限');
 
     return \`<tr>
       <td data-label="代碼"><code>\${escapeHtml(c.code)}</code>\${c.note ? '<br/><span class="muted" style="color:var(--muted);font-size:12px;">'+escapeHtml(c.note)+'</span>' : ''}</td>
-      <td data-label="折扣">\${c.discount_percent}%</td>
-      <td data-label="上限/門檻">\${limitInfo}</td>
+      <td data-label="折扣">\${discountLabel}</td>
+      <td data-label="上限/門檻">\${limitInfo.join('<br/>')}</td>
       <td data-label="使用狀況">\${usageInfo}</td>
       <td data-label="到期時間">\${c.expires_at ? toTaipeiTime(c.expires_at) : '不過期'}</td>
       <td data-label="狀態">\${statusBadge}</td>
@@ -1236,6 +1246,13 @@ function renderCoupons(){
       </td>
     </tr>\`;
   }).join('') || '<tr><td colspan="7">尚無優惠碼</td></tr>';
+}
+
+function updateCouponTypeView(){
+  const isFixed = document.getElementById('cp_type').value === 'fixed';
+  document.getElementById('cp_percent_wrap').classList.toggle('hidden', isFixed);
+  document.getElementById('cp_amount_wrap').classList.toggle('hidden', !isFixed);
+  document.getElementById('cp_max_wrap').classList.toggle('hidden', isFixed);
 }
 
 function toDatetimeLocalValue(dateStr){
@@ -1251,12 +1268,15 @@ function editCoupon(id){
   if (!c) return;
   editingCouponId = id;
   document.getElementById('cp_code').value = c.code;
-  document.getElementById('cp_percent').value = c.discount_percent;
+  document.getElementById('cp_type').value = c.discount_type === 'fixed' ? 'fixed' : 'percent';
+  document.getElementById('cp_percent').value = c.discount_percent != null ? c.discount_percent : '';
+  document.getElementById('cp_amount').value = c.discount_amount != null ? c.discount_amount : '';
   document.getElementById('cp_max').value = c.max_discount_amount != null ? c.max_discount_amount : '';
   document.getElementById('cp_min').value = c.min_order_amount || '';
   document.getElementById('cp_limit').value = c.usage_limit != null ? c.usage_limit : '';
   document.getElementById('cp_expires').value = toDatetimeLocalValue(c.expires_at);
   document.getElementById('cp_note').value = c.note || '';
+  updateCouponTypeView();
   document.getElementById('cp_form_title').textContent = '編輯優惠碼：' + c.code;
   document.getElementById('cp_submit_btn').textContent = '儲存修改';
   document.getElementById('cp_cancel_btn').classList.remove('hidden');
@@ -1267,12 +1287,15 @@ function editCoupon(id){
 function cancelEditCoupon(){
   editingCouponId = null;
   document.getElementById('cp_code').value = '';
+  document.getElementById('cp_type').value = 'percent';
   document.getElementById('cp_percent').value = '';
+  document.getElementById('cp_amount').value = '';
   document.getElementById('cp_max').value = '';
   document.getElementById('cp_min').value = '';
   document.getElementById('cp_limit').value = '';
   document.getElementById('cp_expires').value = '';
   document.getElementById('cp_note').value = '';
+  updateCouponTypeView();
   document.getElementById('cp_form_title').textContent = '新增優惠碼';
   document.getElementById('cp_submit_btn').textContent = '新增';
   document.getElementById('cp_cancel_btn').classList.add('hidden');
@@ -1283,7 +1306,9 @@ async function submitCoupon(){
   const msg = document.getElementById('cp_msg');
   msg.textContent=''; msg.className='msg';
   const code = document.getElementById('cp_code').value.trim();
-  const discount_percent = parseFloat(document.getElementById('cp_percent').value);
+  const discount_type = document.getElementById('cp_type').value === 'fixed' ? 'fixed' : 'percent';
+  const percentVal = document.getElementById('cp_percent').value.trim();
+  const amountVal = document.getElementById('cp_amount').value.trim();
   const maxVal = document.getElementById('cp_max').value.trim();
   const minVal = document.getElementById('cp_min').value.trim();
   const limitVal = document.getElementById('cp_limit').value.trim();
@@ -1291,12 +1316,20 @@ async function submitCoupon(){
   const note = document.getElementById('cp_note').value.trim();
 
   if (!code){ msg.textContent='請輸入優惠碼'; msg.className='msg err'; return; }
-  if (!discount_percent || discount_percent<=0 || discount_percent>100){ msg.textContent='折扣百分比需介於 0~100'; msg.className='msg err'; return; }
+  if (discount_type === 'percent'){
+    const v = parseFloat(percentVal);
+    if (!v || v<=0 || v>100){ msg.textContent='折扣百分比需介於 0~100'; msg.className='msg err'; return; }
+  } else {
+    const v = parseFloat(amountVal);
+    if (!v || v<=0){ msg.textContent='折抵金額需大於 0'; msg.className='msg err'; return; }
+  }
 
   const body = {
     code,
-    discount_percent,
-    max_discount_amount: maxVal === '' ? null : parseFloat(maxVal),
+    discount_type,
+    discount_percent: discount_type === 'percent' ? parseFloat(percentVal) : null,
+    discount_amount: discount_type === 'fixed' ? parseFloat(amountVal) : null,
+    max_discount_amount: (discount_type === 'percent' && maxVal !== '') ? parseFloat(maxVal) : null,
     min_order_amount: minVal === '' ? 0 : parseFloat(minVal),
     usage_limit: limitVal === '' ? null : parseInt(limitVal, 10),
     expires_at: expiresVal || null,
@@ -1338,9 +1371,12 @@ async function broadcastCoupon(id){
   if (!c) return;
   if (!confirm('會把「系統公告」分頁換成這組優惠碼的宣傳文字（會先覆蓋掉目前公告內容），帶入後還要到該分頁按「儲存」才會真的發送給會員，是否繼續？')) return;
 
+  const isFixed = c.discount_type === 'fixed';
   const lines = [];
   lines.push('🎉 優惠碼上線：'+c.code);
-  lines.push('折扣：現折 '+c.discount_percent+'%'+(c.max_discount_amount != null ? '（最高折抵 $'+c.max_discount_amount+'）' : ''));
+  lines.push(isFixed
+    ? ('折扣：直接折抵 $'+c.discount_amount)
+    : ('折扣：現折 '+c.discount_percent+'%'+(c.max_discount_amount != null ? '（最高折抵 $'+c.max_discount_amount+'）' : '')));
   lines.push(c.min_order_amount ? ('訂單滿 $'+c.min_order_amount+' 元即可使用') : '無金額門檻，即可使用');
   if (c.usage_limit != null) lines.push('限量 '+c.usage_limit+' 次，用完為止，把握機會！');
   if (c.expires_at) lines.push('使用期限至：'+toTaipeiTime(c.expires_at));

@@ -58,8 +58,10 @@ CREATE TABLE IF NOT EXISTS orders (
 CREATE TABLE IF NOT EXISTS coupons (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   code TEXT UNIQUE NOT NULL,
-  discount_percent REAL NOT NULL,      -- 折扣百分比，例如 10 代表 9 折(折抵 10%)
-  max_discount_amount REAL,            -- 最高優惠金額（折抵金額不會超過此上限），NULL 表示不限
+  discount_type TEXT NOT NULL DEFAULT 'percent',  -- percent（百分比折扣） | fixed（直接折抵固定金額）
+  discount_percent REAL,               -- discount_type='percent' 時使用，例如 10 代表折抵 10%
+  discount_amount REAL,                -- discount_type='fixed' 時使用，直接折抵這個固定金額
+  max_discount_amount REAL,            -- 僅 percent 類型適用：折抵金額不會超過此上限，NULL 表示不限
   min_order_amount REAL NOT NULL DEFAULT 0,  -- 最低訂單金額門檻，訂單金額需達到此金額才可使用
   usage_limit INTEGER,                 -- 總使用次數上限，NULL 表示不限
   used_count INTEGER NOT NULL DEFAULT 0,     -- 已使用次數
