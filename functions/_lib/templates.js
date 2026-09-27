@@ -1911,7 +1911,7 @@ export function memberHtml() {
       <h2>自助下單</h2>
       <div class="msg" style="color:var(--muted);margin-top:0;">單筆訂購金額最低 200 元</div>
       <label>儲值平台</label>
-      <select id="new_platform">
+      <select id="new_platform" onchange="updatePasswordRequirement()">
         <option value="">請選擇儲值平台</option>
         <option value="tiktok">TikTok</option>
         <option value="kuaishou">快手</option>
@@ -1930,8 +1930,8 @@ export function memberHtml() {
       <div class="estimate-badge hidden" id="estimateBadge"></div>
       <label>帳號/ID</label>
       <input id="new_platform_account" placeholder="請輸入要儲值平台的帳號/ID" autocomplete="off" />
-      <label>密碼</label>
-      <input id="new_platform_password" type="password" placeholder="請輸入該帳號的密碼" autocomplete="new-password" />
+      <label id="new_platform_password_label">密碼</label>
+      <input id="new_platform_password" type="password" placeholder="請輸入該帳號的密碼" autocomplete="new-password" oninput="updatePasswordRequirement()" />
       <label>優惠碼（選填）</label>
       <div style="display:flex;gap:8px;">
         <input id="mo_coupon" placeholder="輸入優惠碼" style="text-transform:uppercase;" oninput="document.getElementById('mo_coupon_msg').textContent='';" />
@@ -2021,6 +2021,9 @@ async function loadRates() {
 function getRateGroupForPlatform(platform) {
   return platform === 'tiktok' ? 'tiktok' : 'other';
 }
+
+// 需要強制填寫密碼的平台：快手／小紅書／陸抖不強制要密碼，僅 TikTok 需要
+const PLATFORMS_REQUIRE_PASSWORD = new Set(['tiktok']);
 
 // 取得對應匯率
 function getRate(amount, platform) {
@@ -2161,6 +2164,7 @@ function selectQuote(amount, coins, platform) {
   });
   if (platform) {
     document.getElementById('new_platform').value = platform;
+    updatePasswordRequirement();
   }
   updateEstimateBadge();
   document.getElementById('new_amount').scrollIntoView({behavior:'smooth', block:'center'});
@@ -2356,6 +2360,16 @@ async function previewCoupon(prefix){
   }catch(e){ msg.textContent = e.message; msg.className='msg err'; }
 }
 
+// 依所選平台更新密碼欄位是否為必填（快手／小紅書／陸抖不強制要密碼）
+function updatePasswordRequirement(){
+  const platform = document.getElementById('new_platform').value;
+  const label = document.getElementById('new_platform_password_label');
+  const input = document.getElementById('new_platform_password');
+  const required = PLATFORMS_REQUIRE_PASSWORD.has(platform);
+  label.textContent = required ? '密碼' : '密碼（選填）';
+  input.placeholder = required ? '請輸入該帳號的密碼' : '此平台可不填密碼';
+}
+
 async function createOrder(){
   const btn = document.getElementById('newOrderBtn');
   const msg = document.getElementById('newOrderMsg');
@@ -2370,7 +2384,7 @@ async function createOrder(){
   if (Number(amount) < MIN_QUOTE_AMOUNT){ msg.textContent='訂單金額不可低於 '+MIN_QUOTE_AMOUNT+' 元'; msg.className='msg err'; return; }
   if (!platform){ msg.textContent='請選擇儲值平台'; msg.className='msg err'; return; }
   if (!platform_account){ msg.textContent='請輸入帳號/ID'; msg.className='msg err'; return; }
-  if (!platform_password){ msg.textContent='請輸入密碼'; msg.className='msg err'; return; }
+  if (!platform_password && PLATFORMS_REQUIRE_PASSWORD.has(platform)){ msg.textContent='請輸入密碼'; msg.className='msg err'; return; }
   btn.disabled = true;
   try{
     const res = await api('/api/member/orders', {method:'POST', body: JSON.stringify({amount, platform, platform_account, platform_password, coupon_code})});
@@ -2380,6 +2394,7 @@ async function createOrder(){
     document.getElementById('new_platform').value = '';
     document.getElementById('new_platform_account').value = '';
     document.getElementById('new_platform_password').value = '';
+    updatePasswordRequirement();
     document.getElementById('mo_coupon').value = '';
     document.getElementById('mo_coupon_msg').textContent = '';
     document.querySelectorAll('#amountChips .chip').forEach(c=>c.classList.remove('active'));

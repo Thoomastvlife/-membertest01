@@ -19,6 +19,7 @@ import {
   PAYMENT_METHODS,
   PLATFORMS,
   PLATFORM_LABEL,
+  PLATFORMS_REQUIRE_PASSWORD,
   PROOF_ELIGIBLE_METHODS,
   publicOrderView,
   expireIfNeeded,
@@ -1051,7 +1052,7 @@ async function handleMemberCreateOrder(session, request, env) {
   const platformAccount = typeof body.platform_account === "string" ? body.platform_account.trim() : "";
   const platformPassword = typeof body.platform_password === "string" ? body.platform_password : "";
   if (!platformAccount) return json({ error: "請輸入帳號/ID" }, 400);
-  if (!platformPassword) return json({ error: "請輸入密碼" }, 400);
+  if (!platformPassword && PLATFORMS_REQUIRE_PASSWORD.has(platform)) return json({ error: "請輸入密碼" }, 400);
 
   const member = await env.DB.prepare("SELECT * FROM members WHERE id=?").bind(session.memberId).first();
   if (!member) return json({ error: "會員不存在，請重新登入" }, 404);

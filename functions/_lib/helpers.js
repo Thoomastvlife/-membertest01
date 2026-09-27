@@ -125,6 +125,8 @@ export const PAYMENT_METHODS = new Set(["transfer", "store_barcode", "taiwan_pay
 // 儲值平台：訂單要儲值到哪個平台的帳號（純資訊記錄，不影響金流/付款方式）
 export const PLATFORMS = new Set(["tiktok", "kuaishou", "xiaohongshu", "douyin"]);
 export const PLATFORM_LABEL = { tiktok: "TikTok", kuaishou: "快手", xiaohongshu: "小紅書", douyin: "陸抖" };
+// 需要強制填寫密碼的平台：快手／小紅書／陸抖不強制要密碼，僅 TikTok 需要
+export const PLATFORMS_REQUIRE_PASSWORD = new Set(["tiktok"]);
 
 // 推薦碼字母表：去掉容易混淆的 0/O、1/I/L
 const REFERRAL_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
