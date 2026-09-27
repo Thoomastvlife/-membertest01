@@ -1,4 +1,4 @@
-import { adminHtml, payHtml, memberHtml } from "./_lib/templates.js";
+import { adminHtml, payHtml, memberHtml, memberRegisterHtml } from "./_lib/templates.js";
 import { getRateRules, saveRateRules, DEFAULT_RATE_RULES } from "./_lib/rates.js";
 import {
   jsonRes as json,
@@ -21,6 +21,8 @@ import {
   getSettingsObj,
   getOrCreateVapidKeys,
   notifyAdminsOfNewOrder,
+  generateReferralCode,
+  ensureMemberReferralCode,
 } from "./_lib/helpers.js";
 
 // 付款連結建立後，最多可以被開啟／操作幾小時，超過就整條連結失效（跟訂單本身 3 小時付款時效是兩回事）。
@@ -122,8 +124,15 @@ async function handleDeleteStaff(id, session, env) {
 
 async function handleListMembers(env) {
   const { results } = await env.DB.prepare(
-    "SELECT id, name, account, phone, note, created_at FROM members ORDER BY created_at DESC"
+    `SELECT m.id, m.name, m.account, m.phone, m.note, m.created_at, m.referral_code,
+            r.name as referred_by_name
+     FROM members m LEFT JOIN members r ON r.id = m.referred_by
+     ORDER BY m.created_at DESC`
   ).all();
+  // 相容舊資料：還沒有推薦碼的會員，第一次查看時懶惰補上
+  for (const m of results) {
+    if (!m.referral_code) m.referral_code = await ensureMemberReferralCode(env, m);
+  }
   return json(results);
 }
 
@@ -134,19 +143,30 @@ async function handleAddMember(request, env) {
   if (password && password.length < 6) return json({ error: "密碼至少需要 6 碼" }, 400);
 
   const passwordHash = password ? await hashPassword(password) : null;
-  try {
-    const r = await env.DB.prepare(
-      "INSERT INTO members (name, account, password_hash, phone, note) VALUES (?, ?, ?, ?, ?)"
-    )
-      .bind(name.trim(), account && account.trim() ? account.trim() : null, passwordHash, phone || null, note || null)
-      .run();
-    return json({ ok: true, id: r.meta.last_row_id });
-  } catch (err) {
-    if (String(err.message || "").includes("UNIQUE")) {
-      return json({ error: "此帳號已被使用，請換一個" }, 400);
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const referralCode = generateReferralCode();
+    try {
+      const r = await env.DB.prepare(
+        "INSERT INTO members (name, account, password_hash, phone, note, referral_code) VALUES (?, ?, ?, ?, ?, ?)"
+      )
+        .bind(
+          name.trim(),
+          account && account.trim() ? account.trim() : null,
+          passwordHash,
+          phone || null,
+          note || null,
+          referralCode
+        )
+        .run();
+      return json({ ok: true, id: r.meta.last_row_id, referral_code: referralCode });
+    } catch (err) {
+      const msg = String(err.message || "");
+      if (msg.includes("referral_code")) continue; // 推薦碼恰好撞號，重新產生再試
+      if (msg.includes("UNIQUE")) return json({ error: "此帳號已被使用，請換一個" }, 400);
+      throw err;
     }
-    throw err;
   }
+  return json({ error: "建立會員失敗，請再試一次" }, 500);
 }
 
 async function handleDeleteMember(id, env) {
@@ -633,9 +653,54 @@ async function handleMemberLogout() {
 }
 
 async function handleMemberMe(session, env) {
-  const member = await env.DB.prepare("SELECT id, name, account FROM members WHERE id=?").bind(session.memberId).first();
+  const member = await env.DB.prepare("SELECT id, name, account, referral_code FROM members WHERE id=?").bind(session.memberId).first();
   if (!member) return json({ error: "會員不存在，請重新登入" }, 404);
+  if (!member.referral_code) member.referral_code = await ensureMemberReferralCode(env, member);
   return json(member);
+}
+
+// 隱藏連結自行註冊：一定要填對某位會員的推薦碼才能建立帳號
+async function handleMemberRegister(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const { name, account, password, phone, referral_code } = body;
+  if (!name || !name.trim()) return json({ error: "請輸入姓名" }, 400);
+  if (!account || !account.trim()) return json({ error: "請輸入帳號" }, 400);
+  if (!password || password.length < 6) return json({ error: "密碼至少需要 6 碼" }, 400);
+  if (!referral_code || !referral_code.trim()) return json({ error: "請輸入推薦碼" }, 400);
+
+  const code = referral_code.trim().toUpperCase();
+  const referrer = await env.DB.prepare("SELECT id, name FROM members WHERE UPPER(referral_code)=?").bind(code).first();
+  if (!referrer) return json({ error: "推薦碼不正確，請確認後再試" }, 400);
+
+  const passwordHash = await hashPassword(password);
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const myCode = generateReferralCode();
+    try {
+      const r = await env.DB.prepare(
+        "INSERT INTO members (name, account, password_hash, phone, referral_code, referred_by) VALUES (?, ?, ?, ?, ?, ?)"
+      )
+        .bind(name.trim(), account.trim(), passwordHash, phone || null, myCode, referrer.id)
+        .run();
+
+      const ttlHours = parseInt(env.SESSION_TTL_HOURS || "12", 10);
+      const session = await signSession(
+        { memberId: r.meta.last_row_id, account: account.trim(), exp: Date.now() + ttlHours * 3600 * 1000 },
+        env.ADMIN_SESSION_SECRET
+      );
+      return json(
+        { ok: true, referred_by: referrer.name },
+        200,
+        { "Set-Cookie": setCookieHeader("member_session", session, ttlHours * 3600) }
+      );
+    } catch (err) {
+      const msg = String(err.message || "");
+      if (msg.includes("members.account")) return json({ error: "此帳號已被使用，請換一個" }, 400);
+      if (msg.includes("referral_code")) continue; // 推薦碼恰好撞號，重新產生再試
+      if (msg.includes("UNIQUE")) return json({ error: "此帳號已被使用，請換一個" }, 400);
+      throw err;
+    }
+  }
+  return json({ error: "註冊失敗，請再試一次" }, 500);
 }
 
 async function handleMemberOrders(session, request, env) {
@@ -776,6 +841,7 @@ export async function onRequest(context) {
     if (path === "/admin" || path === "/admin/") return html(adminHtml());
     if (path.startsWith("/pay/")) return html(payHtml());
     if (path === "/member" || path === "/member/") return html(memberHtml());
+    if (path === "/member/register" || path === "/member/register/") return html(memberRegisterHtml());
     if (path === "/") return Response.redirect(url.origin + "/member", 302);
 
     // ---- Public API ----
@@ -787,6 +853,7 @@ export async function onRequest(context) {
     if (path === "/api/rates" && method === "GET") return handlePublicRates(env);
 
     if (path === "/api/member/login" && method === "POST") return handleMemberLogin(request, env);
+    if (path === "/api/member/register" && method === "POST") return handleMemberRegister(request, env);
     if (path === "/api/member/logout" && method === "POST") return handleMemberLogout();
 
     const orderTokenMatch = path.match(/^\/api\/order\/([a-f0-9]+)$/);

@@ -189,7 +189,7 @@ export function adminHtml() {
       <div class="card">
         <h2>會員列表</h2>
         <table id="mem_table">
-          <thead><tr><th>ID</th><th>姓名</th><th>帳號</th><th>電話</th><th>備註</th><th>操作</th></tr></thead>
+          <thead><tr><th>ID</th><th>姓名</th><th>帳號</th><th>電話</th><th>備註</th><th>推薦碼</th><th>推薦人</th><th>操作</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -727,13 +727,25 @@ async function loadMembers(){
   const tbody = document.querySelector('#mem_table tbody');
   tbody.innerHTML = list.map(m=>\`<tr>
     <td data-label="ID">\${m.id}</td><td data-label="姓名">\${m.name}</td><td data-label="帳號">\${m.account||''}</td><td data-label="電話">\${m.phone||''}</td><td data-label="備註">\${m.note||''}</td>
+    <td data-label="推薦碼"><code>\${m.referral_code||''}</code> <button class="btn secondary small" onclick="copyReferralLink('\${m.referral_code}')">複製邀請連結</button></td>
+    <td data-label="推薦人">\${m.referred_by_name||'-'}</td>
     <td data-label="操作">
       <button class="btn secondary small" onclick="editMember(\${m.id})">編輯</button>
       <button class="btn secondary small" onclick="resetPassword(\${m.id})">設定密碼</button>
       <button class="btn danger small" onclick="deleteMember(\${m.id})">刪除</button>
     </td>
-  </tr>\`).join('') || '<tr><td colspan="6">尚無會員</td></tr>';
+  </tr>\`).join('') || '<tr><td colspan="8">尚無會員</td></tr>';
   loadMembersIntoSelect();
+}
+
+function copyReferralLink(code){
+  if (!code) { alert('此會員尚無推薦碼'); return; }
+  const link = location.origin + '/member/register?code=' + encodeURIComponent(code);
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(link).then(()=>alert('邀請連結已複製：\\n'+link)).catch(()=>prompt('複製失敗，請手動複製：', link));
+  } else {
+    prompt('請手動複製邀請連結：', link);
+  }
 }
 
 async function resetPassword(id){
@@ -1262,6 +1274,10 @@ export function memberHtml() {
 
   .total-row td{font-weight:700;background:#f8f9fb;}
 
+  .ref-code-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+  .ref-code-row code{font-family:var(--mono);font-size:17px;font-weight:600;letter-spacing:.08em;background:var(--accent-soft);color:var(--accent-ink);padding:8px 14px;border-radius:8px;border:1px solid var(--accent);}
+  .ref-code-row .btn{margin-top:0;}
+
   /* === 查價專區 === */
   .quote-toggle{display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none;}
   .quote-toggle h2{margin:0;padding-top:0;}
@@ -1324,6 +1340,16 @@ export function memberHtml() {
       <button class="btn secondary" onclick="doLogout()">登出</button></div>
   </header>
   <main>
+
+    <!-- === 我的推薦碼 === -->
+    <div class="card">
+      <h2>我的推薦碼</h2>
+      <div class="ref-code-row">
+        <code id="myReferralCode">------</code>
+        <button class="btn secondary" onclick="copyMyReferralLink()">複製邀請連結</button>
+      </div>
+      <div class="msg" style="color:var(--muted);margin-top:8px;">分享此連結給朋友，讓他們自行註冊成為會員</div>
+    </div>
 
     <!-- === 查價專區（可收合） === -->
     <div class="card">
@@ -1586,12 +1612,24 @@ async function checkSession(){
   try{
     const me = await api('/api/member/me');
     document.getElementById('whoami').textContent = me.name + '（' + me.account + '）';
+    document.getElementById('myReferralCode').textContent = me.referral_code || '------';
     document.getElementById('loginView').classList.add('hidden');
     document.getElementById('appView').classList.remove('hidden');
     await loadRates();
     loadOrders();
     startOrdersPolling();
   }catch(e){ /* 尚未登入，維持登入畫面 */ }
+}
+
+function copyMyReferralLink(){
+  const code = document.getElementById('myReferralCode').textContent.trim();
+  if (!code || code === '------') { alert('推薦碼載入中，請稍後再試'); return; }
+  const link = location.origin + '/member/register?code=' + encodeURIComponent(code);
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(link).then(()=>alert('邀請連結已複製：\n'+link)).catch(()=>prompt('複製失敗，請手動複製：', link));
+  } else {
+    prompt('請手動複製邀請連結：', link);
+  }
 }
 
 async function doLogin(){
@@ -1677,6 +1715,103 @@ async function loadOrders(){
 loadRates().then(() => {
   checkSession();
 });
+</script>
+</body>
+</html>`;
+}
+
+// 隱藏的自助註冊頁：不會出現在任何選單或導覽列，只能透過會員分享的推薦連結（帶 ?code=）進入。
+// 一定要填對某位既有會員的推薦碼才能建立帳號。
+export function memberRegisterHtml() {
+  return `<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<title>會員註冊</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#EEF0F6; --card:#fff; --line:#E2E4ED;
+    --ink:#181B2E; --muted:#767B8C;
+    --accent:#B8842E; --accent-ink:#54390F; --accent-soft:#F6ECD8;
+    --danger:#B8433A; --ok:#1E7A56;
+    --display:'Space Grotesk',-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif;background:var(--bg);color:var(--ink);}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px;position:relative;box-shadow:0 1px 2px rgba(24,27,46,.04);max-width:380px;margin:10vh auto 0;}
+  .card::before{content:"";position:absolute;left:22px;top:0;width:28px;height:3px;background:var(--accent);}
+  .mark{font-family:var(--display);font-weight:700;font-size:15px;color:var(--accent-ink);background:var(--accent-soft);display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:9px;margin-bottom:14px;}
+  h2{margin:0 0 18px;font-family:var(--display);font-size:16px;font-weight:600;}
+  label{display:block;font-size:12.5px;color:var(--muted);margin:14px 0 5px;}
+  input{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:8px;font-size:14.5px;background:#FBFBFD;color:var(--ink);}
+  input:focus{outline:none;border-color:var(--accent);background:#fff;}
+  button.btn{font-family:var(--display);width:100%;background:var(--ink);color:#fff;border:none;padding:11px 20px;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600;margin-top:18px;}
+  button.btn:hover{background:#2A2E48;}
+  button.btn:disabled{opacity:.5;cursor:default;}
+  .msg{font-size:13px;margin-top:10px;}
+  .msg.err{color:var(--danger);} .msg.ok{color:var(--ok);}
+  .foot{margin-top:16px;text-align:center;font-size:12.5px;color:var(--muted);}
+  .foot a{color:var(--accent-ink);}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="mark">會</div>
+  <h2>會員自助註冊</h2>
+  <label>推薦碼</label>
+  <input id="reg_code" placeholder="請輸入邀請你的會員推薦碼" style="text-transform:uppercase;" />
+  <label>姓名</label>
+  <input id="reg_name" />
+  <label>帳號</label>
+  <input id="reg_account" autocomplete="username" />
+  <label>密碼（至少 6 碼）</label>
+  <input id="reg_password" type="password" autocomplete="new-password" />
+  <label>手機（選填）</label>
+  <input id="reg_phone" />
+  <button class="btn" id="reg_btn" onclick="doRegister()">建立帳號</button>
+  <div id="reg_msg" class="msg"></div>
+  <div class="foot">已經有帳號了？<a href="/member">前往登入</a></div>
+</div>
+<script>
+  const params = new URLSearchParams(location.search);
+  const prefillCode = params.get('code');
+  if (prefillCode) document.getElementById('reg_code').value = prefillCode.toUpperCase();
+
+  async function doRegister(){
+    const btn = document.getElementById('reg_btn');
+    const msg = document.getElementById('reg_msg');
+    msg.textContent=''; msg.className='msg';
+    const payload = {
+      referral_code: document.getElementById('reg_code').value.trim(),
+      name: document.getElementById('reg_name').value.trim(),
+      account: document.getElementById('reg_account').value.trim(),
+      password: document.getElementById('reg_password').value,
+      phone: document.getElementById('reg_phone').value.trim(),
+    };
+    if (!payload.referral_code || !payload.name || !payload.account || !payload.password){
+      msg.textContent = '請完整填寫必填欄位'; msg.className = 'msg err'; return;
+    }
+    btn.disabled = true;
+    try{
+      const res = await fetch('/api/member/register', {
+        method:'POST', credentials:'include', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json().catch(()=>({}));
+      if (!res.ok) throw new Error(data.error || '註冊失敗');
+      msg.textContent = '註冊成功！正在為您登入...'; msg.className = 'msg ok';
+      setTimeout(()=>{ location.href = '/member'; }, 600);
+    }catch(e){
+      msg.textContent = e.message; msg.className = 'msg err';
+    }finally{
+      btn.disabled = false;
+    }
+  }
 </script>
 </body>
 </html>`;

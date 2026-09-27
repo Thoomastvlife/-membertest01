@@ -18,7 +18,10 @@ CREATE TABLE IF NOT EXISTS members (
   password_hash TEXT,           -- 會員密碼（加鹽雜湊儲存，選填）
   phone TEXT,
   note TEXT,
-  created_at TEXT DEFAULT (datetime('now'))
+  referral_code TEXT UNIQUE,    -- 專屬推薦碼，供他人透過隱藏註冊連結自行加入時填寫
+  referred_by INTEGER,          -- 透過哪位會員的推薦碼註冊（自行註冊才會有值）
+  created_at TEXT DEFAULT (datetime('now')),
+  FOREIGN KEY (referred_by) REFERENCES members(id)
 );
 
 CREATE TABLE IF NOT EXISTS orders (

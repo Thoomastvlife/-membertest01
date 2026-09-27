@@ -108,6 +108,31 @@ export function addHours(date, hours) {
 
 export const PAYMENT_METHODS = new Set(["transfer", "store_barcode", "taiwan_pay"]);
 
+// 推薦碼字母表：去掉容易混淆的 0/O、1/I/L
+const REFERRAL_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+
+export function generateReferralCode(len = 6) {
+  const bytes = new Uint8Array(len);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => REFERRAL_ALPHABET[b % REFERRAL_ALPHABET.length]).join("");
+}
+
+// 確保某位會員一定有推薦碼；若還沒有就產生一個並存回資料庫（相容舊資料的懶惰補值）
+export async function ensureMemberReferralCode(env, member) {
+  if (member.referral_code) return member.referral_code;
+  for (let i = 0; i < 8; i++) {
+    const code = generateReferralCode();
+    try {
+      await env.DB.prepare("UPDATE members SET referral_code=? WHERE id=?").bind(code, member.id).run();
+      return code;
+    } catch (err) {
+      if (!String(err.message || "").includes("UNIQUE")) throw err;
+      // 推薦碼恰好撞到別人，重新產生一個再試一次
+    }
+  }
+  throw new Error("無法產生推薦碼，請稍後再試");
+}
+
 export function publicOrderView(o) {
   return {
     amount: o.amount,
