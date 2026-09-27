@@ -1626,7 +1626,7 @@ function copyMyReferralLink(){
   if (!code || code === '------') { alert('推薦碼載入中，請稍後再試'); return; }
   const link = location.origin + '/member/register?code=' + encodeURIComponent(code);
   if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(link).then(()=>alert('邀請連結已複製：\n'+link)).catch(()=>prompt('複製失敗，請手動複製：', link));
+    navigator.clipboard.writeText(link).then(()=>alert('邀請連結已複製：\\n'+link)).catch(()=>prompt('複製失敗，請手動複製：', link));
   } else {
     prompt('請手動複製邀請連結：', link);
   }
