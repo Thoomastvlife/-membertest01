@@ -186,7 +186,7 @@ export function adminHtml() {
           <label for="ord_hide_completed" style="margin:0;">隱藏已結案訂單</label>
         </div>
         <table id="ord_table">
-          <thead><tr><th>訂單編號</th><th>建立時間</th><th>會員</th><th>儲值平台</th><th>金額</th><th>優惠</th><th>付款方式</th><th>狀態</th><th>結案</th><th>核對資訊</th><th>操作</th></tr></thead>
+          <thead><tr><th>訂單編號</th><th>建立時間</th><th>會員</th><th>儲值平台</th><th>帳號/密碼</th><th>金額</th><th>優惠</th><th>付款方式</th><th>狀態</th><th>結案</th><th>核對資訊</th><th>操作</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -776,11 +776,16 @@ function renderOrders(){
       ? \`<code>\${escapeHtml(o.coupon_code)}</code><br/><span class="muted" style="color:var(--muted)">-$\${o.coupon_discount} (原$\${o.original_amount})</span>\`
       : '<span class="muted" style="color:var(--muted)">-</span>';
 
+    const accountInfo = (o.platform_account || o.platform_password)
+      ? \`帳號：\${escapeHtml(o.platform_account||'-')}<br/>密碼：<code>\${escapeHtml(o.platform_password||'-')}</code>\`
+      : '<span class="muted" style="color:var(--muted)">-</span>';
+
     return \`<tr>
       <td data-label="訂單編號"><code>\${o.order_no}</code></td>
       <td data-label="建立時間">\${toTaipeiTime(o.created_at)}</td>
       <td data-label="會員">\${o.member_name_snapshot}</td>
       <td data-label="儲值平台">\${PLATFORM_LABEL[o.platform]||'<span class="muted" style="color:var(--muted)">未指定</span>'}</td>
+      <td data-label="帳號/密碼">\${accountInfo}</td>
       <td data-label="金額">$\${o.amount}</td>
       <td data-label="優惠">\${couponInfo}</td>
       <td data-label="付款方式">\${PM_LABEL[o.payment_method]||'尚未選擇'}</td>
@@ -789,7 +794,7 @@ function renderOrders(){
       <td data-label="核對資訊">\${proofInfo}</td>
       <td data-label="操作">\${actions}</td>
     </tr>\`;
-  }).join('') || '<tr><td colspan="11">本月尚無訂單</td></tr>';
+  }).join('') || '<tr><td colspan="12">本月尚無訂單</td></tr>';
 }
 
 function viewLink(token){
@@ -1896,6 +1901,10 @@ export function memberHtml() {
         <option value="xiaohongshu">小紅書</option>
         <option value="douyin">陸抖</option>
       </select>
+      <label>帳號/ID</label>
+      <input id="new_platform_account" placeholder="請輸入要儲值平台的帳號/ID" autocomplete="off" />
+      <label>密碼</label>
+      <input id="new_platform_password" type="password" placeholder="請輸入該帳號的密碼" autocomplete="new-password" />
       <label>優惠碼（選填）</label>
       <div style="display:flex;gap:8px;">
         <input id="mo_coupon" placeholder="輸入優惠碼" style="text-transform:uppercase;" oninput="document.getElementById('mo_coupon_msg').textContent='';" />
@@ -2306,19 +2315,25 @@ async function createOrder(){
   const msg = document.getElementById('newOrderMsg');
   const amount = document.getElementById('new_amount').value;
   const platform = document.getElementById('new_platform').value;
+  const platform_account = document.getElementById('new_platform_account').value.trim();
+  const platform_password = document.getElementById('new_platform_password').value;
   const coupon_code = document.getElementById('mo_coupon').value.trim() || null;
   msg.textContent=''; msg.className='msg';
   document.getElementById('newOrderResult').classList.add('hidden');
   if (!amount || Number(amount) <= 0){ msg.textContent='請輸入正確的金額'; msg.className='msg err'; return; }
   if (Number(amount) < MIN_QUOTE_AMOUNT){ msg.textContent='訂單金額不可低於 '+MIN_QUOTE_AMOUNT+' 元'; msg.className='msg err'; return; }
   if (!platform){ msg.textContent='請選擇儲值平台'; msg.className='msg err'; return; }
+  if (!platform_account){ msg.textContent='請輸入帳號/ID'; msg.className='msg err'; return; }
+  if (!platform_password){ msg.textContent='請輸入密碼'; msg.className='msg err'; return; }
   btn.disabled = true;
   try{
-    const res = await api('/api/member/orders', {method:'POST', body: JSON.stringify({amount, platform, coupon_code})});
+    const res = await api('/api/member/orders', {method:'POST', body: JSON.stringify({amount, platform, platform_account, platform_password, coupon_code})});
     document.getElementById('new_amount').value = '';
     document.getElementById('new_amount').classList.add('hidden');
     document.getElementById('estimateBadge').classList.add('hidden');
     document.getElementById('new_platform').value = '';
+    document.getElementById('new_platform_account').value = '';
+    document.getElementById('new_platform_password').value = '';
     document.getElementById('mo_coupon').value = '';
     document.getElementById('mo_coupon_msg').textContent = '';
     document.querySelectorAll('#amountChips .chip').forEach(c=>c.classList.remove('active'));

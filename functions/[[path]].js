@@ -795,12 +795,14 @@ async function handleExport(request, env) {
     cancelled: "已取消",
   };
 
-  const header = ["訂單編號", "建立時間", "會員/客人", "儲值平台", "原始金額", "優惠碼", "折抵金額", "實付金額", "付款方式", "狀態", "訂單完成(結案)", "付款證明末幾碼", "付款方式選擇時間", "完成付款時間", "到期時間"];
+  const header = ["訂單編號", "建立時間", "會員/客人", "儲值平台", "儲值帳號", "儲值密碼", "原始金額", "優惠碼", "折抵金額", "實付金額", "付款方式", "狀態", "訂單完成(結案)", "付款證明末幾碼", "付款方式選擇時間", "完成付款時間", "到期時間"];
   const rows = results.map((o) => [
     formatOrderNo(o.id),
     toTaipeiTime(o.created_at),
     o.member_name_snapshot,
     PLATFORM_LABEL[o.platform] || "未指定",
+    o.platform_account || "",
+    o.platform_password || "",
     o.original_amount != null ? o.original_amount : "",
     o.coupon_code || "",
     o.coupon_discount != null ? o.coupon_discount : "",
@@ -1033,6 +1035,10 @@ async function handleMemberCreateOrder(session, request, env) {
   if (amt < MIN_ORDER_AMOUNT) return json({ error: `訂單金額不可低於 ${MIN_ORDER_AMOUNT} 元` }, 400);
   const platform = body.platform;
   if (!platform || !PLATFORMS.has(platform)) return json({ error: "請選擇要儲值的平台" }, 400);
+  const platformAccount = typeof body.platform_account === "string" ? body.platform_account.trim() : "";
+  const platformPassword = typeof body.platform_password === "string" ? body.platform_password : "";
+  if (!platformAccount) return json({ error: "請輸入帳號/ID" }, 400);
+  if (!platformPassword) return json({ error: "請輸入密碼" }, 400);
 
   const member = await env.DB.prepare("SELECT * FROM members WHERE id=?").bind(session.memberId).first();
   if (!member) return json({ error: "會員不存在，請重新登入" }, 404);
@@ -1051,8 +1057,8 @@ async function handleMemberCreateOrder(session, request, env) {
 
   const inserted = await env.DB.prepare(
     `INSERT INTO orders (token, amount, member_id, member_name_snapshot, status, expires_at,
-      original_amount, coupon_code, coupon_discount, platform)
-     VALUES (?, ?, ?, ?, 'pending_method', ?, ?, ?, ?, ?)`
+      original_amount, coupon_code, coupon_discount, platform, platform_account, platform_password)
+     VALUES (?, ?, ?, ?, 'pending_method', ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       token,
@@ -1063,7 +1069,9 @@ async function handleMemberCreateOrder(session, request, env) {
       couponResult ? amt : null,
       couponResult ? couponResult.coupon.code : null,
       couponResult ? couponResult.discount : null,
-      platform
+      platform,
+      platformAccount,
+      platformPassword
     )
     .run();
 
