@@ -1843,6 +1843,23 @@ export function memberHtml() {
   .announce-text{color:var(--ink);font-size:14.5px;line-height:1.8;white-space:pre-wrap;text-align:left;margin:0 0 18px;}
   .announce-actions{display:flex;gap:10px;}
   .announce-actions .btn{flex:1;margin-top:0;}
+
+  /* === 手機版：訂單表格改為卡片式 === */
+  @media (max-width:600px){
+    main{padding:14px 10px 50px;}
+    .card{padding:16px 14px;}
+    .card::before{left:14px;}
+    input,select{font-size:16px;}
+    #ord_table{margin-top:14px;}
+    #ord_table thead{display:none;}
+    #ord_table, #ord_table tbody, #ord_table tr, #ord_table td{display:block;width:100%;}
+    #ord_table tr{border:1px solid var(--line);border-radius:10px;padding:6px 12px;margin-bottom:12px;background:#fff;}
+    #ord_table td{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px 12px;text-align:right;padding:8px 0;border-bottom:1px dashed var(--line);word-break:break-word;}
+    #ord_table td:last-child{border-bottom:none;}
+    #ord_table td::before{content:attr(data-label);flex:0 0 auto;font-size:12px;font-weight:600;color:var(--muted);text-align:left;}
+    #ord_table td[colspan]{display:block;text-align:center;color:var(--muted);}
+    #ord_table td[colspan]::before{content:none;}
+  }
 </style>
 </head>
 <body>
@@ -2443,15 +2460,15 @@ async function loadOrders(){
       ? \`<code>\${o.coupon_code}</code><br/><span class="msg" style="margin:0;color:var(--muted);">-$\${o.coupon_discount}</span>\`
       : '-';
     return \`<tr>
-      <td><code>\${o.order_no}</code></td>
-      <td>\${toTaipeiTime(o.created_at)}</td>
-      <td>\${PLATFORM_LABEL[o.platform]||'-'}</td>
-      <td>$\${o.amount}</td>
-      <td>\${o.coins != null ? ('🪙 '+Number(o.coins).toLocaleString()) : '-'}</td>
-      <td>\${couponInfo}</td>
-      <td>\${PM_LABEL[o.payment_method]||'尚未選擇'}</td>
-      <td><span class="badge \${st[1]}">\${st[0]}</span>\${completedTag}</td>
-      <td>\${action}</td>
+      <td data-label="訂單編號"><code>\${o.order_no}</code></td>
+      <td data-label="建立時間">\${toTaipeiTime(o.created_at)}</td>
+      <td data-label="儲值平台">\${PLATFORM_LABEL[o.platform]||'-'}</td>
+      <td data-label="金額">$\${o.amount}</td>
+      <td data-label="預計幣數">\${o.coins != null ? ('🪙 '+Number(o.coins).toLocaleString()) : '-'}</td>
+      <td data-label="優惠">\${couponInfo}</td>
+      <td data-label="付款方式">\${PM_LABEL[o.payment_method]||'尚未選擇'}</td>
+      <td data-label="狀態"><span class="badge \${st[1]}">\${st[0]}</span>\${completedTag}</td>
+      <td data-label="操作">\${action}</td>
     </tr>\`;
   }).join('') || '<tr><td colspan="9">尚無訂單記錄</td></tr>';
 }
