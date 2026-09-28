@@ -237,3 +237,8 @@ member-checkout-pages/
 - **後台彈性**：後台「會員」頁新增／編輯會員時，**電話與電子信箱都可以不填**（有填信箱才會檢查格式）；會員列表新增「電子信箱」欄，後台選會員的搜尋框也能用信箱搜尋。
 - 既有會員的信箱是空白（NULL），不受影響；後台隨時可以補填。
 - **升級既有資料庫**請執行一次：`wrangler d1 execute checkout_db --file=./migrate_v12.sql`。全新安裝用最新 `schema.sql` 即可，不需要跑。
+
+### 自助註冊只接受常見信箱
+- `/member/register` 只接受常見大眾信箱：gmail.com、googlemail.com、outlook.com、hotmail.com、live.com、msn.com、yahoo.com、yahoo.com.tw、icloud.com、me.com、proton.me、protonmail.com（不分大小寫，儲存時統一轉小寫）。其他網域（含打錯的 `gmial.com`）會被擋下並提示。
+- 前端與後端共用同一份清單，要增減網域只需修改 `functions/_lib/helpers.js` 裡的 `ALLOWED_EMAIL_DOMAINS`。
+- 後台手動新增／編輯會員**不受網域限制**（維持彈性，只檢查信箱格式）。不需要資料庫升級。

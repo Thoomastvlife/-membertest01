@@ -1,3 +1,5 @@
+import { ALLOWED_EMAIL_DOMAINS } from "./helpers.js";
+
 export function adminHtml() {
   return `<!DOCTYPE html>
 <html lang="zh-Hant">
@@ -2629,6 +2631,7 @@ export function memberRegisterHtml() {
   <input id="reg_phone" type="tel" inputmode="numeric" maxlength="16" autocomplete="tel" placeholder="例如：0912345678" />
   <label>電子信箱（必填）</label>
   <input id="reg_email" type="email" autocomplete="email" placeholder="例如：name@example.com" />
+  <div style="font-size:12px;color:#888;margin-top:4px;">僅接受常見信箱：Gmail、Outlook、Hotmail、Yahoo、iCloud 等</div>
   <button class="btn" id="reg_btn" onclick="doRegister()">建立帳號</button>
   <div id="reg_msg" class="msg"></div>
   <div class="foot">已經有帳號了？<a href="/member">前往登入</a></div>
@@ -2659,6 +2662,10 @@ export function memberRegisterHtml() {
     }
     if (!/^[^ @]+@[^ @]+[.][^ @]+$/.test(payload.email)){
       msg.textContent = '請輸入正確的電子信箱格式'; msg.className = 'msg err'; return;
+    }
+    const allowedDomains = ${JSON.stringify(ALLOWED_EMAIL_DOMAINS)};
+    if (!allowedDomains.includes(payload.email.toLowerCase().split('@').pop())){
+      msg.textContent = '目前僅接受常見信箱（Gmail、Outlook、Hotmail、Yahoo、iCloud 等）'; msg.className = 'msg err'; return;
     }
     btn.disabled = true;
     try{

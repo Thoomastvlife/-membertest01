@@ -434,3 +434,28 @@ export async function notifyAdminsOfNewOrder(env, order) {
     // 推播整體出錯也不應該影響下單本身
   }
 }
+
+// ========================================================================
+// 會員自助註冊只接受常見的大眾信箱（後台手動建立會員不受此限制）。
+// 要增減網域直接改這個清單即可（前端註冊頁與後端驗證都會自動套用）。
+// ========================================================================
+export const ALLOWED_EMAIL_DOMAINS = [
+  "gmail.com",
+  "googlemail.com",
+  "outlook.com",
+  "hotmail.com",
+  "live.com",
+  "msn.com",
+  "yahoo.com",
+  "yahoo.com.tw",
+  "icloud.com",
+  "me.com",
+  "proton.me",
+  "protonmail.com",
+];
+
+export function isAllowedEmailDomain(email) {
+  const at = String(email || "").trim().toLowerCase().lastIndexOf("@");
+  if (at < 0) return false;
+  return ALLOWED_EMAIL_DOMAINS.includes(String(email).trim().toLowerCase().slice(at + 1));
+}

@@ -34,6 +34,7 @@ import {
   parseTaipeiDatetimeLocalToUtc,
   formatOrderNo,
   parseOrderNo,
+  isAllowedEmailDomain,
 } from "./_lib/helpers.js";
 
 // 付款連結建立後，最多可以被開啟／操作幾小時，超過就整條連結失效（跟訂單本身 3 小時付款時效是兩回事）。
@@ -1012,9 +1013,12 @@ async function handleMemberRegister(request, env) {
   if (!/^09[0-9]{8}$/.test(phoneClean)) return json({ error: "請輸入正確的台灣手機號碼（09 開頭共 10 碼）" }, 400);
 
   // 自助註冊：電子信箱必填
-  const emailClean = String(email || "").trim();
+  const emailClean = String(email || "").trim().toLowerCase();
   if (!emailClean) return json({ error: "請輸入電子信箱" }, 400);
   if (!EMAIL_RE.test(emailClean)) return json({ error: "請輸入正確的電子信箱格式" }, 400);
+  if (!isAllowedEmailDomain(emailClean)) {
+    return json({ error: "目前僅接受常見信箱（Gmail、Outlook、Hotmail、Yahoo、iCloud 等），請改用這類信箱註冊" }, 400);
+  }
 
   const code = referral_code.trim().toUpperCase();
   const referrer = await env.DB.prepare("SELECT id, name FROM members WHERE UPPER(referral_code)=?").bind(code).first();
