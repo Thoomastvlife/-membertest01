@@ -2616,8 +2616,8 @@ export function memberRegisterHtml() {
   <input id="reg_account" autocomplete="username" />
   <label>密碼（至少 6 碼）</label>
   <input id="reg_password" type="password" autocomplete="new-password" />
-  <label>手機（選填）</label>
-  <input id="reg_phone" />
+  <label>手機（必填，台灣手機 09 開頭）</label>
+  <input id="reg_phone" type="tel" inputmode="numeric" maxlength="16" autocomplete="tel" placeholder="例如：0912345678" />
   <button class="btn" id="reg_btn" onclick="doRegister()">建立帳號</button>
   <div id="reg_msg" class="msg"></div>
   <div class="foot">已經有帳號了？<a href="/member">前往登入</a></div>
@@ -2638,8 +2638,12 @@ export function memberRegisterHtml() {
       password: document.getElementById('reg_password').value,
       phone: document.getElementById('reg_phone').value.trim(),
     };
-    if (!payload.referral_code || !payload.name || !payload.account || !payload.password){
-      msg.textContent = '請完整填寫必填欄位'; msg.className = 'msg err'; return;
+    if (!payload.referral_code || !payload.name || !payload.account || !payload.password || !payload.phone){
+      msg.textContent = '請完整填寫必填欄位（含手機）'; msg.className = 'msg err'; return;
+    }
+    payload.phone = payload.phone.replace(/[ -]/g, '').replace(/^(886|[+]886)/, '0');
+    if (!/^09[0-9]{8}$/.test(payload.phone)){
+      msg.textContent = '請輸入正確的台灣手機號碼（09 開頭共 10 碼）'; msg.className = 'msg err'; return;
     }
     btn.disabled = true;
     try{

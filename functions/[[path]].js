@@ -998,6 +998,10 @@ async function handleMemberRegister(request, env) {
   if (!account || !account.trim()) return json({ error: "請輸入帳號" }, 400);
   if (!password || password.length < 6) return json({ error: "密碼至少需要 6 碼" }, 400);
   if (!referral_code || !referral_code.trim()) return json({ error: "請輸入推薦碼" }, 400);
+  // 只接受台灣手機：09 開頭共 10 碼（+886 / 886 開頭會自動換成 0）
+  const phoneClean = String(phone || "").replace(/[\s-]/g, "").replace(/^(\+886|886)/, "0");
+  if (!phoneClean) return json({ error: "請輸入手機號碼" }, 400);
+  if (!/^09[0-9]{8}$/.test(phoneClean)) return json({ error: "請輸入正確的台灣手機號碼（09 開頭共 10 碼）" }, 400);
 
   const code = referral_code.trim().toUpperCase();
   const referrer = await env.DB.prepare("SELECT id, name FROM members WHERE UPPER(referral_code)=?").bind(code).first();
@@ -1010,7 +1014,7 @@ async function handleMemberRegister(request, env) {
       const r = await env.DB.prepare(
         "INSERT INTO members (name, account, password_hash, phone, referral_code, referred_by) VALUES (?, ?, ?, ?, ?, ?)"
       )
-        .bind(name.trim(), account.trim(), passwordHash, phone || null, myCode, referrer.id)
+        .bind(name.trim(), account.trim(), passwordHash, phoneClean, myCode, referrer.id)
         .run();
 
       const ttlHours = parseInt(env.SESSION_TTL_HOURS || "12", 10);
