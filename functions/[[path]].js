@@ -133,9 +133,11 @@ async function handleDeleteStaff(id, session, env) {
 
 // ---- Members ----
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 async function handleListMembers(env) {
   const { results } = await env.DB.prepare(
-    `SELECT m.id, m.name, m.account, m.phone, m.note, m.created_at, m.referral_code,
+    `SELECT m.id, m.name, m.account, m.phone, m.email, m.note, m.created_at, m.referral_code,
             r.name as referred_by_name
      FROM members m LEFT JOIN members r ON r.id = m.referred_by
      ORDER BY m.created_at DESC`
@@ -149,22 +151,26 @@ async function handleListMembers(env) {
 
 async function handleAddMember(request, env) {
   const body = await request.json().catch(() => ({}));
-  const { name, phone, note, account, password } = body;
+  const { name, phone, email, note, account, password } = body;
   if (!name || !name.trim()) return json({ error: "請輸入姓名" }, 400);
   if (password && password.length < 6) return json({ error: "密碼至少需要 6 碼" }, 400);
+  // 後台彈性：電話、信箱都可以不填；有填信箱才檢查格式
+  const emailClean = email && String(email).trim() ? String(email).trim() : null;
+  if (emailClean && !EMAIL_RE.test(emailClean)) return json({ error: "電子信箱格式不正確" }, 400);
 
   const passwordHash = password ? await hashPassword(password) : null;
   for (let attempt = 0; attempt < 5; attempt++) {
     const referralCode = generateReferralCode();
     try {
       const r = await env.DB.prepare(
-        "INSERT INTO members (name, account, password_hash, phone, note, referral_code) VALUES (?, ?, ?, ?, ?, ?)"
+        "INSERT INTO members (name, account, password_hash, phone, email, note, referral_code) VALUES (?, ?, ?, ?, ?, ?, ?)"
       )
         .bind(
           name.trim(),
           account && account.trim() ? account.trim() : null,
           passwordHash,
-          phone || null,
+          phone && String(phone).trim() ? String(phone).trim() : null,
+          emailClean,
           note || null,
           referralCode
         )
@@ -190,8 +196,10 @@ async function handleUpdateMember(id, request, env) {
   if (!existing) return json({ error: "找不到此會員" }, 404);
 
   const body = await request.json().catch(() => ({}));
-  const { name, phone, note, account } = body;
+  const { name, phone, email, note, account } = body;
   if (name !== undefined && !String(name).trim()) return json({ error: "姓名不可為空白" }, 400);
+  const newEmail = email !== undefined ? (email && String(email).trim() ? String(email).trim() : null) : existing.email;
+  if (newEmail && !EMAIL_RE.test(newEmail)) return json({ error: "電子信箱格式不正確" }, 400);
 
   const newName = name !== undefined ? name.trim() : existing.name;
   const newPhone = phone !== undefined ? phone || null : existing.phone;
@@ -199,8 +207,8 @@ async function handleUpdateMember(id, request, env) {
   const newAccount = account !== undefined ? (account && account.trim() ? account.trim() : null) : existing.account;
 
   try {
-    await env.DB.prepare("UPDATE members SET name=?, phone=?, note=?, account=? WHERE id=?")
-      .bind(newName, newPhone, newNote, newAccount, id)
+    await env.DB.prepare("UPDATE members SET name=?, phone=?, email=?, note=?, account=? WHERE id=?")
+      .bind(newName, newPhone, newEmail, newNote, newAccount, id)
       .run();
     return json({ ok: true });
   } catch (err) {
@@ -993,7 +1001,7 @@ async function handleMemberMe(session, env) {
 // 隱藏連結自行註冊：一定要填對某位會員的推薦碼才能建立帳號
 async function handleMemberRegister(request, env) {
   const body = await request.json().catch(() => ({}));
-  const { name, account, password, phone, referral_code } = body;
+  const { name, account, password, phone, email, referral_code } = body;
   if (!name || !name.trim()) return json({ error: "請輸入姓名" }, 400);
   if (!account || !account.trim()) return json({ error: "請輸入帳號" }, 400);
   if (!password || password.length < 6) return json({ error: "密碼至少需要 6 碼" }, 400);
@@ -1002,6 +1010,11 @@ async function handleMemberRegister(request, env) {
   const phoneClean = String(phone || "").replace(/[\s-]/g, "").replace(/^(\+886|886)/, "0");
   if (!phoneClean) return json({ error: "請輸入手機號碼" }, 400);
   if (!/^09[0-9]{8}$/.test(phoneClean)) return json({ error: "請輸入正確的台灣手機號碼（09 開頭共 10 碼）" }, 400);
+
+  // 自助註冊：電子信箱必填
+  const emailClean = String(email || "").trim();
+  if (!emailClean) return json({ error: "請輸入電子信箱" }, 400);
+  if (!EMAIL_RE.test(emailClean)) return json({ error: "請輸入正確的電子信箱格式" }, 400);
 
   const code = referral_code.trim().toUpperCase();
   const referrer = await env.DB.prepare("SELECT id, name FROM members WHERE UPPER(referral_code)=?").bind(code).first();
@@ -1012,9 +1025,9 @@ async function handleMemberRegister(request, env) {
     const myCode = generateReferralCode();
     try {
       const r = await env.DB.prepare(
-        "INSERT INTO members (name, account, password_hash, phone, referral_code, referred_by) VALUES (?, ?, ?, ?, ?, ?)"
+        "INSERT INTO members (name, account, password_hash, phone, email, referral_code, referred_by) VALUES (?, ?, ?, ?, ?, ?, ?)"
       )
-        .bind(name.trim(), account.trim(), passwordHash, phoneClean, myCode, referrer.id)
+        .bind(name.trim(), account.trim(), passwordHash, phoneClean, emailClean, myCode, referrer.id)
         .run();
 
       const ttlHours = parseInt(env.SESSION_TTL_HOURS || "12", 10);

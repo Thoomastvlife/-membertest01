@@ -197,7 +197,11 @@ export function adminHtml() {
         <h2>新增會員</h2>
         <div class="grid2">
           <div><label>姓名 *</label><input id="mem_name" /></div>
-          <div><label>電話</label><input id="mem_phone" /></div>
+          <div><label>電話（選填）</label><input id="mem_phone" /></div>
+        </div>
+        <div class="grid2">
+          <div><label>電子信箱（選填）</label><input id="mem_email" type="email" /></div>
+          <div></div>
         </div>
         <div class="grid2">
           <div><label>帳號（選填）</label><input id="mem_account" /></div>
@@ -211,7 +215,7 @@ export function adminHtml() {
       <div class="card">
         <h2>會員列表</h2>
         <table id="mem_table">
-          <thead><tr><th>ID</th><th>姓名</th><th>帳號</th><th>電話</th><th>備註</th><th>推薦碼</th><th>推薦人</th><th>操作</th></tr></thead>
+          <thead><tr><th>ID</th><th>姓名</th><th>帳號</th><th>電話</th><th>電子信箱</th><th>備註</th><th>推薦碼</th><th>推薦人</th><th>操作</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -609,7 +613,8 @@ function setupMemberPicker(prefix, onChange){
     return membersCache.filter(m=>
       (m.name||'').toLowerCase().includes(q) ||
       (m.account||'').toLowerCase().includes(q) ||
-      (m.phone||'').toLowerCase().includes(q)
+      (m.phone||'').toLowerCase().includes(q) ||
+      (m.email||'').toLowerCase().includes(q)
     );
   }
 
@@ -950,7 +955,7 @@ async function loadMembers(){
   const list = await api('/api/admin/members');
   const tbody = document.querySelector('#mem_table tbody');
   tbody.innerHTML = list.map(m=>\`<tr>
-    <td data-label="ID">\${m.id}</td><td data-label="姓名">\${m.name}</td><td data-label="帳號">\${m.account||''}</td><td data-label="電話">\${m.phone||''}</td><td data-label="備註">\${m.note||''}</td>
+    <td data-label="ID">\${m.id}</td><td data-label="姓名">\${m.name}</td><td data-label="帳號">\${m.account||''}</td><td data-label="電話">\${m.phone||''}</td><td data-label="電子信箱">\${m.email||''}</td><td data-label="備註">\${m.note||''}</td>
     <td data-label="推薦碼"><code>\${m.referral_code||''}</code> <button class="btn secondary small" onclick="copyReferralLink('\${m.referral_code}')">複製邀請連結</button></td>
     <td data-label="推薦人">\${m.referred_by_name||'-'}</td>
     <td data-label="操作">
@@ -958,7 +963,7 @@ async function loadMembers(){
       <button class="btn secondary small" onclick="resetPassword(\${m.id})">設定密碼</button>
       <button class="btn danger small" onclick="deleteMember(\${m.id})">刪除</button>
     </td>
-  </tr>\`).join('') || '<tr><td colspan="8">尚無會員</td></tr>';
+  </tr>\`).join('') || '<tr><td colspan="9">尚無會員</td></tr>';
   loadMembersIntoSelect();
 }
 
@@ -987,6 +992,7 @@ function editMember(id){
   editingMemberId = id;
   document.getElementById('mem_name').value = m.name || '';
   document.getElementById('mem_phone').value = m.phone || '';
+  document.getElementById('mem_email').value = m.email || '';
   document.getElementById('mem_note').value = m.note || '';
   document.getElementById('mem_account').value = m.account || '';
   document.getElementById('mem_password').value = '';
@@ -1002,6 +1008,7 @@ function cancelEditMember(){
   editingMemberId = null;
   document.getElementById('mem_name').value='';
   document.getElementById('mem_phone').value='';
+  document.getElementById('mem_email').value='';
   document.getElementById('mem_note').value='';
   document.getElementById('mem_account').value='';
   document.getElementById('mem_password').value='';
@@ -1014,6 +1021,7 @@ function cancelEditMember(){
 async function submitMember(){
   const name = document.getElementById('mem_name').value.trim();
   const phone = document.getElementById('mem_phone').value.trim();
+  const email = document.getElementById('mem_email').value.trim();
   const note = document.getElementById('mem_note').value.trim();
   const account = document.getElementById('mem_account').value.trim();
   const password = document.getElementById('mem_password').value;
@@ -1021,14 +1029,15 @@ async function submitMember(){
   if (!name){ msg.textContent='請輸入姓名'; msg.className='msg err'; return; }
   try{
     if (editingMemberId){
-      await api('/api/admin/members/'+editingMemberId, {method:'PATCH', body: JSON.stringify({name,phone,note,account})});
+      await api('/api/admin/members/'+editingMemberId, {method:'PATCH', body: JSON.stringify({name,phone,email,note,account})});
       if (password) await api('/api/admin/members/'+editingMemberId+'/password', {method:'POST', body: JSON.stringify({password})});
       msg.textContent='已儲存修改'; msg.className='msg ok';
       cancelEditMember();
     } else {
-      await api('/api/admin/members', {method:'POST', body: JSON.stringify({name,phone,note,account,password})});
+      await api('/api/admin/members', {method:'POST', body: JSON.stringify({name,phone,email,note,account,password})});
       document.getElementById('mem_name').value='';
       document.getElementById('mem_phone').value='';
+      document.getElementById('mem_email').value='';
       document.getElementById('mem_note').value='';
       document.getElementById('mem_account').value='';
       document.getElementById('mem_password').value='';
@@ -2618,6 +2627,8 @@ export function memberRegisterHtml() {
   <input id="reg_password" type="password" autocomplete="new-password" />
   <label>手機（必填，台灣手機 09 開頭）</label>
   <input id="reg_phone" type="tel" inputmode="numeric" maxlength="16" autocomplete="tel" placeholder="例如：0912345678" />
+  <label>電子信箱（必填）</label>
+  <input id="reg_email" type="email" autocomplete="email" placeholder="例如：name@example.com" />
   <button class="btn" id="reg_btn" onclick="doRegister()">建立帳號</button>
   <div id="reg_msg" class="msg"></div>
   <div class="foot">已經有帳號了？<a href="/member">前往登入</a></div>
@@ -2637,13 +2648,17 @@ export function memberRegisterHtml() {
       account: document.getElementById('reg_account').value.trim(),
       password: document.getElementById('reg_password').value,
       phone: document.getElementById('reg_phone').value.trim(),
+      email: document.getElementById('reg_email').value.trim(),
     };
-    if (!payload.referral_code || !payload.name || !payload.account || !payload.password || !payload.phone){
-      msg.textContent = '請完整填寫必填欄位（含手機）'; msg.className = 'msg err'; return;
+    if (!payload.referral_code || !payload.name || !payload.account || !payload.password || !payload.phone || !payload.email){
+      msg.textContent = '請完整填寫必填欄位（含手機、電子信箱）'; msg.className = 'msg err'; return;
     }
     payload.phone = payload.phone.replace(/[ -]/g, '').replace(/^(886|[+]886)/, '0');
     if (!/^09[0-9]{8}$/.test(payload.phone)){
       msg.textContent = '請輸入正確的台灣手機號碼（09 開頭共 10 碼）'; msg.className = 'msg err'; return;
+    }
+    if (!/^[^ @]+@[^ @]+[.][^ @]+$/.test(payload.email)){
+      msg.textContent = '請輸入正確的電子信箱格式'; msg.className = 'msg err'; return;
     }
     btn.disabled = true;
     try{
