@@ -413,6 +413,7 @@ export function adminHtml() {
   </div>
 </div>
 
+<input type="file" id="barcode_file_input" accept="image/*" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0;" onchange="onBarcodeChosen(this)" />
 <script>
 const PM_LABEL = {transfer:'轉帳', store_barcode:'超商條碼', taiwan_pay:'TWQR'};
 const PLATFORM_LABEL = {tiktok:'TikTok', kuaishou:'快手', xiaohongshu:'小紅書', douyin:'陸抖'};
@@ -570,7 +571,8 @@ function startOrdersPolling(){
   ordersPollTimer = setInterval(()=> {
     const tab = document.getElementById('tab-orders');
     const modalOpen = !document.getElementById('correctModal').classList.contains('hidden');
-    if (tab && !tab.classList.contains('hidden') && !modalOpen) {
+    const picking = barcodePickAt && (Date.now() - barcodePickAt < 120000);
+    if (tab && !tab.classList.contains('hidden') && !modalOpen && !picking) {
       loadOrders();
     }
   }, 5000);
@@ -758,7 +760,7 @@ function renderOrders(){
     actions += \`<button class="btn secondary small" onclick="viewLink('\${o.token}')">查看連結</button>\`;
     if (o.payment_method==='store_barcode' || o.payment_method==='taiwan_pay') {
       if (o.status==='awaiting_barcode' || o.status==='ready_to_pay') {
-        actions += \`<input type="file" accept="image/*" style="width:120px" onchange="uploadBarcode(\${o.id}, this)"/> \`;
+        actions += \`<button class="btn secondary small" onclick="pickBarcode(\${o.id})">\${o.status==='ready_to_pay' ? '重新上傳條碼' : '上傳條碼'}</button>\`;
       }
     }
     if (o.status!=='paid' && o.status!=='cancelled' && o.status!=='expired') {
@@ -879,17 +881,58 @@ async function uncompleteOrder(id){
   catch(e){ alert(e.message); }
 }
 
-async function uploadBarcode(orderId, input){
-  const file = input.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = async ()=>{
-    try{
-      await api('/api/admin/orders/'+orderId+'/barcode', {method:'POST', body: JSON.stringify({image_base64: reader.result})});
-      loadOrders();
-    }catch(e){ alert(e.message); }
-  };
-  reader.readAsDataURL(file);
+var barcodePickAt = 0;
+function pickBarcode(orderId){
+  barcodePickAt = Date.now();
+  var inp = document.getElementById('barcode_file_input');
+  inp.dataset.orderId = orderId;
+  inp.value = '';
+  inp.click();
+}
+async function onBarcodeChosen(input){
+  var file = input.files && input.files[0];
+  var orderId = input.dataset.orderId;
+  if (!file || !orderId) { barcodePickAt = 0; return; }
+  barcodePickAt = Date.now();
+  try{
+    var dataUrl = await compressImage(file, 1280, 0.85);
+    await api('/api/admin/orders/'+orderId+'/barcode', {method:'POST', body: JSON.stringify({image_base64: dataUrl})});
+    barcodePickAt = 0;
+    input.value = '';
+    loadOrders();
+  }catch(e){ barcodePickAt = 0; alert(e.message || '上傳失敗，請再試一次'); }
+}
+
+// 壓縮圖片：縮到最長邊 1280px、轉成 JPEG，避免安卓大照片或格式標記異常造成上傳失敗
+function compressImage(file, maxDim, quality){
+  maxDim = maxDim || 1280; quality = quality || 0.85;
+  function readRaw(){
+    return new Promise(function(resolve, reject){
+      var r = new FileReader();
+      r.onload = function(){ resolve(r.result); };
+      r.onerror = function(){ reject(new Error('讀取圖片失敗')); };
+      r.readAsDataURL(file);
+    });
+  }
+  return new Promise(function(resolve, reject){
+    var url = URL.createObjectURL(file);
+    var img = new Image();
+    img.onload = function(){
+      try{
+        var w = img.naturalWidth, h = img.naturalHeight;
+        var scale = Math.min(1, maxDim / Math.max(w, h));
+        var cw = Math.max(1, Math.round(w * scale)), ch = Math.max(1, Math.round(h * scale));
+        var c = document.createElement('canvas'); c.width = cw; c.height = ch;
+        var ctx = c.getContext('2d');
+        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cw, ch);
+        ctx.drawImage(img, 0, 0, cw, ch);
+        URL.revokeObjectURL(url);
+        resolve(c.toDataURL('image/jpeg', quality));
+      }catch(e){ URL.revokeObjectURL(url); readRaw().then(resolve, reject); }
+    };
+    img.onerror = function(){ URL.revokeObjectURL(url); readRaw().then(resolve, reject); };
+    img.src = url;
+  });
 }
 
 async function markPaid(id){
@@ -1504,7 +1547,7 @@ export function payHtml() {
   img.barcode{max-width:100%;margin-top:12px;border:1px solid #e2e4e8;border-radius:8px;display:block;}
   .barcode-wrap{position:relative;display:inline-block;max-width:100%;}
   .barcode-watermark{position:absolute;top:12px;left:0;right:0;bottom:0;pointer-events:none;border-radius:8px;overflow:hidden;
-    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='160'><text x='-10' y='95' font-size='24' fill='rgba(200,40,30,0.35)' font-weight='700' font-family='sans-serif' transform='rotate(-28 110 80)'>咖啡代儲用</text></svg>");
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='130' height='80'><text x='65' y='46' text-anchor='middle' font-size='18' fill='rgba(200,40,30,0.33)' font-weight='700' font-family='sans-serif' transform='rotate(-28 65 40)'>咖啡代儲用</text></svg>");
     background-repeat:repeat;}
   .center{text-align:center;}
   .muted{color:#6b7280;font-size:13px;}
@@ -1586,7 +1629,7 @@ function render(o){
     app.innerHTML = html; return;
   }
 
-  if (!pollTimer) pollTimer = setInterval(load, 5000);
+  if (!pollTimer) pollTimer = setInterval(function(){ if (window.proofPickAt && Date.now()-window.proofPickAt<120000) return; load(); }, 5000);
 
   html += '<div class="row"><span>到期時間</span><span>'+toTaipeiTime(o.expires_at)+'</span></div>';
 
@@ -1639,7 +1682,7 @@ function renderProofBox(o){
   box += '<label>轉帳/繳費帳號末幾碼（選填）</label>';
   box += '<input type="text" id="proof_digits" maxlength="20" placeholder="例如：12345" value="'+(o.proof_last_digits||'')+'" />';
   box += '<label>上傳截圖（選填）</label>';
-  box += '<input type="file" id="proof_file" accept="image/*" />';
+  box += '<input type="file" id="proof_file" accept="image/*" onclick="window.proofPickAt=Date.now()" onchange="window.proofPickAt=Date.now()" />';
   box += '<button onclick="uploadProof()">送出付款證明</button>';
   box += '<div id="proof_msg" class="muted center" style="margin-top:6px;"></div>';
   box += '</div>';
@@ -1668,13 +1711,46 @@ async function uploadProof(){
   if (msgEl) msgEl.textContent = '上傳中...';
 
   if (file) {
-    const reader = new FileReader();
-    reader.onload = ()=> send(reader.result);
-    reader.readAsDataURL(file);
+    window.proofPickAt = Date.now();
+    compressImage(file, 1280, 0.85).then(send).catch(()=>{ if (msgEl) msgEl.textContent = '圖片讀取失敗，請換一張再試'; });
   } else {
     send(null);
   }
 }
+
+
+// 壓縮圖片：縮到最長邊 1280px、轉成 JPEG，避免安卓大照片或格式標記異常造成上傳失敗
+function compressImage(file, maxDim, quality){
+  maxDim = maxDim || 1280; quality = quality || 0.85;
+  function readRaw(){
+    return new Promise(function(resolve, reject){
+      var r = new FileReader();
+      r.onload = function(){ resolve(r.result); };
+      r.onerror = function(){ reject(new Error('讀取圖片失敗')); };
+      r.readAsDataURL(file);
+    });
+  }
+  return new Promise(function(resolve, reject){
+    var url = URL.createObjectURL(file);
+    var img = new Image();
+    img.onload = function(){
+      try{
+        var w = img.naturalWidth, h = img.naturalHeight;
+        var scale = Math.min(1, maxDim / Math.max(w, h));
+        var cw = Math.max(1, Math.round(w * scale)), ch = Math.max(1, Math.round(h * scale));
+        var c = document.createElement('canvas'); c.width = cw; c.height = ch;
+        var ctx = c.getContext('2d');
+        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cw, ch);
+        ctx.drawImage(img, 0, 0, cw, ch);
+        URL.revokeObjectURL(url);
+        resolve(c.toDataURL('image/jpeg', quality));
+      }catch(e){ URL.revokeObjectURL(url); readRaw().then(resolve, reject); }
+    };
+    img.onerror = function(){ URL.revokeObjectURL(url); readRaw().then(resolve, reject); };
+    img.src = url;
+  });
+}
+
 
 async function selectMethod(method){
   try{

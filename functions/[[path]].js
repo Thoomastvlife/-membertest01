@@ -649,9 +649,15 @@ async function handleListOrders(request, env) {
   return json(results.map((o) => ({ ...o, order_no: formatOrderNo(o.id) })));
 }
 
+function normalizeImageDataUrl(v) {
+  if (!v || typeof v !== "string") return v;
+  // 部分安卓瀏覽器傳來 data:application/octet-stream 或空的 MIME，統一視為圖片
+  return v.replace(/^data:(application\/octet-stream|binary\/octet-stream)?;base64,/, "data:image/jpeg;base64,");
+}
+
 async function handleUploadBarcode(id, request, env) {
   const body = await request.json().catch(() => ({}));
-  const { image_base64 } = body;
+  const image_base64 = normalizeImageDataUrl(body.image_base64);
   if (!image_base64 || !image_base64.startsWith("data:image")) return json({ error: "請上傳有效的圖片" }, 400);
   const order = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).first();
   if (!order) return json({ error: "找不到訂單" }, 404);
@@ -921,7 +927,8 @@ async function handleSelectMethod(token, request, env) {
 
 async function handleUploadProof(token, request, env) {
   const body = await request.json().catch(() => ({}));
-  const { image_base64, last_digits } = body;
+  const { last_digits } = body;
+  const image_base64 = normalizeImageDataUrl(body.image_base64);
   const hasImage = image_base64 && String(image_base64).startsWith("data:image");
   const digits = last_digits && last_digits.trim() ? last_digits.trim().slice(0, 20) : null;
   if (!hasImage && !digits) return json({ error: "請上傳截圖或填寫帳號末幾碼" }, 400);
