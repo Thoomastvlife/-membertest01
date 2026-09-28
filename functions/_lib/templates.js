@@ -1859,6 +1859,13 @@ export function memberHtml() {
     #ord_table td::before{content:attr(data-label);flex:0 0 auto;font-size:12px;font-weight:600;color:var(--muted);text-align:left;}
     #ord_table td[colspan]{display:block;text-align:center;color:var(--muted);}
     #ord_table td[colspan]::before{content:none;}
+    /* 保險：避免任何元素把頁面撐寬 */
+    html,body{max-width:100%;overflow-x:hidden;}
+    main,.card{max-width:100%;min-width:0;}
+    input,select{min-width:0;max-width:100%;}
+    input[type=month]{-webkit-appearance:none;appearance:none;display:block;height:44px;}
+    #ord_table td > *{min-width:0;max-width:100%;}
+    #ord_table code{word-break:break-all;}
   }
 </style>
 </head>
