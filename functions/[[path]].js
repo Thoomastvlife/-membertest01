@@ -1002,7 +1002,7 @@ async function handleMemberLogout() {
 
 async function handleMemberMe(session, env) {
   const member = await env.DB.prepare("SELECT id, name, account, referral_code FROM members WHERE id=?").bind(session.memberId).first();
-  if (!member) return json({ error: "會員不存在，請重新登入" }, 401, { "Set-Cookie": clearCookieHeader("member_session") });
+  if (!member) return json({ error: "會員不存在，請重新登入" }, 404);
   if (!member.referral_code) member.referral_code = await ensureMemberReferralCode(env, member);
   return json(member);
 }
