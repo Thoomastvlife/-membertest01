@@ -1,6 +1,6 @@
 import { ALLOWED_EMAIL_DOMAINS } from "./helpers.js";
 
-const SUPPORT_EMAIL = "shop@shop.ytgp168.com";
+const SUPPORT_EMAIL = "service@ytgp168.com";
 const SITE_FOOTER = `
 <footer style="max-width:640px;margin:28px auto 24px;padding:16px 18px 0;border-top:1px solid var(--line,#E2E4ED);text-align:center;font-size:12px;line-height:1.7;color:var(--muted,#767B8C)">
   <div style="font-weight:600;margin-bottom:4px">網頁宣告</div>
