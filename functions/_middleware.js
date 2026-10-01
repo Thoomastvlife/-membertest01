@@ -104,7 +104,7 @@ function ensureBox(){
   var inner=document.createElement("div");inner.style.pointerEvents="auto";box.appendChild(inner);
   document.body.appendChild(box);box.inner=inner;return box;
 }
-function getToken(){
+function fetchToken(){
   return loadTs().then(function(){
     return new Promise(function(resolve,reject){
       var t=setTimeout(function(){cur=null;reject(new Error("timeout"))},60000);
@@ -121,6 +121,21 @@ function getToken(){
     });
   });
 }
+var pre=null,preP=null;
+function preFresh(){return pre&&Date.now()-pre.t<240000}
+function prewarm(){
+  if(preP||preFresh())return;
+  preP=fetchToken().then(function(x){pre={tok:x,t:Date.now()}},function(){}).then(function(){preP=null});
+}
+function getToken(){
+  function take(){var x=pre.tok;pre=null;setTimeout(prewarm,0);return x}
+  if(preFresh())return Promise.resolve(take());
+  if(preP)return preP.then(function(){return preFresh()?take():fetchToken()});
+  return fetchToken();
+}
+loadTs().catch(function(){});
+function start(){setTimeout(prewarm,200)}
+if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",start);else start();
 window.fetch=function(input,init){
   var url=typeof input==="string"?input:(input&&input.url)||"";
   var path;try{path=new URL(url,location.href).pathname}catch(e){path=url}
