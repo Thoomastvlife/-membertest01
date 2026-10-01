@@ -161,7 +161,7 @@ async function protectNewHost(context, url) {
     let out;
     try { out = await checkToken(token, request, env); }
     catch { return json({ error: "人機驗證服務暫時無法使用，請稍後再試" }, 503); }
-    if (!out.success) return json({ error: "人機驗證未通過，請重新整理頁面後再試" }, 403);
+    if (!out.success) return json({ error: "人機驗證未通過，請重新整理頁面後再試", debug: (out["error-codes"] || []).join(",") }, 403);
     return context.next();
   }
 
