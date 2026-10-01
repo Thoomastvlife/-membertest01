@@ -2,7 +2,7 @@ import { ALLOWED_EMAIL_DOMAINS } from "./helpers.js";
 
 const SUPPORT_EMAIL = "service@ytgp168.com";
 const SITE_FOOTER = `
-<footer style="max-width:640px;margin:28px auto 24px;padding:16px 18px 0;border-top:1px solid var(--line,#E2E4ED);text-align:center;font-size:12px;line-height:1.7;color:var(--muted,#767B8C)">
+<footer style="width:100%;box-sizing:border-box;max-width:640px;margin:28px auto 24px;padding:16px 18px 0;border-top:1px solid var(--line,#E2E4ED);text-align:center;font-size:12px;line-height:1.7;color:var(--muted,#767B8C)">
   <div style="font-weight:600;margin-bottom:4px">網頁宣告</div>
   <div>本網站為會員自助查詢與訂單結帳頁面，頁面所顯示之匯率、費用及預估金額僅供參考，可能隨時調整，實際金額以訂單確認內容為準。</div>
   <div>請妥善保管您的帳號與密碼，並於付款前再次確認訂單資訊與收款資料。</div>
@@ -1557,7 +1557,7 @@ export function payHtml() {
 <style>
   *{box-sizing:border-box;}
   body{margin:0;font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif;background:#f5f6f8;color:#1f2430;
-    display:flex;justify-content:center;padding:24px 14px;}
+    display:flex;flex-direction:column;align-items:center;padding:24px 14px;}
   .card{background:#fff;border:1px solid #e2e4e8;border-radius:12px;padding:24px;max-width:420px;width:100%;}
   h1{font-size:18px;margin-top:0;}
   .amount{font-size:32px;font-weight:700;text-align:center;margin:14px 0;}
