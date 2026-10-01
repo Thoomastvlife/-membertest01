@@ -35,6 +35,10 @@ import {
   formatOrderNo,
   parseOrderNo,
   isAllowedEmailDomain,
+  emailVerifyEnabled,
+  generateNumericCode,
+  hashEmailCode,
+  sendEmail,
 } from "./_lib/helpers.js";
 
 // 付款連結建立後，最多可以被開啟／操作幾小時，超過就整條連結失效（跟訂單本身 3 小時付款時效是兩回事）。
@@ -138,7 +142,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 async function handleListMembers(env) {
   const { results } = await env.DB.prepare(
-    `SELECT m.id, m.name, m.account, m.phone, m.email, m.note, m.created_at, m.referral_code,
+    `SELECT m.id, m.name, m.account, m.phone, m.email, m.email_verified_at, m.note, m.created_at, m.referral_code,
             r.name as referred_by_name
      FROM members m LEFT JOIN members r ON r.id = m.referred_by
      ORDER BY m.created_at DESC`
@@ -207,9 +211,13 @@ async function handleUpdateMember(id, request, env) {
   const newNote = note !== undefined ? note || null : existing.note;
   const newAccount = account !== undefined ? (account && account.trim() ? account.trim() : null) : existing.account;
 
+  // 信箱有變更就清掉「已驗證」標記（只改大小寫視為同一個信箱）
+  const sameEmail = (newEmail || "").toLowerCase() === (existing.email || "").toLowerCase();
+  const newVerifiedAt = sameEmail ? existing.email_verified_at ?? null : null;
+
   try {
-    await env.DB.prepare("UPDATE members SET name=?, phone=?, email=?, note=?, account=? WHERE id=?")
-      .bind(newName, newPhone, newEmail, newNote, newAccount, id)
+    await env.DB.prepare("UPDATE members SET name=?, phone=?, email=?, email_verified_at=?, note=?, account=? WHERE id=?")
+      .bind(newName, newPhone, newEmail, newVerifiedAt, newNote, newAccount, id)
       .run();
     return json({ ok: true });
   } catch (err) {
@@ -999,6 +1007,76 @@ async function handleMemberMe(session, env) {
   return json(member);
 }
 
+const EMAIL_TAKEN_MSG = "此信箱已註冊過會員，請直接登入；如需協助請聯絡店家";
+async function emailAlreadyRegistered(env, emailLower) {
+  const row = await env.DB.prepare("SELECT id FROM members WHERE LOWER(email)=? LIMIT 1").bind(emailLower).first();
+  return !!row;
+}
+
+// ---- 信箱驗證碼：寄送 ----
+const EMAIL_CODE_TTL_MIN = 10;
+const EMAIL_CODE_MAX_ATTEMPTS = 5;
+const EMAIL_RESEND_COOLDOWN_SEC = 60;
+
+async function handleSendEmailCode(request, env) {
+  if (!emailVerifyEnabled(env)) return json({ error: "目前未啟用信箱驗證" }, 400);
+  const body = await request.json().catch(() => ({}));
+  const emailClean = String(body.email || "").trim().toLowerCase();
+  if (!emailClean || !EMAIL_RE.test(emailClean)) return json({ error: "請輸入正確的電子信箱格式" }, 400);
+  if (!isAllowedEmailDomain(emailClean)) {
+    return json({ error: "目前僅接受常見信箱（Gmail、Outlook、Hotmail、Yahoo、iCloud 等）" }, 400);
+  }
+  // 要先填對推薦碼才能寄信，避免有人拿這個端點亂寄信給別人
+  const code = String(body.referral_code || "").trim().toUpperCase();
+  if (!code) return json({ error: "請先填寫推薦碼" }, 400);
+  const referrer = await env.DB.prepare("SELECT id FROM members WHERE UPPER(referral_code)=?").bind(code).first();
+  if (!referrer) return json({ error: "推薦碼不正確，請確認後再試" }, 400);
+  if (await emailAlreadyRegistered(env, emailClean)) return json({ error: EMAIL_TAKEN_MSG }, 400);
+
+  const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+  await env.DB.prepare("DELETE FROM email_send_log WHERE created_at < datetime('now','-1 day')").run();
+  const byEmail = await env.DB.prepare(
+    `SELECT COUNT(*) AS c, MIN(CAST((julianday('now') - julianday(created_at)) * 86400 AS INTEGER)) AS since
+     FROM email_send_log WHERE email=? AND created_at > datetime('now','-1 hour')`
+  ).bind(emailClean).first();
+  if (byEmail.c > 0 && byEmail.since < EMAIL_RESEND_COOLDOWN_SEC) {
+    return json({ error: `請稍候 ${EMAIL_RESEND_COOLDOWN_SEC - byEmail.since} 秒後再重新寄送` }, 429);
+  }
+  if (byEmail.c >= 5) return json({ error: "這個信箱寄送次數過多，請 1 小時後再試" }, 429);
+  const byIp = await env.DB.prepare(
+    "SELECT COUNT(*) AS c FROM email_send_log WHERE ip=? AND created_at > datetime('now','-1 hour')"
+  ).bind(ip).first();
+  if (byIp.c >= 10) return json({ error: "寄送次數過多，請稍後再試" }, 429);
+
+  const plain = generateNumericCode(6);
+  const hash = await hashEmailCode(env, emailClean, plain);
+  await env.DB.prepare(
+    `INSERT OR REPLACE INTO email_codes (email, code_hash, expires_at, attempts)
+     VALUES (?, ?, datetime('now','+${EMAIL_CODE_TTL_MIN} minutes'), 0)`
+  ).bind(emailClean, hash).run();
+
+  try {
+    await sendEmail(env, {
+      to: emailClean,
+      subject: "【會員註冊】信箱驗證碼",
+      text: `你的驗證碼是 ${plain}，${EMAIL_CODE_TTL_MIN} 分鐘內有效。如果不是你本人操作，請忽略這封信。`,
+      html: `<div style="font-family:-apple-system,'PingFang TC','Microsoft JhengHei',sans-serif;max-width:420px;margin:auto;padding:20px;">
+        <p>你好，你正在註冊會員，驗證碼如下：</p>
+        <p style="font-size:32px;font-weight:700;letter-spacing:8px;margin:16px 0;">${plain}</p>
+        <p style="color:#767B8C;font-size:13px;">${EMAIL_CODE_TTL_MIN} 分鐘內有效。如果不是你本人操作，請忽略這封信。</p></div>`,
+    });
+  } catch (err) {
+    await env.DB.prepare("DELETE FROM email_codes WHERE email=?").bind(emailClean).run();
+    console.error("send email code failed:", String(err.message || err));
+    if (String(err.message) === "EMAIL_NOT_CONFIGURED") {
+      return json({ error: "寄信服務尚未設定完成，請聯絡店家" }, 500);
+    }
+    return json({ error: "驗證信寄送失敗，請稍後再試或聯絡店家" }, 502);
+  }
+  await env.DB.prepare("INSERT INTO email_send_log (email, ip) VALUES (?, ?)").bind(emailClean, ip).run();
+  return json({ ok: true, cooldown: EMAIL_RESEND_COOLDOWN_SEC });
+}
+
 // 隱藏連結自行註冊：一定要填對某位會員的推薦碼才能建立帳號
 async function handleMemberRegister(request, env) {
   const body = await request.json().catch(() => ({}));
@@ -1024,15 +1102,42 @@ async function handleMemberRegister(request, env) {
   const referrer = await env.DB.prepare("SELECT id, name FROM members WHERE UPPER(referral_code)=?").bind(code).first();
   if (!referrer) return json({ error: "推薦碼不正確，請確認後再試" }, 400);
 
+  // 一個信箱只能註冊一次（不分大小寫）
+  if (await emailAlreadyRegistered(env, emailClean)) return json({ error: EMAIL_TAKEN_MSG }, 400);
+
+  // 信箱驗證碼（EMAIL_VERIFY_ENABLED 預設開啟）
+  let emailVerifiedAt = null;
+  if (emailVerifyEnabled(env)) {
+    const emailCode = String(body.email_code || "").trim();
+    if (!/^[0-9]{6}$/.test(emailCode)) return json({ error: "請輸入 6 位數的信箱驗證碼" }, 400);
+    const row = await env.DB.prepare(
+      "SELECT code_hash, attempts, CASE WHEN expires_at < datetime('now') THEN 1 ELSE 0 END AS expired FROM email_codes WHERE email=?"
+    ).bind(emailClean).first();
+    if (!row) return json({ error: "請先按「寄送驗證碼」取得驗證碼" }, 400);
+    if (row.expired || row.attempts >= EMAIL_CODE_MAX_ATTEMPTS) {
+      await env.DB.prepare("DELETE FROM email_codes WHERE email=?").bind(emailClean).run();
+      return json({ error: row.expired ? "驗證碼已過期，請重新寄送" : "錯誤次數過多，請重新寄送驗證碼" }, 400);
+    }
+    const ok = (await hashEmailCode(env, emailClean, emailCode)) === row.code_hash;
+    if (!ok) {
+      await env.DB.prepare("UPDATE email_codes SET attempts = attempts + 1 WHERE email=?").bind(emailClean).run();
+      const left = EMAIL_CODE_MAX_ATTEMPTS - row.attempts - 1;
+      return json({ error: left > 0 ? `驗證碼不正確（還可以再試 ${left} 次）` : "驗證碼錯誤次數過多，請重新寄送驗證碼" }, 400);
+    }
+    emailVerifiedAt = nowIso();
+  }
+
   const passwordHash = await hashPassword(password);
   for (let attempt = 0; attempt < 5; attempt++) {
     const myCode = generateReferralCode();
     try {
       const r = await env.DB.prepare(
-        "INSERT INTO members (name, account, password_hash, phone, email, referral_code, referred_by) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO members (name, account, password_hash, phone, email, email_verified_at, referral_code, referred_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
       )
-        .bind(name.trim(), account.trim(), passwordHash, phoneClean, emailClean, myCode, referrer.id)
+        .bind(name.trim(), account.trim(), passwordHash, phoneClean, emailClean, emailVerifiedAt, myCode, referrer.id)
         .run();
+
+      if (emailVerifiedAt) await env.DB.prepare("DELETE FROM email_codes WHERE email=?").bind(emailClean).run();
 
       const ttlHours = parseInt(env.SESSION_TTL_HOURS || "12", 10);
       const session = await signSession(
@@ -1240,7 +1345,7 @@ export async function onRequest(context) {
     if (path === "/admin" || path === "/admin/") return html(adminHtml());
     if (path.startsWith("/pay/")) return html(payHtml());
     if (path === "/member" || path === "/member/") return html(memberHtml());
-    if (path === "/member/register" || path === "/member/register/") return html(memberRegisterHtml());
+    if (path === "/member/register" || path === "/member/register/") return html(memberRegisterHtml({ emailVerify: emailVerifyEnabled(env) }));
     if (path === "/") return Response.redirect(url.origin + "/member", 302);
 
     // ---- Public API ----
@@ -1256,6 +1361,7 @@ export async function onRequest(context) {
     if (path === "/api/coupons/preview" && method === "POST") return handleCouponPreview(request, env);
 
     if (path === "/api/member/login" && method === "POST") return handleMemberLogin(request, env);
+    if (path === "/api/member/send-email-code" && method === "POST") return handleSendEmailCode(request, env);
     if (path === "/api/member/register" && method === "POST") return handleMemberRegister(request, env);
     if (path === "/api/member/logout" && method === "POST") return handleMemberLogout();
 

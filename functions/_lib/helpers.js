@@ -459,3 +459,35 @@ export function isAllowedEmailDomain(email) {
   if (at < 0) return false;
   return ALLOWED_EMAIL_DOMAINS.includes(String(email).trim().toLowerCase().slice(at + 1));
 }
+
+// ========================================================================
+// 信箱驗證碼（自助註冊用）
+// EMAIL_VERIFY_ENABLED 預設開啟；設成 "0" 可關閉（註冊頁就不會要求驗證碼）。
+// 寄信使用 Resend（https://resend.com）：需要 secret RESEND_API_KEY 與 var EMAIL_FROM。
+// ========================================================================
+export function emailVerifyEnabled(env) {
+  return String(env.EMAIL_VERIFY_ENABLED ?? "1") !== "0";
+}
+
+export function generateNumericCode(len = 6) {
+  const buf = new Uint32Array(1);
+  crypto.getRandomValues(buf);
+  return String(buf[0] % 10 ** len).padStart(len, "0");
+}
+
+export async function hashEmailCode(env, email, code) {
+  return sha256Hex(`${env.ADMIN_SESSION_SECRET}|${email}|${code}`);
+}
+
+export async function sendEmail(env, { to, subject, html, text }) {
+  if (!env.RESEND_API_KEY || !env.EMAIL_FROM) throw new Error("EMAIL_NOT_CONFIGURED");
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ from: env.EMAIL_FROM, to: [to], subject, html, text }),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`EMAIL_SEND_FAILED:${res.status}:${detail.slice(0, 200)}`);
+  }
+}

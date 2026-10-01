@@ -957,7 +957,7 @@ async function loadMembers(){
   const list = await api('/api/admin/members');
   const tbody = document.querySelector('#mem_table tbody');
   tbody.innerHTML = list.map(m=>\`<tr>
-    <td data-label="ID">\${m.id}</td><td data-label="姓名">\${m.name}</td><td data-label="帳號">\${m.account||''}</td><td data-label="電話">\${m.phone||''}</td><td data-label="電子信箱">\${m.email||''}</td><td data-label="備註">\${m.note||''}</td>
+    <td data-label="ID">\${m.id}</td><td data-label="姓名">\${m.name}</td><td data-label="帳號">\${m.account||''}</td><td data-label="電話">\${m.phone||''}</td><td data-label="電子信箱">\${m.email||''}\${m.email && m.email_verified_at ? ' <span title="已通過信箱驗證" style="color:#1E7A56">✓</span>' : ''}</td><td data-label="備註">\${m.note||''}</td>
     <td data-label="推薦碼"><code>\${m.referral_code||''}</code> <button class="btn secondary small" onclick="copyReferralLink('\${m.referral_code}')">複製邀請連結</button></td>
     <td data-label="推薦人">\${m.referred_by_name||'-'}</td>
     <td data-label="操作">
@@ -2578,7 +2578,7 @@ loadRates().then(() => {
 
 // 隱藏的自助註冊頁：不會出現在任何選單或導覽列，只能透過會員分享的推薦連結（帶 ?code=）進入。
 // 一定要填對某位既有會員的推薦碼才能建立帳號。
-export function memberRegisterHtml() {
+export function memberRegisterHtml({ emailVerify = true } = {}) {
   return `<!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
@@ -2613,6 +2613,9 @@ export function memberRegisterHtml() {
   .msg.err{color:var(--danger);} .msg.ok{color:var(--ok);}
   .foot{margin-top:16px;text-align:center;font-size:12.5px;color:var(--muted);}
   .foot a{color:var(--accent-ink);}
+  .row{display:flex;gap:8px;}
+  button.btn2{white-space:nowrap;padding:0 12px;border:1px solid var(--line);background:#fff;color:var(--accent-ink);border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;}
+  button.btn2:disabled{opacity:.55;cursor:default;}
 </style>
 </head>
 <body>
@@ -2632,6 +2635,14 @@ export function memberRegisterHtml() {
   <label>電子信箱（必填）</label>
   <input id="reg_email" type="email" autocomplete="email" placeholder="例如：name@example.com" />
   <div style="font-size:12px;color:#888;margin-top:4px;">僅接受常見信箱：Gmail、Outlook、Hotmail、Yahoo、iCloud 等</div>
+  <div id="code_wrap" style="display:none;">
+    <label>信箱驗證碼（6 碼）</label>
+    <div class="row">
+      <input id="reg_email_code" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="6 位數驗證碼" />
+      <button type="button" class="btn2" id="send_code_btn" onclick="sendCode()">寄送驗證碼</button>
+    </div>
+    <div style="font-size:12px;color:#888;margin-top:4px;">驗證碼 10 分鐘內有效；沒收到請檢查垃圾郵件匣。</div>
+  </div>
   <button class="btn" id="reg_btn" onclick="doRegister()">建立帳號</button>
   <div id="reg_msg" class="msg"></div>
   <div class="foot">已經有帳號了？<a href="/member">前往登入</a></div>
@@ -2640,6 +2651,54 @@ export function memberRegisterHtml() {
   const params = new URLSearchParams(location.search);
   const prefillCode = params.get('code');
   if (prefillCode) document.getElementById('reg_code').value = prefillCode.toUpperCase();
+
+  const EMAIL_VERIFY = ${emailVerify ? 'true' : 'false'};
+  const allowedDomains = ${JSON.stringify(ALLOWED_EMAIL_DOMAINS)};
+  if (EMAIL_VERIFY) document.getElementById('code_wrap').style.display = 'block';
+
+  function emailError(email){
+    if (!/^[^ @]+@[^ @]+[.][^ @]+$/.test(email)) return '請輸入正確的電子信箱格式';
+    if (!allowedDomains.includes(email.toLowerCase().split('@').pop())) return '目前僅接受常見信箱（Gmail、Outlook、Hotmail、Yahoo、iCloud 等）';
+    return '';
+  }
+
+  let cooldownTimer = null;
+  function startCooldown(sec){
+    const b = document.getElementById('send_code_btn');
+    let left = sec;
+    b.disabled = true; b.textContent = left + ' 秒後可重寄';
+    clearInterval(cooldownTimer);
+    cooldownTimer = setInterval(()=>{
+      left--;
+      if (left <= 0){ clearInterval(cooldownTimer); b.disabled = false; b.textContent = '重新寄送'; }
+      else b.textContent = left + ' 秒後可重寄';
+    }, 1000);
+  }
+
+  async function sendCode(){
+    const msg = document.getElementById('reg_msg');
+    msg.textContent=''; msg.className='msg';
+    const email = document.getElementById('reg_email').value.trim();
+    const referral_code = document.getElementById('reg_code').value.trim();
+    if (!referral_code){ msg.textContent = '請先填寫推薦碼'; msg.className = 'msg err'; return; }
+    const err = emailError(email);
+    if (err){ msg.textContent = err; msg.className = 'msg err'; return; }
+    const b = document.getElementById('send_code_btn');
+    b.disabled = true;
+    try{
+      const res = await fetch('/api/member/send-email-code', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ email, referral_code })
+      });
+      const data = await res.json().catch(()=>({}));
+      if (!res.ok) throw new Error(data.error || '寄送失敗');
+      msg.textContent = '驗證碼已寄到 ' + email + '，請到信箱查收'; msg.className = 'msg ok';
+      startCooldown(data.cooldown || 60);
+    }catch(e){
+      msg.textContent = e.message; msg.className = 'msg err';
+      b.disabled = false;
+    }
+  }
 
   async function doRegister(){
     const btn = document.getElementById('reg_btn');
@@ -2652,7 +2711,11 @@ export function memberRegisterHtml() {
       password: document.getElementById('reg_password').value,
       phone: document.getElementById('reg_phone').value.trim(),
       email: document.getElementById('reg_email').value.trim(),
+      email_code: document.getElementById('reg_email_code').value.trim(),
     };
+    if (EMAIL_VERIFY && !/^[0-9]{6}$/.test(payload.email_code)){
+      msg.textContent = '請輸入 6 位數的信箱驗證碼（先按「寄送驗證碼」）'; msg.className = 'msg err'; return;
+    }
     if (!payload.referral_code || !payload.name || !payload.account || !payload.password || !payload.phone || !payload.email){
       msg.textContent = '請完整填寫必填欄位（含手機、電子信箱）'; msg.className = 'msg err'; return;
     }
@@ -2660,13 +2723,8 @@ export function memberRegisterHtml() {
     if (!/^09[0-9]{8}$/.test(payload.phone)){
       msg.textContent = '請輸入正確的台灣手機號碼（09 開頭共 10 碼）'; msg.className = 'msg err'; return;
     }
-    if (!/^[^ @]+@[^ @]+[.][^ @]+$/.test(payload.email)){
-      msg.textContent = '請輸入正確的電子信箱格式'; msg.className = 'msg err'; return;
-    }
-    const allowedDomains = ${JSON.stringify(ALLOWED_EMAIL_DOMAINS)};
-    if (!allowedDomains.includes(payload.email.toLowerCase().split('@').pop())){
-      msg.textContent = '目前僅接受常見信箱（Gmail、Outlook、Hotmail、Yahoo、iCloud 等）'; msg.className = 'msg err'; return;
-    }
+    const emailErr = emailError(payload.email);
+    if (emailErr){ msg.textContent = emailErr; msg.className = 'msg err'; return; }
     btn.disabled = true;
     try{
       const res = await fetch('/api/member/register', {

@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS members (
   password_hash TEXT,           -- 會員密碼（加鹽雜湊儲存，選填）
   phone TEXT,
   email TEXT,                   -- 電子信箱（自助註冊必填；後台建立可留空）
+  email_verified_at TEXT,       -- 通過信箱驗證碼的時間；NULL 表示未驗證（後台手動建立／舊會員）
   note TEXT,
   referral_code TEXT UNIQUE,    -- 專屬推薦碼，供他人透過隱藏註冊連結自行加入時填寫
   referred_by INTEGER,          -- 透過哪位會員的推薦碼註冊（自行註冊才會有值）
@@ -91,6 +92,24 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
   created_at TEXT DEFAULT (datetime('now')),
   FOREIGN KEY (admin_id) REFERENCES admins(id)
 );
+
+-- 自助註冊的信箱驗證碼（只存雜湊，10 分鐘有效，錯誤 5 次作廢）
+CREATE TABLE IF NOT EXISTS email_codes (
+  email TEXT PRIMARY KEY,
+  code_hash TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0
+);
+
+-- 寄信紀錄，用來限制頻率（同信箱 60 秒一封、每小時 5 封；同 IP 每小時 10 封）
+CREATE TABLE IF NOT EXISTS email_send_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  email TEXT NOT NULL,
+  ip TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_email_send_log_email ON email_send_log(email, created_at);
+CREATE INDEX IF NOT EXISTS idx_email_send_log_ip ON email_send_log(ip, created_at);
 
 CREATE INDEX IF NOT EXISTS idx_orders_token ON orders(token);
 CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at);

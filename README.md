@@ -242,3 +242,20 @@ member-checkout-pages/
 - `/member/register` 只接受常見大眾信箱：gmail.com、googlemail.com、outlook.com、hotmail.com、live.com、msn.com、yahoo.com、yahoo.com.tw、icloud.com、me.com、proton.me、protonmail.com（不分大小寫，儲存時統一轉小寫）。其他網域（含打錯的 `gmial.com`）會被擋下並提示。
 - 前端與後端共用同一份清單，要增減網域只需修改 `functions/_lib/helpers.js` 裡的 `ALLOWED_EMAIL_DOMAINS`。
 - 後台手動新增／編輯會員**不受網域限制**（維持彈性，只檢查信箱格式）。不需要資料庫升級。
+
+## 信箱驗證碼（v13）
+- `/member/register` 自助註冊新增「信箱驗證碼」：填好推薦碼與信箱後按「寄送驗證碼」，信箱會收到 6 位數驗證碼（10 分鐘有效），填對才能建立帳號。
+- 安全限制：驗證碼只存雜湊；錯誤 5 次作廢需重寄；同信箱 60 秒才能重寄、每小時最多 5 封；同 IP 每小時最多 10 封；**必須先填對推薦碼才能寄信**（避免被拿來亂寄信）。
+- 通過驗證的會員在後台「會員」列表的信箱旁會顯示綠色 ✓；後台手動新增的會員、舊會員沒有 ✓（不影響登入與下單）；後台把信箱改成別的，✓ 會自動清掉。
+- 寄信使用 [Resend](https://resend.com)，部署前要設定：
+  1. 在 Resend 驗證你的網域（只用 `onboarding@resend.dev` 測試寄件人時，只能寄到你自己的信箱）。
+  2. `wrangler.toml` 的 `[vars]` 填入 `EMAIL_FROM = "會員結帳 <noreply@你的網域.com>"`。
+  3. `wrangler pages secret put RESEND_API_KEY --project-name=member-checkout-pages`
+  4. 升級既有資料庫：`wrangler d1 execute checkout_db --file=./migrate_v13.sql`（全新安裝用最新 `schema.sql` 即可）。
+- `EMAIL_VERIFY_ENABLED = "0"` 可隨時關閉驗證（註冊頁不再要求驗證碼，行為回到 v12）。**預設是開啟**，所以在 Resend 還沒設定好之前，註冊會顯示「寄信服務尚未設定完成」。
+- 只在自助註冊驗證；會員登入、下單流程沒有變動。
+
+### 一個信箱只能註冊一次（v20）
+- 自助註冊時，若該信箱（不分大小寫）已經有會員使用，「寄送驗證碼」與「建立帳號」都會被擋下並提示「此信箱已註冊過會員」，也就不會寄出驗證信。
+- 只限制**自助註冊**；後台手動新增／編輯會員不受限制（維持彈性，例如家人共用信箱由店家自行判斷）。
+- 這是程式內檢查，沒有加資料庫唯一索引（既有資料可能已有重複信箱，硬加會讓升級失敗），不需要跑新的升級腳本。
