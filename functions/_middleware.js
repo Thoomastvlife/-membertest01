@@ -7,7 +7,7 @@
 //   TURNSTILE_SECRET    (Secret)    Turnstile Secret key
 // 兩者都設定後新站保護才會啟用；任何一個沒設定就不啟用（避免誤把自己鎖在門外）。
 //
-// Turnstile 小工具的「網域」要同時加入：coffee1688.pages.dev、member.ytgp168.com、www.member.ytgp168.com 
+// Turnstile 小工具的「網域」要同時加入：coffee1688.pages.dev、member.ytgp168.com、www.member.ytgp168.com
 
 const NEW_ORIGIN = "https://member.ytgp168.com";
 const OLD_HOSTS = ["coffee1688.pages.dev"]; // 預覽網址 xxxx.coffee1688.pages.dev 也會一併處理
