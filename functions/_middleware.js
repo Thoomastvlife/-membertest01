@@ -47,7 +47,7 @@ h1{font-size:22px;margin:0 0 10px}p{margin:6px 0;color:var(--sub);line-height:1.
   <div id="ts"></div>
   <p id="status">正在驗證…</p>
   <a class="btn" href="${NEW_ORIGIN}/">立即前往</a>
-  <div style="margin-top:22px;padding-top:14px;border-top:1px solid rgba(128,128,128,.25);font-size:12px;line-height:1.7;color:var(--sub);text-align:center"><div style="font-weight:600">網頁宣告</div><div>本網站為會員自助查詢與訂單結帳頁面，內容僅供參考，實際以訂單確認內容為準。</div><div>客服信箱：<a href="mailto:shop@shop.ytgp168.com" style="color:inherit;text-decoration:underline">shop@shop.ytgp168.com</a></div></div>
+  <div style="margin-top:22px;padding-top:14px;border-top:1px solid rgba(128,128,128,.25);font-size:12px;line-height:1.7;color:var(--sub);text-align:center"><div style="font-weight:600">網頁宣告</div><div>本網站為會員自助查詢與訂單結帳頁面，內容僅供參考，實際以訂單確認內容為準。</div><div>客服信箱：<a href="mailto:service@ytgp168.com" style="color:inherit;text-decoration:underline">service@ytgp168.com</a></div></div>
 </div>
 <script>
 var SITE_KEY=${JSON.stringify(siteKey || "")};
