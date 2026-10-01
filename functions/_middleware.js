@@ -61,10 +61,12 @@ if(!SITE_KEY){go()}else{
         st.textContent="驗證中…";
         fetch("/api/verify",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({token:token})})
           .then(function(r){return r.json()})
-          .then(function(d){if(d&&d.success)go();else st.textContent="驗證未通過，請重新整理頁面再試。"})
-          .catch(function(){st.textContent="無法連線驗證服務，請稍後再試。"});
+          .then(function(d){if(d&&d.success)go();else{st.textContent="驗證未通過，將自動前往新網址…";setTimeout(go,1500)}})
+          .catch(function(){st.textContent="無法連線驗證服務，將自動前往新網址…";setTimeout(go,1500)});
       },
-      "error-callback":function(){st.textContent="驗證失敗，請重新整理或點擊「立即前往」。"}
+      "error-callback":function(c){st.textContent="驗證失敗"+(c?"（錯誤碼 "+c+"）":"")+"，將自動前往新網址…";setTimeout(go,1500);return true},
+      "timeout-callback":function(){go()},
+      "unsupported-callback":function(){go()}
     });
   });
 }
