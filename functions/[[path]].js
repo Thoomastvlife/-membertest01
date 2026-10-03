@@ -1019,7 +1019,7 @@ async function handleMemberLogout() {
 }
 
 async function handleMemberMe(session, env) {
-  const member = await env.DB.prepare("SELECT id, name, account, referral_code FROM members WHERE id=?").bind(session.memberId).first();
+  const member = await env.DB.prepare("SELECT id, name, account, phone, email, created_at, referral_code FROM members WHERE id=?").bind(session.memberId).first();
   if (!member) return json({ error: "會員不存在，請重新登入" }, 401, { "Set-Cookie": clearCookieHeader("member_session") });
   if (!member.referral_code) member.referral_code = await ensureMemberReferralCode(env, member);
   return json(member);
@@ -1222,7 +1222,7 @@ async function handleMemberCreateOrder(session, request, env) {
   const reqPoints = Math.floor(Number(body.use_points) || 0);
   if (reqPoints > 0) {
     const pcfg = await getPointsConfig(env);
-    if (!pcfg.enabled) return json({ error: "目前未開放點數折抵" }, 400);
+    if (!pcfg.discountEnabled) return json({ error: "目前未開放點數折抵" }, 400);
     const balance = await getBalance(env, member.id);
     if (reqPoints > balance) return json({ error: `點數不足（目前餘額 ${balance} 點）` }, 400);
     const maxPoints = Math.floor((finalAmount * pcfg.maxPercent) / 100 / pcfg.redeemValue);
@@ -1324,7 +1324,9 @@ async function handleMemberPoints(session, env) {
     .bind(session.memberId)
     .all();
   return json({
-    enabled: cfg.enabled,
+    earn_enabled: cfg.earnEnabled,
+    discount_enabled: cfg.discountEnabled,
+    shop_enabled: cfg.shopEnabled,
     balance,
     config: { earn_per: cfg.earnPer, redeem_value: cfg.redeemValue, max_percent: cfg.maxPercent },
     ledger: ledger.results,
@@ -1336,7 +1338,7 @@ async function handleMemberPoints(session, env) {
 // 會員：用點數兌換商城商品
 async function handleMemberRedeem(session, request, env) {
   const cfg = await getPointsConfig(env);
-  if (!cfg.enabled) return json({ error: "目前未開放點數兌換" }, 400);
+  if (!cfg.shopEnabled) return json({ error: "目前未開放點數兌換" }, 400);
   const body = await request.json().catch(() => ({}));
   const itemId = parseInt(body.item_id, 10);
   if (!itemId) return json({ error: "請選擇要兌換的商品" }, 400);
@@ -1383,7 +1385,14 @@ async function handleMemberRedeem(session, request, env) {
 // 後台：點數設定
 async function handleGetPointsConfigAdmin(env) {
   const cfg = await getPointsConfig(env);
-  return json({ enabled: cfg.enabled, earn_per: cfg.earnPer, redeem_value: cfg.redeemValue, max_percent: cfg.maxPercent });
+  return json({
+    earn_enabled: cfg.earnEnabled,
+    discount_enabled: cfg.discountEnabled,
+    shop_enabled: cfg.shopEnabled,
+    earn_per: cfg.earnPer,
+    redeem_value: cfg.redeemValue,
+    max_percent: cfg.maxPercent,
+  });
 }
 
 async function handleSavePointsConfigAdmin(request, env) {

@@ -16,18 +16,39 @@ export async function getPointsConfig(env) {
   const earnPer = Math.max(1, parseInt(raw.earn_per, 10) || 100);
   const redeemValue = Math.max(1, parseInt(raw.redeem_value, 10) || 1);
   const maxPercent = Math.min(90, Math.max(1, parseInt(raw.max_percent, 10) || 50));
-  return { enabled: raw.enabled !== "0", earnPer, redeemValue, maxPercent };
+  // 三個功能可以個別開關；舊版只有一個總開關（points_enabled），沒設定過個別開關時沿用總開關
+  const base = raw.enabled !== "0";
+  const flag = (k) => (raw[k] !== undefined ? raw[k] !== "0" : base);
+  return {
+    earnEnabled: flag("earn_enabled"),
+    discountEnabled: flag("discount_enabled"),
+    shopEnabled: flag("shop_enabled"),
+    earnPer,
+    redeemValue,
+    maxPercent,
+  };
 }
 
 export async function savePointsConfig(env, body) {
-  const earnPer = parseInt(body.earn_per, 10);
-  const redeemValue = parseInt(body.redeem_value, 10);
-  const maxPercent = parseInt(body.max_percent, 10);
-  if (!earnPer || earnPer < 1) return { ok: false, error: "「每幾元得 1 點」必須是 1 以上的整數" };
-  if (!redeemValue || redeemValue < 1) return { ok: false, error: "「1 點折抵金額」必須是 1 以上的整數" };
-  if (!maxPercent || maxPercent < 1 || maxPercent > 90) return { ok: false, error: "折抵上限必須是 1～90 的整數（%）" };
+  const earnOn = !!body.earn_enabled;
+  const discountOn = !!body.discount_enabled;
+  const shopOn = !!body.shop_enabled;
+  const cur = await getPointsConfig(env);
+  // 該功能開著才檢查對應欄位；關閉的功能欄位填錯也沒關係，沿用原本的設定值
+  let earnPer = parseInt(body.earn_per, 10);
+  if (earnOn && (!earnPer || earnPer < 1)) return { ok: false, error: "「每實付幾元得 1 點」必須是 1 以上的整數" };
+  if (!earnPer || earnPer < 1) earnPer = cur.earnPer;
+  let redeemValue = parseInt(body.redeem_value, 10);
+  if (discountOn && (!redeemValue || redeemValue < 1)) return { ok: false, error: "「1 點可折抵幾元」必須是 1 以上的整數" };
+  if (!redeemValue || redeemValue < 1) redeemValue = cur.redeemValue;
+  let maxPercent = parseInt(body.max_percent, 10);
+  if (discountOn && (!maxPercent || maxPercent < 1 || maxPercent > 90)) return { ok: false, error: "折抵上限必須是 1～90 的整數（%）" };
+  if (!maxPercent || maxPercent < 1 || maxPercent > 90) maxPercent = cur.maxPercent;
   const entries = [
-    ["points_enabled", body.enabled ? "1" : "0"],
+    ["points_enabled", earnOn || discountOn || shopOn ? "1" : "0"],
+    ["points_earn_enabled", earnOn ? "1" : "0"],
+    ["points_discount_enabled", discountOn ? "1" : "0"],
+    ["points_shop_enabled", shopOn ? "1" : "0"],
     ["points_earn_per", String(earnPer)],
     ["points_redeem_value", String(redeemValue)],
     ["points_max_percent", String(maxPercent)],
@@ -100,8 +121,8 @@ export async function reconcileOrderPoints(env, order, { gone = false, recalc = 
   // 付款回饋
   let wantEarn = 0;
   if (order.status === "paid") {
-    if (cfg.enabled) wantEarn = currEarn > 0 && !recalc ? currEarn : Math.floor(Number(order.amount) / cfg.earnPer);
-    else wantEarn = currEarn; // 功能關閉時不動既有紀錄
+    if (cfg.earnEnabled) wantEarn = currEarn > 0 && !recalc ? currEarn : Math.floor(Number(order.amount) / cfg.earnPer);
+    else wantEarn = currEarn; // 發點關閉時：不再發新點，但已發的不動
   }
   if (wantEarn !== currEarn) {
     await addLedger(env, {

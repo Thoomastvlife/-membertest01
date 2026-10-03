@@ -370,13 +370,21 @@ export function adminHtml() {
     <section id="tab-points" class="tab hidden">
       <div class="card">
         <h2>點數規則</h2>
-        <label style="display:flex;align-items:center;gap:8px;color:var(--ink);"><input id="pt_enabled" type="checkbox" style="width:auto;" /> 啟用點數（關閉後不再發點、不能折抵與兌換，已累積的點數保留）</label>
-        <div class="grid2">
-          <div><label>每實付幾元得 1 點</label><input id="pt_earn_per" type="number" min="1" step="1" /></div>
-          <div><label>1 點可折抵幾元</label><input id="pt_redeem_value" type="number" min="1" step="1" /></div>
+        <small class="hint">三個功能各自獨立，可以只開其中幾個；關閉的功能，下方對應的欄位可以不填。</small>
+        <div style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:10px;">
+          <label style="display:flex;align-items:center;gap:8px;color:var(--ink);margin-top:0;"><input id="pt_earn_enabled" type="checkbox" style="width:auto;" /> <b>付款回饋</b>：訂單付款後自動發點（關閉後不再發新點，已發的保留）</label>
+          <label>每實付幾元得 1 點</label><input id="pt_earn_per" type="number" min="1" step="1" />
         </div>
-        <label>單筆訂單最多可用點數折抵幾 %（1～90）</label>
-        <input id="pt_max_percent" type="number" min="1" max="90" step="1" />
+        <div style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:10px;">
+          <label style="display:flex;align-items:center;gap:8px;color:var(--ink);margin-top:0;"><input id="pt_discount_enabled" type="checkbox" style="width:auto;" /> <b>訂單折抵</b>：會員下單時可用點數折抵金額</label>
+          <div class="grid2">
+            <div><label>1 點可折抵幾元</label><input id="pt_redeem_value" type="number" min="1" step="1" /></div>
+            <div><label>單筆訂單最多折抵幾 %（1～90）</label><input id="pt_max_percent" type="number" min="1" max="90" step="1" /></div>
+          </div>
+        </div>
+        <div style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:10px;">
+          <label style="display:flex;align-items:center;gap:8px;color:var(--ink);margin-top:0;"><input id="pt_shop_enabled" type="checkbox" style="width:auto;" /> <b>點數商城</b>：會員可用點數兌換商品</label>
+        </div>
         <small class="hint">訂單標記為「已付款」時依實付金額發點；訂單取消、刪除或金額更正時，點數會自動跟著扣回或調整。</small><br/>
         <button class="btn" onclick="savePointsConfigAdmin()">儲存規則</button>
         <div id="pt_cfg_msg" class="msg"></div>
@@ -1417,7 +1425,9 @@ function loadPointsAdmin(){
 async function loadPointsConfigAdmin(){
   try{
     const c = await api('/api/admin/points/config');
-    document.getElementById('pt_enabled').checked = !!c.enabled;
+    document.getElementById('pt_earn_enabled').checked = !!c.earn_enabled;
+    document.getElementById('pt_discount_enabled').checked = !!c.discount_enabled;
+    document.getElementById('pt_shop_enabled').checked = !!c.shop_enabled;
     document.getElementById('pt_earn_per').value = c.earn_per;
     document.getElementById('pt_redeem_value').value = c.redeem_value;
     document.getElementById('pt_max_percent').value = c.max_percent;
@@ -1429,7 +1439,9 @@ async function savePointsConfigAdmin(){
   m.textContent=''; m.className='msg';
   try{
     await api('/api/admin/points/config', {method:'POST', body: JSON.stringify({
-      enabled: document.getElementById('pt_enabled').checked,
+      earn_enabled: document.getElementById('pt_earn_enabled').checked,
+      discount_enabled: document.getElementById('pt_discount_enabled').checked,
+      shop_enabled: document.getElementById('pt_shop_enabled').checked,
       earn_per: document.getElementById('pt_earn_per').value,
       redeem_value: document.getElementById('pt_redeem_value').value,
       max_percent: document.getElementById('pt_max_percent').value,
@@ -2078,6 +2090,17 @@ export function memberHtml() {
   header h1{font-family:var(--display);font-size:19px;font-weight:600;margin:0;color:#fff;letter-spacing:.02em;}
   header .who{display:flex;align-items:center;gap:14px;}
   header #whoami{color:#B9BCCC;font-size:13px;}
+  .who-btn{display:flex;align-items:center;gap:8px;background:transparent;border:1px solid rgba(255,255,255,.35);border-radius:20px;padding:6px 12px;cursor:pointer;color:#fff;font:inherit;max-width:60vw;}
+  .who-btn:hover{background:rgba(255,255,255,.1);border-color:#fff;}
+  .who-btn #whoami{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}
+  .who-pts{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--accent-ink);background:var(--accent-soft);border-radius:12px;padding:2px 8px;white-space:nowrap;}
+  .who-caret{font-size:11px;color:#B9BCCC;}
+  .profile-panel{background:var(--bg);border-bottom:1px solid var(--line);padding:18px 18px 4px;}
+  .profile-inner{max-width:640px;margin:0 auto;}
+  .prof-row{display:flex;justify-content:space-between;gap:16px;padding:10px 0;border-bottom:1px solid var(--line);font-size:14px;}
+  .prof-row:last-of-type{border-bottom:none;}
+  .prof-row span:first-child{color:var(--muted);white-space:nowrap;}
+  .prof-row span:last-child{text-align:right;word-break:break-all;}
 
   main{padding:24px 18px 60px;max-width:640px;margin:0 auto;}
 
@@ -2206,6 +2229,7 @@ export function memberHtml() {
 
   /* === 手機版：訂單表格改為卡片式 === */
   @media (max-width:600px){
+    .profile-panel{padding:14px 10px 0;}
     main{padding:14px 10px 50px;}
     .card{padding:16px 14px;}
     .card::before{left:14px;}
@@ -2246,9 +2270,47 @@ export function memberHtml() {
 <div id="appView" class="hidden">
   <header>
     <h1>會員查詢</h1>
-    <div class="who"><span id="whoami"></span>
+    <div class="who"><button type="button" class="who-btn" id="whoBtn" onclick="toggleProfile()" aria-expanded="false"><span id="whoami"></span><span id="whoPts" class="who-pts hidden"></span><span class="who-caret" id="whoCaret">▾</span></button>
       <button class="btn secondary" onclick="doLogout()">登出</button></div>
   </header>
+
+  <!-- === 點名字展開：個人資料 + 我的點數 === -->
+  <div id="profilePanel" class="profile-panel hidden"><div class="profile-inner">
+    <div class="card">
+      <h2>個人資料</h2>
+      <div class="prof-row"><span>姓名</span><span id="pf_name">-</span></div>
+      <div class="prof-row"><span>帳號</span><span id="pf_account">-</span></div>
+      <div class="prof-row"><span>手機</span><span id="pf_phone">-</span></div>
+      <div class="prof-row"><span>電子信箱</span><span id="pf_email">-</span></div>
+      <div class="prof-row"><span>加入時間</span><span id="pf_created">-</span></div>
+      <div class="msg" style="color:var(--muted);margin-top:10px;">資料如需修改，請洽店家。</div>
+    </div>
+    <!-- === 我的點數 === -->
+    <div class="card" id="pointsCard">
+      <h2>我的點數</h2>
+      <div class="pts-balance"><span id="ptsBalance">0</span><small>點</small></div>
+      <div class="pts-rule" id="ptsRule"></div>
+
+      <div id="ptsShopWrap">
+      <div class="pts-sub">點數商城</div>
+      <div id="ptsShop"><div class="msg" style="color:var(--muted);">載入中…</div></div>
+      <div id="ptsRedeemMsg" class="msg"></div>
+
+      <div class="pts-sub">兌換紀錄</div>
+      <table id="ptsRedTable">
+        <thead><tr><th>時間</th><th>商品</th><th>點數</th><th>狀態</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      </div>
+
+      <div class="pts-sub">點數明細（最近 100 筆）</div>
+      <table id="ptsLedgerTable">
+        <thead><tr><th>時間</th><th>異動</th><th>說明</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div></div>
+
   <main>
 
     <!-- === 我的推薦碼 === -->
@@ -2288,29 +2350,6 @@ export function memberHtml() {
         </div>
         <div id="quoteResults"></div>
       </div>
-    </div>
-
-    <!-- === 我的點數 === -->
-    <div class="card" id="pointsCard">
-      <h2>我的點數</h2>
-      <div class="pts-balance"><span id="ptsBalance">0</span><small>點</small></div>
-      <div class="pts-rule" id="ptsRule"></div>
-
-      <div class="pts-sub">點數商城</div>
-      <div id="ptsShop"><div class="msg" style="color:var(--muted);">載入中…</div></div>
-      <div id="ptsRedeemMsg" class="msg"></div>
-
-      <div class="pts-sub">兌換紀錄</div>
-      <table id="ptsRedTable">
-        <thead><tr><th>時間</th><th>商品</th><th>點數</th><th>狀態</th></tr></thead>
-        <tbody></tbody>
-      </table>
-
-      <div class="pts-sub">點數明細（最近 100 筆）</div>
-      <table id="ptsLedgerTable">
-        <thead><tr><th>時間</th><th>異動</th><th>說明</th></tr></thead>
-        <tbody></tbody>
-      </table>
     </div>
 
     <!-- === 自助下單 === -->
@@ -2627,6 +2666,11 @@ async function checkSession(){
     const me = await api('/api/member/me');
     document.getElementById('whoami').textContent = me.name + '（' + me.account + '）';
     document.getElementById('myReferralCode').textContent = me.referral_code || '------';
+    document.getElementById('pf_name').textContent = me.name || '-';
+    document.getElementById('pf_account').textContent = me.account || '-';
+    document.getElementById('pf_phone').textContent = me.phone || '-';
+    document.getElementById('pf_email').textContent = me.email || '-';
+    document.getElementById('pf_created').textContent = me.created_at ? toTaipeiTime(me.created_at) : '-';
     document.getElementById('loginView').classList.add('hidden');
     document.getElementById('appView').classList.remove('hidden');
     await loadRates();
@@ -2832,6 +2876,14 @@ async function createOrder(){
   finally{ btn.disabled = false; }
 }
 
+// ---- 點名字展開 / 收合個人資料與點數 ----
+function toggleProfile(){
+  const panel = document.getElementById('profilePanel');
+  const nowHidden = panel.classList.toggle('hidden');
+  document.getElementById('whoCaret').textContent = nowHidden ? '▾' : '▴';
+  document.getElementById('whoBtn').setAttribute('aria-expanded', nowHidden ? 'false' : 'true');
+}
+
 // ---- 點數 ----
 let pointsState = null;
 const PTS_TYPE_LABEL = {earn:'付款回饋', spend:'訂單折抵', redeem:'商城兌換', refund:'退回', admin:'店家調整'};
@@ -2843,16 +2895,23 @@ async function loadPoints(){
   try{
     const d = await api('/api/member/points');
     pointsState = d;
-    document.getElementById('pointsCard').classList.toggle('hidden', !d.enabled && d.balance === 0 && !d.ledger.length);
+    const anyOn = d.earn_enabled || d.discount_enabled || d.shop_enabled;
+    document.getElementById('pointsCard').classList.toggle('hidden', !anyOn && d.balance === 0 && !d.ledger.length);
     document.getElementById('ptsBalance').textContent = Number(d.balance).toLocaleString();
+    const whoPts = document.getElementById('whoPts');
+    whoPts.textContent = Number(d.balance).toLocaleString() + ' 點';
+    whoPts.classList.toggle('hidden', !anyOn && d.balance === 0 && !d.ledger.length);
     const c = d.config;
-    document.getElementById('ptsRule').innerHTML = d.enabled
-      ? '訂單付款完成後，每實付 <b>$' + c.earn_per + '</b> 得 1 點。1 點可折抵 <b>$' + c.redeem_value + '</b>，單筆訂單最多折抵 <b>' + c.max_percent + '%</b>，也可以到下方點數商城兌換商品。'
-      : '點數功能目前暫停，已累積的點數會保留。';
+    const rules = [];
+    if (d.earn_enabled) rules.push('訂單付款完成後，每實付 <b>$' + c.earn_per + '</b> 得 1 點。');
+    if (d.discount_enabled) rules.push('下單時 1 點可折抵 <b>$' + c.redeem_value + '</b>，單筆訂單最多折抵 <b>' + c.max_percent + '%</b>。');
+    if (d.shop_enabled) rules.push('也可以到下方點數商城兌換商品。');
+    document.getElementById('ptsRule').innerHTML = rules.length ? rules.join('') : '點數功能目前暫停，已累積的點數會保留。';
+    document.getElementById('ptsShopWrap').classList.toggle('hidden', !d.shop_enabled && !d.redemptions.length);
 
     const shop = document.getElementById('ptsShop');
     shop.innerHTML = d.items.map(function(it){
-      const can = d.enabled && d.balance >= it.cost;
+      const can = d.shop_enabled && d.balance >= it.cost;
       return '<div class="pts-item"><div><div class="nm">' + ptsEsc(it.name) + '</div>' +
         (it.description ? '<div class="ds">' + ptsEsc(it.description) + '</div>' : '') +
         (it.stock != null ? '<div class="ds">剩餘 ' + it.stock + ' 份</div>' : '') +
@@ -2873,13 +2932,13 @@ async function loadPoints(){
         (plus ? '+' : '') + l.delta + '</span> <span class="msg" style="margin:0;color:var(--muted);">' + (PTS_TYPE_LABEL[l.type] || l.type) + '</span></td><td data-label="說明">' + ptsEsc(l.note || '') + '</td></tr>';
     }).join('') || '<tr><td colspan="3">尚無點數紀錄</td></tr>';
 
-    document.getElementById('usePointsWrap').classList.toggle('hidden', !(d.enabled && d.balance > 0));
+    document.getElementById('usePointsWrap').classList.toggle('hidden', !(d.discount_enabled && d.balance > 0));
     updatePointsHint();
   }catch(e){ /* 點數載入失敗不影響其他功能 */ }
 }
 
 function maxUsablePoints(){
-  if (!pointsState || !pointsState.enabled) return 0;
+  if (!pointsState || !pointsState.discount_enabled) return 0;
   const amt = Number(document.getElementById('new_amount').value) || 0;
   const c = pointsState.config;
   const byAmount = Math.floor(amt * c.max_percent / 100 / c.redeem_value);
