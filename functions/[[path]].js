@@ -1019,9 +1019,10 @@ async function handleMemberLogout() {
 }
 
 async function handleMemberMe(session, env) {
-  const member = await env.DB.prepare("SELECT id, name, account, phone, email, created_at, referral_code FROM members WHERE id=?").bind(session.memberId).first();
+  const member = await env.DB.prepare("SELECT id, name, account, phone, email, email_verified_at, created_at, referral_code FROM members WHERE id=?").bind(session.memberId).first();
   if (!member) return json({ error: "會員不存在，請重新登入" }, 401, { "Set-Cookie": clearCookieHeader("member_session") });
   if (!member.referral_code) member.referral_code = await ensureMemberReferralCode(env, member);
+  member.email_verify = emailVerifyEnabled(env);
   return json(member);
 }
 
@@ -1036,21 +1037,8 @@ const EMAIL_CODE_TTL_MIN = 10;
 const EMAIL_CODE_MAX_ATTEMPTS = 5;
 const EMAIL_RESEND_COOLDOWN_SEC = 60;
 
-async function handleSendEmailCode(request, env) {
-  if (!emailVerifyEnabled(env)) return json({ error: "目前未啟用信箱驗證" }, 400);
-  const body = await request.json().catch(() => ({}));
-  const emailClean = String(body.email || "").trim().toLowerCase();
-  if (!emailClean || !EMAIL_RE.test(emailClean)) return json({ error: "請輸入正確的電子信箱格式" }, 400);
-  if (!isAllowedEmailDomain(emailClean)) {
-    return json({ error: "目前僅接受常見信箱（Gmail、Outlook、Hotmail、Yahoo、iCloud 等）" }, 400);
-  }
-  // 要先填對推薦碼才能寄信，避免有人拿這個端點亂寄信給別人
-  const code = String(body.referral_code || "").trim().toUpperCase();
-  if (!code) return json({ error: "請先填寫推薦碼" }, 400);
-  const referrer = await env.DB.prepare("SELECT id FROM members WHERE UPPER(referral_code)=?").bind(code).first();
-  if (!referrer) return json({ error: "推薦碼不正確，請確認後再試" }, 400);
-  if (await emailAlreadyRegistered(env, emailClean)) return json({ error: EMAIL_TAKEN_MSG }, 400);
-
+// 寄出信箱驗證碼（含同信箱 / 同 IP 的寄送頻率限制），註冊與會員修改信箱共用。
+async function issueEmailCode(request, env, emailClean, { subject, intro }) {
   const ip = request.headers.get("CF-Connecting-IP") || "unknown";
   await env.DB.prepare("DELETE FROM email_send_log WHERE created_at < datetime('now','-1 day')").run();
   const byEmail = await env.DB.prepare(
@@ -1076,10 +1064,10 @@ async function handleSendEmailCode(request, env) {
   try {
     await sendEmail(env, {
       to: emailClean,
-      subject: "【會員註冊】信箱驗證碼",
+      subject,
       text: `你的驗證碼是 ${plain}，${EMAIL_CODE_TTL_MIN} 分鐘內有效。如果不是你本人操作，請忽略這封信。`,
       html: `<div style="font-family:-apple-system,'PingFang TC','Microsoft JhengHei',sans-serif;max-width:420px;margin:auto;padding:20px;">
-        <p>你好，你正在註冊會員，驗證碼如下：</p>
+        <p>${intro}</p>
         <p style="font-size:32px;font-weight:700;letter-spacing:8px;margin:16px 0;">${plain}</p>
         <p style="color:#767B8C;font-size:13px;">${EMAIL_CODE_TTL_MIN} 分鐘內有效。如果不是你本人操作，請忽略這封信。</p></div>`,
     });
@@ -1093,6 +1081,27 @@ async function handleSendEmailCode(request, env) {
   }
   await env.DB.prepare("INSERT INTO email_send_log (email, ip) VALUES (?, ?)").bind(emailClean, ip).run();
   return json({ ok: true, cooldown: EMAIL_RESEND_COOLDOWN_SEC });
+}
+
+async function handleSendEmailCode(request, env) {
+  if (!emailVerifyEnabled(env)) return json({ error: "目前未啟用信箱驗證" }, 400);
+  const body = await request.json().catch(() => ({}));
+  const emailClean = String(body.email || "").trim().toLowerCase();
+  if (!emailClean || !EMAIL_RE.test(emailClean)) return json({ error: "請輸入正確的電子信箱格式" }, 400);
+  if (!isAllowedEmailDomain(emailClean)) {
+    return json({ error: "目前僅接受常見信箱（Gmail、Outlook、Hotmail、Yahoo、iCloud 等）" }, 400);
+  }
+  // 要先填對推薦碼才能寄信，避免有人拿這個端點亂寄信給別人
+  const code = String(body.referral_code || "").trim().toUpperCase();
+  if (!code) return json({ error: "請先填寫推薦碼" }, 400);
+  const referrer = await env.DB.prepare("SELECT id FROM members WHERE UPPER(referral_code)=?").bind(code).first();
+  if (!referrer) return json({ error: "推薦碼不正確，請確認後再試" }, 400);
+  if (await emailAlreadyRegistered(env, emailClean)) return json({ error: EMAIL_TAKEN_MSG }, 400);
+
+  return issueEmailCode(request, env, emailClean, {
+    subject: "【會員註冊】信箱驗證碼",
+    intro: "你好，你正在註冊會員，驗證碼如下：",
+  });
 }
 
 // 隱藏連結自行註冊：一定要填對某位會員的推薦碼才能建立帳號
@@ -1176,6 +1185,102 @@ async function handleMemberRegister(request, env) {
     }
   }
   return json({ error: "註冊失敗，請再試一次" }, 500);
+}
+
+// ---- 會員自行修改個人資料（手機、信箱；信箱要驗證）----
+function normalizePhone(raw) {
+  return String(raw || "").replace(/[\s-]/g, "").replace(/^(\+886|886)/, "0");
+}
+
+async function handleMemberProfileSendCode(session, request, env) {
+  if (!emailVerifyEnabled(env)) return json({ error: "目前未啟用信箱驗證" }, 400);
+  const body = await request.json().catch(() => ({}));
+  const emailClean = String(body.email || "").trim().toLowerCase();
+  if (!emailClean || !EMAIL_RE.test(emailClean)) return json({ error: "請輸入正確的電子信箱格式" }, 400);
+  if (!isAllowedEmailDomain(emailClean)) {
+    return json({ error: "目前僅接受常見信箱（Gmail、Outlook、Hotmail、Yahoo、iCloud 等）" }, 400);
+  }
+  const me = await env.DB.prepare("SELECT email FROM members WHERE id=?").bind(session.memberId).first();
+  if (!me) return json({ error: "會員不存在，請重新登入" }, 401);
+  if (me.email && me.email.toLowerCase() === emailClean) return json({ error: "這已經是你目前使用的信箱" }, 400);
+  const taken = await env.DB.prepare("SELECT id FROM members WHERE LOWER(email)=? AND id<>? LIMIT 1").bind(emailClean, session.memberId).first();
+  if (taken) return json({ error: EMAIL_TAKEN_MSG }, 400);
+  return issueEmailCode(request, env, emailClean, {
+    subject: "【會員資料】更改信箱驗證碼",
+    intro: "你好，你正在更改會員的電子信箱，驗證碼如下：",
+  });
+}
+
+async function handleMemberUpdateProfile(session, request, env) {
+  const body = await request.json().catch(() => ({}));
+  const me = await env.DB.prepare("SELECT id, phone, email FROM members WHERE id=?").bind(session.memberId).first();
+  if (!me) return json({ error: "會員不存在，請重新登入" }, 401);
+
+  const sets = [];
+  const binds = [];
+  let consumeCodeFor = null;
+
+  // 手機
+  if (body.phone !== undefined) {
+    const phoneClean = normalizePhone(body.phone);
+    if (!phoneClean) return json({ error: "請輸入手機號碼" }, 400);
+    if (!/^09[0-9]{8}$/.test(phoneClean)) return json({ error: "請輸入正確的台灣手機號碼（09 開頭共 10 碼）" }, 400);
+    if (phoneClean !== (me.phone || "")) {
+      sets.push("phone=?");
+      binds.push(phoneClean);
+    }
+  }
+
+  // 信箱：和目前不同才處理；啟用驗證時一定要有正確的驗證碼
+  if (body.email !== undefined) {
+    const emailClean = String(body.email || "").trim().toLowerCase();
+    if (!emailClean) return json({ error: "請輸入電子信箱" }, 400);
+    if (!EMAIL_RE.test(emailClean)) return json({ error: "請輸入正確的電子信箱格式" }, 400);
+    if (emailClean !== String(me.email || "").toLowerCase()) {
+      if (!isAllowedEmailDomain(emailClean)) {
+        return json({ error: "目前僅接受常見信箱（Gmail、Outlook、Hotmail、Yahoo、iCloud 等）" }, 400);
+      }
+      const taken = await env.DB.prepare("SELECT id FROM members WHERE LOWER(email)=? AND id<>? LIMIT 1").bind(emailClean, me.id).first();
+      if (taken) return json({ error: EMAIL_TAKEN_MSG }, 400);
+
+      let verifiedAt = null;
+      if (emailVerifyEnabled(env)) {
+        const emailCode = String(body.email_code || "").trim();
+        if (!/^[0-9]{6}$/.test(emailCode)) return json({ error: "請輸入 6 位數的信箱驗證碼" }, 400);
+        const row = await env.DB.prepare(
+          "SELECT code_hash, attempts, CASE WHEN expires_at < datetime('now') THEN 1 ELSE 0 END AS expired FROM email_codes WHERE email=?"
+        ).bind(emailClean).first();
+        if (!row) return json({ error: "請先按「寄送驗證碼」取得驗證碼" }, 400);
+        if (row.expired || row.attempts >= EMAIL_CODE_MAX_ATTEMPTS) {
+          await env.DB.prepare("DELETE FROM email_codes WHERE email=?").bind(emailClean).run();
+          return json({ error: row.expired ? "驗證碼已過期，請重新寄送" : "錯誤次數過多，請重新寄送驗證碼" }, 400);
+        }
+        const ok = (await hashEmailCode(env, emailClean, emailCode)) === row.code_hash;
+        if (!ok) {
+          await env.DB.prepare("UPDATE email_codes SET attempts = attempts + 1 WHERE email=?").bind(emailClean).run();
+          const left = EMAIL_CODE_MAX_ATTEMPTS - row.attempts - 1;
+          return json({ error: left > 0 ? `驗證碼不正確（還可以再試 ${left} 次）` : "驗證碼錯誤次數過多，請重新寄送驗證碼" }, 400);
+        }
+        verifiedAt = nowIso();
+        consumeCodeFor = emailClean;
+      }
+      sets.push("email=?", "email_verified_at=?");
+      binds.push(emailClean, verifiedAt);
+    }
+  }
+
+  if (!sets.length) return json({ error: "沒有任何變更" }, 400);
+  binds.push(me.id);
+  try {
+    await env.DB.prepare(`UPDATE members SET ${sets.join(", ")} WHERE id=?`).bind(...binds).run();
+  } catch (err) {
+    if (String(err.message || "").includes("UNIQUE")) return json({ error: EMAIL_TAKEN_MSG }, 400);
+    throw err;
+  }
+  if (consumeCodeFor) await env.DB.prepare("DELETE FROM email_codes WHERE email=?").bind(consumeCodeFor).run();
+
+  const fresh = await env.DB.prepare("SELECT phone, email, email_verified_at FROM members WHERE id=?").bind(me.id).first();
+  return json({ ok: true, ...fresh });
 }
 
 async function handleMemberOrders(session, request, env) {
@@ -1679,6 +1784,8 @@ export async function onRequest(context) {
       if (path === "/api/member/orders" && method === "GET") return handleMemberOrders(session, request, env);
       if (path === "/api/member/orders" && method === "POST") return handleMemberCreateOrder(session, request, env);
       if (path === "/api/member/announcement" && method === "GET") return handleMemberAnnouncement(env);
+      if (path === "/api/member/profile" && method === "POST") return handleMemberUpdateProfile(session, request, env);
+      if (path === "/api/member/profile/send-email-code" && method === "POST") return handleMemberProfileSendCode(session, request, env);
       if (path === "/api/member/points" && method === "GET") return handleMemberPoints(session, env);
       if (path === "/api/member/points/redeem" && method === "POST") return handleMemberRedeem(session, request, env);
       return json({ error: "Not found" }, 404);

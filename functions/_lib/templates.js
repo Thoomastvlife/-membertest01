@@ -2283,7 +2283,27 @@ export function memberHtml() {
       <div class="prof-row"><span>手機</span><span id="pf_phone">-</span></div>
       <div class="prof-row"><span>電子信箱</span><span id="pf_email">-</span></div>
       <div class="prof-row"><span>加入時間</span><span id="pf_created">-</span></div>
-      <div class="msg" style="color:var(--muted);margin-top:10px;">資料如需修改，請洽店家。</div>
+      <button type="button" class="btn secondary" id="pfEditBtn" onclick="openProfileEdit()">修改手機 / 信箱</button>
+      <div class="msg" style="color:var(--muted);margin-top:10px;">姓名、帳號如需修改，請洽店家。</div>
+
+      <div id="pfEdit" class="hidden" style="margin-top:6px;">
+        <label>手機</label>
+        <input id="pf_phone_in" type="tel" inputmode="numeric" placeholder="09 開頭共 10 碼" autocomplete="off" />
+        <label>電子信箱</label>
+        <input id="pf_email_in" type="email" autocomplete="off" oninput="onPfEmailInput()" />
+        <div id="pfCodeWrap" class="hidden">
+          <label>信箱驗證碼（更改信箱需要驗證）</label>
+          <div style="display:flex;gap:8px;">
+            <input id="pf_code_in" inputmode="numeric" maxlength="6" placeholder="6 位數驗證碼" autocomplete="one-time-code" />
+            <button type="button" class="btn secondary" id="pfSendBtn" style="white-space:nowrap;" onclick="sendProfileCode()">寄送驗證碼</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button type="button" class="btn" id="pfSaveBtn" onclick="saveProfile()">儲存</button>
+          <button type="button" class="btn secondary" onclick="closeProfileEdit()">取消</button>
+        </div>
+      </div>
+      <div id="pfMsg" class="msg"></div>
     </div>
     <!-- === 我的點數 === -->
     <div class="card" id="pointsCard">
@@ -2666,11 +2686,7 @@ async function checkSession(){
     const me = await api('/api/member/me');
     document.getElementById('whoami').textContent = me.name + '（' + me.account + '）';
     document.getElementById('myReferralCode').textContent = me.referral_code || '------';
-    document.getElementById('pf_name').textContent = me.name || '-';
-    document.getElementById('pf_account').textContent = me.account || '-';
-    document.getElementById('pf_phone').textContent = me.phone || '-';
-    document.getElementById('pf_email').textContent = me.email || '-';
-    document.getElementById('pf_created').textContent = me.created_at ? toTaipeiTime(me.created_at) : '-';
+    renderProfile(me);
     document.getElementById('loginView').classList.add('hidden');
     document.getElementById('appView').classList.remove('hidden');
     await loadRates();
@@ -2873,6 +2889,89 @@ async function createOrder(){
     loadOrders();
     loadPoints();
   }catch(e){ msg.textContent = e.message; msg.className='msg err'; }
+  finally{ btn.disabled = false; }
+}
+
+// ---- 個人資料：修改手機 / 信箱（信箱要驗證）----
+let meState = null;
+let pfCooldownTimer = null;
+
+function renderProfile(me){
+  meState = me;
+  document.getElementById('pf_name').textContent = me.name || '-';
+  document.getElementById('pf_account').textContent = me.account || '-';
+  document.getElementById('pf_phone').textContent = me.phone || '-';
+  const verified = me.email && me.email_verified_at ? ' <span style="color:var(--ok);font-size:12px;">✓ 已驗證</span>' : '';
+  document.getElementById('pf_email').innerHTML = (me.email ? ptsEsc(me.email) : '-') + verified;
+  document.getElementById('pf_created').textContent = me.created_at ? toTaipeiTime(me.created_at) : '-';
+}
+
+function openProfileEdit(){
+  document.getElementById('pf_phone_in').value = (meState && meState.phone) || '';
+  document.getElementById('pf_email_in').value = (meState && meState.email) || '';
+  document.getElementById('pf_code_in').value = '';
+  document.getElementById('pfMsg').textContent = '';
+  document.getElementById('pfEdit').classList.remove('hidden');
+  document.getElementById('pfEditBtn').classList.add('hidden');
+  onPfEmailInput();
+}
+
+function closeProfileEdit(){
+  document.getElementById('pfEdit').classList.add('hidden');
+  document.getElementById('pfEditBtn').classList.remove('hidden');
+  document.getElementById('pfMsg').textContent = '';
+}
+
+function pfEmailChanged(){
+  const v = document.getElementById('pf_email_in').value.trim().toLowerCase();
+  return !!meState && v !== String(meState.email || '').toLowerCase();
+}
+
+function onPfEmailInput(){
+  const need = pfEmailChanged() && meState && meState.email_verify;
+  document.getElementById('pfCodeWrap').classList.toggle('hidden', !need);
+}
+
+function startPfCooldown(sec){
+  const btn = document.getElementById('pfSendBtn');
+  clearInterval(pfCooldownTimer);
+  let left = sec;
+  btn.disabled = true; btn.textContent = '重新寄送（' + left + '）';
+  pfCooldownTimer = setInterval(function(){
+    left--;
+    if (left <= 0){ clearInterval(pfCooldownTimer); btn.disabled = false; btn.textContent = '重新寄送驗證碼'; }
+    else btn.textContent = '重新寄送（' + left + '）';
+  }, 1000);
+}
+
+async function sendProfileCode(){
+  const msg = document.getElementById('pfMsg');
+  const email = document.getElementById('pf_email_in').value.trim();
+  msg.className = 'msg'; msg.textContent = '';
+  if (!email){ msg.textContent = '請先輸入新的電子信箱'; msg.className = 'msg err'; return; }
+  const btn = document.getElementById('pfSendBtn');
+  btn.disabled = true;
+  try{
+    const r = await api('/api/member/profile/send-email-code', {method:'POST', body: JSON.stringify({email})});
+    msg.textContent = '驗證碼已寄到 ' + email + '，請到信箱查看（若沒收到，也請看垃圾郵件）'; msg.className = 'msg ok';
+    startPfCooldown(r.cooldown || 60);
+  }catch(e){ msg.textContent = e.message; msg.className = 'msg err'; btn.disabled = false; }
+}
+
+async function saveProfile(){
+  const msg = document.getElementById('pfMsg');
+  const btn = document.getElementById('pfSaveBtn');
+  msg.className = 'msg'; msg.textContent = '';
+  const body = {phone: document.getElementById('pf_phone_in').value.trim(), email: document.getElementById('pf_email_in').value.trim()};
+  if (pfEmailChanged() && meState.email_verify) body.email_code = document.getElementById('pf_code_in').value.trim();
+  btn.disabled = true;
+  try{
+    const r = await api('/api/member/profile', {method:'POST', body: JSON.stringify(body)});
+    meState.phone = r.phone; meState.email = r.email; meState.email_verified_at = r.email_verified_at;
+    renderProfile(meState);
+    closeProfileEdit();
+    msg.textContent = '已更新'; msg.className = 'msg ok';
+  }catch(e){ msg.textContent = e.message; msg.className = 'msg err'; }
   finally{ btn.disabled = false; }
 }
 
