@@ -198,6 +198,8 @@ export function publicOrderView(o) {
     original_amount: o.original_amount ?? null,
     coupon_code: o.coupon_code || null,
     coupon_discount: o.coupon_discount ?? null,
+    points_used: o.points_used || 0,
+    points_discount: o.points_discount ?? null,
   };
 }
 

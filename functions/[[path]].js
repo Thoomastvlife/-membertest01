@@ -1,4 +1,14 @@
 import { adminHtml, payHtml, memberHtml, memberRegisterHtml } from "./_lib/templates.js";
+import {
+  getPointsConfig,
+  savePointsConfig,
+  getBalance,
+  addLedger,
+  spendAtomic,
+  reconcileOrderPoints,
+  reconcileOrderById,
+  reconcileMemberSpends,
+} from "./_lib/points.js";
 import { getRateRules, saveRateRules, getAllRateRules, getRateGroupForPlatform, RATE_GROUPS, DEFAULT_RATE_RULES, MIN_QUOTE_AMOUNT, calcCoins } from "./_lib/rates.js";
 
 // 會員自助下單的最低金額，跟查價系統的最低查詢金額保持一致
@@ -193,6 +203,8 @@ async function handleAddMember(request, env) {
 
 async function handleDeleteMember(id, env) {
   await env.DB.prepare("DELETE FROM members WHERE id=?").bind(id).run();
+  await env.DB.prepare("DELETE FROM points_ledger WHERE member_id=?").bind(id).run();
+  await env.DB.prepare("DELETE FROM points_redemptions WHERE member_id=?").bind(id).run();
   return json({ ok: true });
 }
 
@@ -691,17 +703,20 @@ async function handleUploadBarcode(id, request, env) {
 
 async function handleMarkPaid(id, env) {
   await env.DB.prepare("UPDATE orders SET status='paid', paid_at=? WHERE id=?").bind(nowIso(), id).run();
+  await reconcileOrderById(env, id);
   return json({ ok: true });
 }
 
 async function handleCancelOrder(id, env) {
   await env.DB.prepare("UPDATE orders SET status='cancelled' WHERE id=?").bind(id).run();
+  await reconcileOrderById(env, id);
   return json({ ok: true });
 }
 
 async function handleDeleteOrder(id, env) {
-  const order = await env.DB.prepare("SELECT id FROM orders WHERE id=?").bind(id).first();
+  const order = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).first();
   if (!order) return json({ error: "找不到訂單" }, 404);
+  await reconcileOrderPoints(env, order, { gone: true });
   await env.DB.prepare("DELETE FROM orders WHERE id=?").bind(id).run();
   return json({ ok: true });
 }
@@ -789,6 +804,7 @@ async function handleCorrectOrder(id, request, env) {
 
   binds.push(id);
   await env.DB.prepare(`UPDATE orders SET ${fields.join(", ")} WHERE id=?`).bind(...binds).run();
+  await reconcileOrderById(env, id, { recalc: body.amount !== undefined && body.amount !== null && String(body.amount).trim() !== "" });
   return json({ ok: true });
 }
 
@@ -831,7 +847,7 @@ async function handleExport(request, env) {
     cancelled: "已取消",
   };
 
-  const header = ["訂單編號", "建立時間", "會員/客人", "儲值平台", "儲值帳號", "儲值密碼", "原始金額", "優惠碼", "折抵金額", "實付金額", "預計獲得幣數", "付款方式", "狀態", "訂單完成(結案)", "付款證明末幾碼", "付款方式選擇時間", "完成付款時間", "到期時間"];
+  const header = ["訂單編號", "建立時間", "會員/客人", "儲值平台", "儲值帳號", "儲值密碼", "原始金額", "優惠碼", "折抵金額", "使用點數", "點數折抵", "實付金額", "預計獲得幣數", "付款方式", "狀態", "訂單完成(結案)", "付款證明末幾碼", "付款方式選擇時間", "完成付款時間", "到期時間"];
   const rows = results.map((o) => [
     formatOrderNo(o.id),
     toTaipeiTime(o.created_at),
@@ -842,6 +858,8 @@ async function handleExport(request, env) {
     o.original_amount != null ? o.original_amount : "",
     o.coupon_code || "",
     o.coupon_discount != null ? o.coupon_discount : "",
+    o.points_used || "",
+    o.points_discount != null ? o.points_discount : "",
     o.amount,
     o.coins != null ? o.coins : "",
     PM_LABEL[o.payment_method] || "",
@@ -1164,7 +1182,7 @@ async function handleMemberOrders(session, request, env) {
   const url = new URL(request.url);
   const month = url.searchParams.get("month");
   let query =
-    "SELECT id, token, amount, platform, payment_method, status, is_completed, created_at, paid_at, expires_at, original_amount, coupon_code, coupon_discount, coins FROM orders WHERE member_id=?";
+    "SELECT id, token, amount, platform, payment_method, status, is_completed, created_at, paid_at, expires_at, original_amount, coupon_code, coupon_discount, coins, points_used, points_discount FROM orders WHERE member_id=?";
   const binds = [session.memberId];
   if (month) {
     query += " AND strftime('%Y-%m', created_at) = ?";
@@ -1198,6 +1216,23 @@ async function handleMemberCreateOrder(session, request, env) {
     finalAmount = couponResult.finalAmount;
   }
 
+  // 點數折抵：一律以伺服器端的餘額與設定驗證，不採信前端算的數字
+  let pointsUsed = 0;
+  let pointsDiscount = 0;
+  const reqPoints = Math.floor(Number(body.use_points) || 0);
+  if (reqPoints > 0) {
+    const pcfg = await getPointsConfig(env);
+    if (!pcfg.enabled) return json({ error: "目前未開放點數折抵" }, 400);
+    const balance = await getBalance(env, member.id);
+    if (reqPoints > balance) return json({ error: `點數不足（目前餘額 ${balance} 點）` }, 400);
+    const maxPoints = Math.floor((finalAmount * pcfg.maxPercent) / 100 / pcfg.redeemValue);
+    if (reqPoints > maxPoints) return json({ error: `此訂單最多可使用 ${maxPoints} 點（折抵上限 ${pcfg.maxPercent}%）` }, 400);
+    pointsUsed = reqPoints;
+    pointsDiscount = reqPoints * pcfg.redeemValue;
+    finalAmount = finalAmount - pointsDiscount;
+  }
+  const hasDiscount = !!couponResult || pointsUsed > 0;
+
   // 預計獲得幣數：以優惠碼折抵前的金額（amt）+ 下單當下的費率試算。
   // TikTok 用自己的一組費率，快手/小紅書/陸抖 共用另一組。
   // 一律由伺服器端計算，不採信前端送來的數字，避免被竄改。
@@ -1211,8 +1246,9 @@ async function handleMemberCreateOrder(session, request, env) {
 
   const inserted = await env.DB.prepare(
     `INSERT INTO orders (token, amount, member_id, member_name_snapshot, status, expires_at,
-      original_amount, coupon_code, coupon_discount, platform, platform_account, platform_password, coins)
-     VALUES (?, ?, ?, ?, 'pending_method', ?, ?, ?, ?, ?, ?, ?, ?)`
+      original_amount, coupon_code, coupon_discount, platform, platform_account, platform_password, coins,
+      points_used, points_discount)
+     VALUES (?, ?, ?, ?, 'pending_method', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       token,
@@ -1220,15 +1256,32 @@ async function handleMemberCreateOrder(session, request, env) {
       member.id,
       member.name,
       expiresAt,
-      couponResult ? amt : null,
+      hasDiscount ? amt : null,
       couponResult ? couponResult.coupon.code : null,
       couponResult ? couponResult.discount : null,
       platform,
       platformAccount,
       platformPassword,
-      coins
+      coins,
+      pointsUsed,
+      pointsUsed > 0 ? pointsDiscount : null
     )
     .run();
+
+  // 先下單、再原子性扣點；若這一瞬間餘額被別的請求用掉了，就撤銷這筆訂單
+  if (pointsUsed > 0) {
+    const okSpend = await spendAtomic(env, {
+      memberId: member.id,
+      points: pointsUsed,
+      type: "spend",
+      orderId: inserted.meta.last_row_id,
+      note: `訂單 ${formatOrderNo(inserted.meta.last_row_id)} 折抵`,
+    });
+    if (!okSpend) {
+      await env.DB.prepare("DELETE FROM orders WHERE id=?").bind(inserted.meta.last_row_id).run();
+      return json({ error: "點數不足，請重新整理後再試" }, 400);
+    }
+  }
 
   if (couponResult) await incrementCouponUsage(env, couponResult.coupon.id);
 
@@ -1243,9 +1296,244 @@ async function handleMemberCreateOrder(session, request, env) {
     expires_at: expiresAt,
     amount: finalAmount,
     discount: couponResult ? couponResult.discount : 0,
+    points_used: pointsUsed,
+    points_discount: pointsUsed > 0 ? pointsDiscount : 0,
     coins,
     order_no: formatOrderNo(inserted.meta.last_row_id),
   });
+}
+
+// ---- 點數系統 ----
+
+// 會員：查看自己的點數（餘額、明細、可兌換商品、兌換紀錄、規則）
+async function handleMemberPoints(session, env) {
+  const cfg = await getPointsConfig(env);
+  await reconcileMemberSpends(env, session.memberId);
+  const balance = await getBalance(env, session.memberId);
+  const ledger = await env.DB.prepare(
+    "SELECT id, delta, type, order_id, note, created_at FROM points_ledger WHERE member_id=? ORDER BY id DESC LIMIT 100"
+  )
+    .bind(session.memberId)
+    .all();
+  const items = await env.DB.prepare(
+    "SELECT id, name, description, cost, stock FROM points_items WHERE is_active=1 AND (stock IS NULL OR stock>0) ORDER BY cost ASC, id ASC"
+  ).all();
+  const redemptions = await env.DB.prepare(
+    "SELECT id, item_name, cost, status, member_note, admin_note, created_at, processed_at FROM points_redemptions WHERE member_id=? ORDER BY id DESC LIMIT 50"
+  )
+    .bind(session.memberId)
+    .all();
+  return json({
+    enabled: cfg.enabled,
+    balance,
+    config: { earn_per: cfg.earnPer, redeem_value: cfg.redeemValue, max_percent: cfg.maxPercent },
+    ledger: ledger.results,
+    items: items.results,
+    redemptions: redemptions.results,
+  });
+}
+
+// 會員：用點數兌換商城商品
+async function handleMemberRedeem(session, request, env) {
+  const cfg = await getPointsConfig(env);
+  if (!cfg.enabled) return json({ error: "目前未開放點數兌換" }, 400);
+  const body = await request.json().catch(() => ({}));
+  const itemId = parseInt(body.item_id, 10);
+  if (!itemId) return json({ error: "請選擇要兌換的商品" }, 400);
+  const memberNote = typeof body.note === "string" ? body.note.trim().slice(0, 300) : "";
+
+  const item = await env.DB.prepare("SELECT * FROM points_items WHERE id=?").bind(itemId).first();
+  if (!item || !item.is_active) return json({ error: "此商品已下架" }, 400);
+
+  // 1) 先扣庫存（有庫存限制時，條件式更新避免超賣）
+  const stockRes = await env.DB.prepare(
+    "UPDATE points_items SET stock = CASE WHEN stock IS NULL THEN NULL ELSE stock-1 END WHERE id=? AND is_active=1 AND (stock IS NULL OR stock>0)"
+  )
+    .bind(itemId)
+    .run();
+  if (stockRes.meta.changes === 0) return json({ error: "此商品已兌換完畢" }, 400);
+
+  const restock = async () => {
+    await env.DB.prepare("UPDATE points_items SET stock = CASE WHEN stock IS NULL THEN NULL ELSE stock+1 END WHERE id=?").bind(itemId).run();
+  };
+
+  // 2) 建立兌換單、原子性扣點
+  const ins = await env.DB.prepare(
+    "INSERT INTO points_redemptions (member_id, item_id, item_name, cost, status, member_note) VALUES (?, ?, ?, ?, 'pending', ?)"
+  )
+    .bind(session.memberId, item.id, item.name, item.cost, memberNote || null)
+    .run();
+  const redemptionId = ins.meta.last_row_id;
+  const okSpend = await spendAtomic(env, {
+    memberId: session.memberId,
+    points: item.cost,
+    type: "redeem",
+    refId: redemptionId,
+    note: `兌換「${item.name}」`,
+  });
+  if (!okSpend) {
+    await env.DB.prepare("DELETE FROM points_redemptions WHERE id=?").bind(redemptionId).run();
+    await restock();
+    const balance = await getBalance(env, session.memberId);
+    return json({ error: `點數不足（需要 ${item.cost} 點，目前 ${balance} 點）` }, 400);
+  }
+  return json({ ok: true, balance: await getBalance(env, session.memberId) });
+}
+
+// 後台：點數設定
+async function handleGetPointsConfigAdmin(env) {
+  const cfg = await getPointsConfig(env);
+  return json({ enabled: cfg.enabled, earn_per: cfg.earnPer, redeem_value: cfg.redeemValue, max_percent: cfg.maxPercent });
+}
+
+async function handleSavePointsConfigAdmin(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const r = await savePointsConfig(env, body);
+  if (!r.ok) return json({ error: r.error }, 400);
+  return json({ ok: true });
+}
+
+// 後台：所有會員的點數餘額
+async function handleAdminPointsMembers(env) {
+  const { results } = await env.DB.prepare(
+    `SELECT m.id, m.name, m.account,
+            COALESCE((SELECT SUM(delta) FROM points_ledger WHERE member_id=m.id), 0) AS balance,
+            COALESCE((SELECT SUM(delta) FROM points_ledger WHERE member_id=m.id AND delta>0), 0) AS earned_total
+     FROM members m ORDER BY balance DESC, m.id ASC`
+  ).all();
+  return json(results);
+}
+
+async function handleAdminPointsLedger(request, env) {
+  const memberId = parseInt(new URL(request.url).searchParams.get("member_id"), 10);
+  if (!memberId) return json({ error: "缺少會員" }, 400);
+  const { results } = await env.DB.prepare(
+    "SELECT id, delta, type, order_id, note, created_at FROM points_ledger WHERE member_id=? ORDER BY id DESC LIMIT 200"
+  )
+    .bind(memberId)
+    .all();
+  return json(results);
+}
+
+// 後台：手動加減點
+async function handleAdminPointsAdjust(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const memberId = parseInt(body.member_id, 10);
+  const delta = Math.trunc(Number(body.delta));
+  const note = typeof body.note === "string" ? body.note.trim().slice(0, 200) : "";
+  if (!memberId) return json({ error: "請選擇會員" }, 400);
+  if (!delta) return json({ error: "請輸入要加或扣的點數（不可為 0）" }, 400);
+  if (Math.abs(delta) > 1000000) return json({ error: "單次調整點數過大" }, 400);
+  if (!note) return json({ error: "請填寫調整原因" }, 400);
+  const m = await env.DB.prepare("SELECT id FROM members WHERE id=?").bind(memberId).first();
+  if (!m) return json({ error: "找不到此會員" }, 404);
+
+  if (delta > 0) {
+    await addLedger(env, { memberId, delta, type: "admin", note });
+  } else {
+    const ok = await spendAtomic(env, { memberId, points: -delta, type: "admin", note });
+    if (!ok) return json({ error: "該會員點數不足，無法扣除這麼多" }, 400);
+  }
+  return json({ ok: true, balance: await getBalance(env, memberId) });
+}
+
+// 後台：商城商品
+async function handleAdminListPointItems(env) {
+  const { results } = await env.DB.prepare("SELECT * FROM points_items ORDER BY is_active DESC, cost ASC, id ASC").all();
+  return json(results);
+}
+
+function parseItemBody(body, partial = false) {
+  const out = {};
+  if (!partial || body.name !== undefined) {
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    if (!name) return { error: "請輸入商品名稱" };
+    out.name = name.slice(0, 100);
+  }
+  if (!partial || body.description !== undefined) out.description = typeof body.description === "string" ? body.description.trim().slice(0, 500) : "";
+  if (!partial || body.cost !== undefined) {
+    const cost = parseInt(body.cost, 10);
+    if (!cost || cost < 1) return { error: "所需點數必須是 1 以上的整數" };
+    out.cost = cost;
+  }
+  if (!partial || body.stock !== undefined) {
+    if (body.stock === null || body.stock === "" || body.stock === undefined) out.stock = null;
+    else {
+      const st = parseInt(body.stock, 10);
+      if (isNaN(st) || st < 0) return { error: "庫存必須是 0 以上的整數，不限請留空" };
+      out.stock = st;
+    }
+  }
+  if (body.is_active !== undefined) out.is_active = body.is_active ? 1 : 0;
+  return out;
+}
+
+async function handleAdminCreatePointItem(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const v = parseItemBody(body);
+  if (v.error) return json({ error: v.error }, 400);
+  await env.DB.prepare("INSERT INTO points_items (name, description, cost, stock, is_active) VALUES (?, ?, ?, ?, 1)")
+    .bind(v.name, v.description, v.cost, v.stock)
+    .run();
+  return json({ ok: true });
+}
+
+async function handleAdminUpdatePointItem(id, request, env) {
+  const existing = await env.DB.prepare("SELECT id FROM points_items WHERE id=?").bind(id).first();
+  if (!existing) return json({ error: "找不到此商品" }, 404);
+  const body = await request.json().catch(() => ({}));
+  const v = parseItemBody(body, true);
+  if (v.error) return json({ error: v.error }, 400);
+  const keys = Object.keys(v);
+  if (!keys.length) return json({ error: "沒有要更新的內容" }, 400);
+  await env.DB.prepare(`UPDATE points_items SET ${keys.map((k) => k + "=?").join(", ")} WHERE id=?`)
+    .bind(...keys.map((k) => v[k]), id)
+    .run();
+  return json({ ok: true });
+}
+
+async function handleAdminDeletePointItem(id, env) {
+  await env.DB.prepare("DELETE FROM points_items WHERE id=?").bind(id).run();
+  return json({ ok: true });
+}
+
+// 後台：兌換單
+async function handleAdminListRedemptions(request, env) {
+  const status = new URL(request.url).searchParams.get("status");
+  let q =
+    "SELECT r.*, m.name AS member_name, m.account AS member_account, m.phone AS member_phone FROM points_redemptions r LEFT JOIN members m ON m.id=r.member_id";
+  const binds = [];
+  if (status && ["pending", "fulfilled", "rejected"].includes(status)) {
+    q += " WHERE r.status=?";
+    binds.push(status);
+  }
+  q += " ORDER BY CASE r.status WHEN 'pending' THEN 0 ELSE 1 END, r.id DESC LIMIT 200";
+  const { results } = await env.DB.prepare(q).bind(...binds).all();
+  return json(results);
+}
+
+async function handleAdminProcessRedemption(id, action, request, env) {
+  const body = await request.json().catch(() => ({}));
+  const adminNote = typeof body.admin_note === "string" ? body.admin_note.trim().slice(0, 300) : "";
+  const newStatus = action === "fulfill" ? "fulfilled" : "rejected";
+  const r = await env.DB.prepare("UPDATE points_redemptions SET status=?, admin_note=?, processed_at=? WHERE id=? AND status='pending'")
+    .bind(newStatus, adminNote || null, nowIso(), id)
+    .run();
+  if (r.meta.changes === 0) return json({ error: "找不到此兌換單，或已經處理過了" }, 400);
+  if (newStatus === "rejected") {
+    const red = await env.DB.prepare("SELECT * FROM points_redemptions WHERE id=?").bind(id).first();
+    await addLedger(env, {
+      memberId: red.member_id,
+      delta: red.cost,
+      type: "refund",
+      refId: red.id,
+      note: `兌換「${red.item_name}」未成立，退回點數${adminNote ? "（" + adminNote + "）" : ""}`,
+    });
+    if (red.item_id) {
+      await env.DB.prepare("UPDATE points_items SET stock = CASE WHEN stock IS NULL THEN NULL ELSE stock+1 END WHERE id=?").bind(red.item_id).run();
+    }
+  }
+  return json({ ok: true });
 }
 
 // ---- 後台推播通知 ----
@@ -1382,6 +1670,8 @@ export async function onRequest(context) {
       if (path === "/api/member/orders" && method === "GET") return handleMemberOrders(session, request, env);
       if (path === "/api/member/orders" && method === "POST") return handleMemberCreateOrder(session, request, env);
       if (path === "/api/member/announcement" && method === "GET") return handleMemberAnnouncement(env);
+      if (path === "/api/member/points" && method === "GET") return handleMemberPoints(session, env);
+      if (path === "/api/member/points/redeem" && method === "POST") return handleMemberRedeem(session, request, env);
       return json({ error: "Not found" }, 404);
     }
 
@@ -1449,6 +1739,20 @@ export async function onRequest(context) {
 
       const uncompleteMatch = path.match(/^\/api\/admin\/orders\/(\d+)\/uncomplete$/);
       if (uncompleteMatch && method === "POST") return handleUncompleteOrder(uncompleteMatch[1], env);
+
+      if (path === "/api/admin/points/config" && method === "GET") return handleGetPointsConfigAdmin(env);
+      if (path === "/api/admin/points/config" && method === "POST") return handleSavePointsConfigAdmin(request, env);
+      if (path === "/api/admin/points/members" && method === "GET") return handleAdminPointsMembers(env);
+      if (path === "/api/admin/points/ledger" && method === "GET") return handleAdminPointsLedger(request, env);
+      if (path === "/api/admin/points/adjust" && method === "POST") return handleAdminPointsAdjust(request, env);
+      if (path === "/api/admin/points/items" && method === "GET") return handleAdminListPointItems(env);
+      if (path === "/api/admin/points/items" && method === "POST") return handleAdminCreatePointItem(request, env);
+      const pointItemMatch = path.match(/^\/api\/admin\/points\/items\/(\d+)$/);
+      if (pointItemMatch && method === "PATCH") return handleAdminUpdatePointItem(pointItemMatch[1], request, env);
+      if (pointItemMatch && method === "DELETE") return handleAdminDeletePointItem(pointItemMatch[1], env);
+      if (path === "/api/admin/points/redemptions" && method === "GET") return handleAdminListRedemptions(request, env);
+      const redemptionMatch = path.match(/^\/api\/admin\/points\/redemptions\/(\d+)\/(fulfill|reject)$/);
+      if (redemptionMatch && method === "POST") return handleAdminProcessRedemption(redemptionMatch[1], redemptionMatch[2], request, env);
 
       if (path === "/api/admin/export" && method === "GET") return handleExport(request, env);
       if (path === "/api/admin/stats/monthly" && method === "GET") return handleMonthlyStats(request, env);

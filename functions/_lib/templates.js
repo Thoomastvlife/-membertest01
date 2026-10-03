@@ -1,16 +1,5 @@
 import { ALLOWED_EMAIL_DOMAINS } from "./helpers.js";
 
-const SUPPORT_EMAIL = "service@ytgp168.com";
-const SITE_FOOTER = `
-<footer style="width:100%;box-sizing:border-box;max-width:640px;margin:28px auto 24px;padding:16px 18px 0;border-top:1px solid var(--line,#E2E4ED);text-align:center;font-size:12px;line-height:1.7;color:var(--muted,#767B8C)">
-  <div style="font-weight:600;margin-bottom:4px">網頁宣告</div>
-  <div>本網站為會員自助查詢與訂單結帳頁面，頁面所顯示之匯率、費用及預估金額僅供參考，可能隨時調整，實際金額以訂單確認內容為準。</div>
-  <div>請妥善保管您的帳號與密碼，並於付款前再次確認訂單資訊與收款資料。</div>
-  <div style="margin-top:6px">客服信箱：<a href="mailto:${SUPPORT_EMAIL}" style="color:inherit;text-decoration:underline">${SUPPORT_EMAIL}</a></div>
-</footer>
-`;
-
-
 export function adminHtml() {
   return `<!DOCTYPE html>
 <html lang="zh-Hant">
@@ -131,6 +120,7 @@ export function adminHtml() {
     <button data-tab="staff" onclick="showTab('staff')">員工帳號</button>
     <button data-tab="rates" onclick="showTab('rates')">費率設定</button>
     <button data-tab="coupons" onclick="showTab('coupons')">優惠碼</button>
+    <button data-tab="points" onclick="showTab('points')">點數系統</button>
   </nav>
   <main>
 
@@ -377,6 +367,73 @@ export function adminHtml() {
       </div>
     </section>
 
+    <section id="tab-points" class="tab hidden">
+      <div class="card">
+        <h2>點數規則</h2>
+        <label style="display:flex;align-items:center;gap:8px;color:var(--ink);"><input id="pt_enabled" type="checkbox" style="width:auto;" /> 啟用點數（關閉後不再發點、不能折抵與兌換，已累積的點數保留）</label>
+        <div class="grid2">
+          <div><label>每實付幾元得 1 點</label><input id="pt_earn_per" type="number" min="1" step="1" /></div>
+          <div><label>1 點可折抵幾元</label><input id="pt_redeem_value" type="number" min="1" step="1" /></div>
+        </div>
+        <label>單筆訂單最多可用點數折抵幾 %（1～90）</label>
+        <input id="pt_max_percent" type="number" min="1" max="90" step="1" />
+        <small class="hint">訂單標記為「已付款」時依實付金額發點；訂單取消、刪除或金額更正時，點數會自動跟著扣回或調整。</small><br/>
+        <button class="btn" onclick="savePointsConfigAdmin()">儲存規則</button>
+        <div id="pt_cfg_msg" class="msg"></div>
+      </div>
+
+      <div class="card">
+        <h2>兌換單</h2>
+        <table id="pt_red_table">
+          <thead><tr><th>時間</th><th>會員</th><th>商品</th><th>點數</th><th>狀態</th><th>操作</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div id="pt_red_msg" class="msg"></div>
+      </div>
+
+      <div class="card">
+        <h2 id="pt_item_form_title">點數商城商品</h2>
+        <div class="grid2">
+          <div><label>商品名稱 *</label><input id="pt_item_name" /></div>
+          <div><label>所需點數 *</label><input id="pt_item_cost" type="number" min="1" step="1" /></div>
+        </div>
+        <div class="grid2">
+          <div><label>說明（選填）</label><input id="pt_item_desc" /></div>
+          <div><label>庫存（不限請留空）</label><input id="pt_item_stock" type="number" min="0" step="1" placeholder="不限" /></div>
+        </div>
+        <button class="btn" id="pt_item_submit" onclick="submitPointItem()">新增商品</button>
+        <button class="btn secondary hidden" id="pt_item_cancel" onclick="cancelEditPointItem()">取消編輯</button>
+        <div id="pt_item_msg" class="msg"></div>
+        <table id="pt_item_table">
+          <thead><tr><th>商品</th><th>點數</th><th>庫存</th><th>狀態</th><th>操作</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h2>會員點數</h2>
+        <div class="grid2">
+          <div><label>調整點數（正數加、負數扣）</label><input id="pt_adj_delta" type="number" step="1" placeholder="例如：50 或 -20" /></div>
+          <div><label>調整原因 *</label><input id="pt_adj_note" placeholder="例如：活動贈點" /></div>
+        </div>
+        <small class="hint">先在下方列表點「選擇」挑會員，再按送出。</small><br/>
+        <div id="pt_adj_target" class="msg" style="color:var(--muted);">尚未選擇會員</div>
+        <button class="btn" onclick="submitPointAdjust()">送出調整</button>
+        <div id="pt_adj_msg" class="msg"></div>
+        <table id="pt_mem_table">
+          <thead><tr><th>會員</th><th>帳號</th><th>目前點數</th><th>累計獲得</th><th>操作</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div id="pt_ledger_wrap" class="hidden">
+          <h2 id="pt_ledger_title" style="margin-top:18px;">點數明細</h2>
+          <table id="pt_ledger_table">
+            <thead><tr><th>時間</th><th>異動</th><th>類型</th><th>說明</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
   </main>
 </div>
 
@@ -578,6 +635,7 @@ function showTab(name, opts){
   if (name==='staff') loadStaff();
   if (name==='rates') loadRates();
   if (name==='coupons') loadCoupons();
+  if (name==='points') loadPointsAdmin();
 }
 
 // ---- 訂單自動更新（輪詢）----
@@ -801,9 +859,11 @@ function renderOrders(){
     if (o.proof_image) proofInfo += \`<img class="proof-thumb" src="\${o.proof_image}" onclick="viewProof(\${o.id})" />\`;
     if (!proofInfo) proofInfo = '<span class="muted" style="color:var(--muted)">-</span>';
 
-    const couponInfo = o.coupon_code
+    const ptsNote = o.points_used > 0 ? \`<br/><span class="muted" style="color:var(--muted)">點數 \${o.points_used} 點 -$\${o.points_discount}</span>\` : '';
+    const couponInfo0 = o.coupon_code
       ? \`<code>\${escapeHtml(o.coupon_code)}</code><br/><span class="muted" style="color:var(--muted)">-$\${o.coupon_discount} (原$\${o.original_amount})</span>\`
-      : '<span class="muted" style="color:var(--muted)">-</span>';
+      : (o.points_used > 0 ? '' : '<span class="muted" style="color:var(--muted)">-</span>');
+    const couponInfo = couponInfo0 + ptsNote;
 
     const accountInfo = (o.platform_account || o.platform_password)
       ? \`帳號：\${escapeHtml(o.platform_account||'-')}<br/>密碼：<code>\${escapeHtml(o.platform_password||'-')}</code>\`
@@ -1339,6 +1399,195 @@ async function resetRates(group) {
 let couponsCache = [];
 let editingCouponId = null;
 
+
+// ================= 點數系統（後台）=================
+let ptItemsCache = [];
+let ptEditingItemId = null;
+let ptSelectedMember = null;
+const PT_TYPE = {earn:'付款回饋', spend:'訂單折抵', redeem:'商城兌換', refund:'退回', admin:'店家調整'};
+const PT_RED = {pending:'待處理', fulfilled:'已完成', rejected:'已拒絕並退點'};
+
+function loadPointsAdmin(){
+  loadPointsConfigAdmin();
+  loadRedemptionsAdmin();
+  loadPointItemsAdmin();
+  loadPointMembersAdmin();
+}
+
+async function loadPointsConfigAdmin(){
+  try{
+    const c = await api('/api/admin/points/config');
+    document.getElementById('pt_enabled').checked = !!c.enabled;
+    document.getElementById('pt_earn_per').value = c.earn_per;
+    document.getElementById('pt_redeem_value').value = c.redeem_value;
+    document.getElementById('pt_max_percent').value = c.max_percent;
+  }catch(e){ const m=document.getElementById('pt_cfg_msg'); m.textContent=e.message; m.className='msg err'; }
+}
+
+async function savePointsConfigAdmin(){
+  const m = document.getElementById('pt_cfg_msg');
+  m.textContent=''; m.className='msg';
+  try{
+    await api('/api/admin/points/config', {method:'POST', body: JSON.stringify({
+      enabled: document.getElementById('pt_enabled').checked,
+      earn_per: document.getElementById('pt_earn_per').value,
+      redeem_value: document.getElementById('pt_redeem_value').value,
+      max_percent: document.getElementById('pt_max_percent').value,
+    })});
+    m.textContent='已儲存'; m.className='msg ok';
+  }catch(e){ m.textContent=e.message; m.className='msg err'; }
+}
+
+async function loadRedemptionsAdmin(){
+  const m = document.getElementById('pt_red_msg');
+  try{
+    const list = await api('/api/admin/points/redemptions');
+    document.querySelector('#pt_red_table tbody').innerHTML = list.map(function(r){
+      const ops = r.status === 'pending'
+        ? '<button class="btn small" onclick="processRedemption('+r.id+',\\'fulfill\\')">標記完成</button>' +
+          '<button class="btn danger small" onclick="processRedemption('+r.id+',\\'reject\\')">拒絕並退點</button>'
+        : (r.admin_note ? escapeHtml(r.admin_note) : '-');
+      return '<tr><td data-label="時間">'+toTaipeiTime(r.created_at)+'</td>' +
+        '<td data-label="會員">'+escapeHtml(r.member_name||'(已刪除)')+(r.member_phone ? '<br/><span style="color:var(--muted);font-size:12px;">'+escapeHtml(r.member_phone)+'</span>' : '')+'</td>' +
+        '<td data-label="商品">'+escapeHtml(r.item_name)+(r.member_note ? '<br/><span style="color:var(--muted);font-size:12px;">備註：'+escapeHtml(r.member_note)+'</span>' : '')+'</td>' +
+        '<td data-label="點數">'+r.cost+'</td>' +
+        '<td data-label="狀態">'+(PT_RED[r.status]||r.status)+'</td>' +
+        '<td data-label="操作">'+ops+'</td></tr>';
+    }).join('') || '<tr><td colspan="6">尚無兌換單</td></tr>';
+  }catch(e){ m.textContent=e.message; m.className='msg err'; }
+}
+
+async function processRedemption(id, action){
+  const isReject = action === 'reject';
+  const note = prompt(isReject ? '拒絕原因（會顯示給會員，點數會退回）：' : '備註（選填，會顯示給會員）：', '');
+  if (note === null) return;
+  const m = document.getElementById('pt_red_msg');
+  m.textContent=''; m.className='msg';
+  try{
+    await api('/api/admin/points/redemptions/'+id+'/'+action, {method:'POST', body: JSON.stringify({admin_note: note})});
+    loadRedemptionsAdmin(); loadPointItemsAdmin(); loadPointMembersAdmin();
+  }catch(e){ m.textContent=e.message; m.className='msg err'; }
+}
+
+async function loadPointItemsAdmin(){
+  const m = document.getElementById('pt_item_msg');
+  try{
+    ptItemsCache = await api('/api/admin/points/items');
+    document.querySelector('#pt_item_table tbody').innerHTML = ptItemsCache.map(function(it){
+      return '<tr><td data-label="商品">'+escapeHtml(it.name)+(it.description ? '<br/><span style="color:var(--muted);font-size:12px;">'+escapeHtml(it.description)+'</span>' : '')+'</td>' +
+        '<td data-label="點數">'+it.cost+'</td>' +
+        '<td data-label="庫存">'+(it.stock == null ? '不限' : it.stock)+'</td>' +
+        '<td data-label="狀態">'+(it.is_active ? '上架中' : '已下架')+'</td>' +
+        '<td data-label="操作">' +
+          '<button class="btn secondary small" onclick="editPointItem('+it.id+')">編輯</button>' +
+          '<button class="btn secondary small" onclick="togglePointItem('+it.id+','+it.is_active+')">'+(it.is_active ? '下架' : '上架')+'</button>' +
+          '<button class="btn danger small" onclick="deletePointItem('+it.id+')">刪除</button>' +
+        '</td></tr>';
+    }).join('') || '<tr><td colspan="5">尚無商品</td></tr>';
+  }catch(e){ m.textContent=e.message; m.className='msg err'; }
+}
+
+function editPointItem(id){
+  const it = ptItemsCache.find(function(x){ return x.id === id; });
+  if (!it) return;
+  ptEditingItemId = id;
+  document.getElementById('pt_item_name').value = it.name;
+  document.getElementById('pt_item_cost').value = it.cost;
+  document.getElementById('pt_item_desc').value = it.description || '';
+  document.getElementById('pt_item_stock').value = it.stock == null ? '' : it.stock;
+  document.getElementById('pt_item_form_title').textContent = '編輯商品';
+  document.getElementById('pt_item_submit').textContent = '儲存修改';
+  document.getElementById('pt_item_cancel').classList.remove('hidden');
+  document.getElementById('pt_item_name').scrollIntoView({behavior:'smooth', block:'center'});
+}
+
+function cancelEditPointItem(){
+  ptEditingItemId = null;
+  ['pt_item_name','pt_item_cost','pt_item_desc','pt_item_stock'].forEach(function(i){ document.getElementById(i).value=''; });
+  document.getElementById('pt_item_form_title').textContent = '點數商城商品';
+  document.getElementById('pt_item_submit').textContent = '新增商品';
+  document.getElementById('pt_item_cancel').classList.add('hidden');
+}
+
+async function submitPointItem(){
+  const m = document.getElementById('pt_item_msg');
+  m.textContent=''; m.className='msg';
+  const body = {
+    name: document.getElementById('pt_item_name').value,
+    cost: document.getElementById('pt_item_cost').value,
+    description: document.getElementById('pt_item_desc').value,
+    stock: document.getElementById('pt_item_stock').value,
+  };
+  try{
+    if (ptEditingItemId) await api('/api/admin/points/items/'+ptEditingItemId, {method:'PATCH', body: JSON.stringify(body)});
+    else await api('/api/admin/points/items', {method:'POST', body: JSON.stringify(body)});
+    cancelEditPointItem();
+    m.textContent='已儲存'; m.className='msg ok';
+    loadPointItemsAdmin();
+  }catch(e){ m.textContent=e.message; m.className='msg err'; }
+}
+
+async function togglePointItem(id, active){
+  try{
+    await api('/api/admin/points/items/'+id, {method:'PATCH', body: JSON.stringify({is_active: !active})});
+    loadPointItemsAdmin();
+  }catch(e){ alert(e.message); }
+}
+
+async function deletePointItem(id){
+  if (!confirm('確定刪除此商品？（已建立的兌換單不受影響）')) return;
+  try{
+    await api('/api/admin/points/items/'+id, {method:'DELETE'});
+    if (ptEditingItemId === id) cancelEditPointItem();
+    loadPointItemsAdmin();
+  }catch(e){ alert(e.message); }
+}
+
+async function loadPointMembersAdmin(){
+  try{
+    const list = await api('/api/admin/points/members');
+    document.querySelector('#pt_mem_table tbody').innerHTML = list.map(function(r){
+      return '<tr><td data-label="會員">'+escapeHtml(r.name)+'</td><td data-label="帳號">'+escapeHtml(r.account||'')+'</td>' +
+        '<td data-label="目前點數"><b>'+r.balance+'</b></td><td data-label="累計獲得">'+r.earned_total+'</td>' +
+        '<td data-label="操作"><button class="btn secondary small" onclick="selectPointMember('+r.id+',\\''+escapeHtml(r.name).replace(/'/g,'')+'\\')">選擇</button>' +
+        '<button class="btn secondary small" onclick="viewPointLedger('+r.id+',\\''+escapeHtml(r.name).replace(/'/g,'')+'\\')">明細</button></td></tr>';
+    }).join('') || '<tr><td colspan="5">尚無會員</td></tr>';
+  }catch(e){ /* ignore */ }
+}
+
+function selectPointMember(id, name){
+  ptSelectedMember = id;
+  document.getElementById('pt_adj_target').textContent = '已選擇：' + name;
+}
+
+async function viewPointLedger(id, name){
+  try{
+    const list = await api('/api/admin/points/ledger?member_id='+id);
+    document.getElementById('pt_ledger_title').textContent = name + ' 的點數明細（最近 200 筆）';
+    document.querySelector('#pt_ledger_table tbody').innerHTML = list.map(function(l){
+      return '<tr><td data-label="時間">'+toTaipeiTime(l.created_at)+'</td><td data-label="異動"><b style="color:'+(l.delta>0?'var(--ok)':'var(--danger)')+'">'+(l.delta>0?'+':'')+l.delta+'</b></td>' +
+        '<td data-label="類型">'+(PT_TYPE[l.type]||l.type)+'</td><td data-label="說明">'+escapeHtml(l.note||'')+'</td></tr>';
+    }).join('') || '<tr><td colspan="4">尚無紀錄</td></tr>';
+    document.getElementById('pt_ledger_wrap').classList.remove('hidden');
+  }catch(e){ alert(e.message); }
+}
+
+async function submitPointAdjust(){
+  const m = document.getElementById('pt_adj_msg');
+  m.textContent=''; m.className='msg';
+  if (!ptSelectedMember){ m.textContent='請先在下方列表選擇會員'; m.className='msg err'; return; }
+  try{
+    const r = await api('/api/admin/points/adjust', {method:'POST', body: JSON.stringify({
+      member_id: ptSelectedMember,
+      delta: document.getElementById('pt_adj_delta').value,
+      note: document.getElementById('pt_adj_note').value,
+    })});
+    document.getElementById('pt_adj_delta').value=''; document.getElementById('pt_adj_note').value='';
+    m.textContent='已調整，該會員目前 '+r.balance+' 點'; m.className='msg ok';
+    loadPointMembersAdmin();
+  }catch(e){ m.textContent=e.message; m.className='msg err'; }
+}
+
 async function loadCoupons(){
   const msg = document.getElementById('cp_msg');
   try{
@@ -1557,7 +1806,7 @@ export function payHtml() {
 <style>
   *{box-sizing:border-box;}
   body{margin:0;font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif;background:#f5f6f8;color:#1f2430;
-    display:flex;flex-direction:column;align-items:center;padding:24px 14px;}
+    display:flex;justify-content:center;padding:24px 14px;}
   .card{background:#fff;border:1px solid #e2e4e8;border-radius:12px;padding:24px;max-width:420px;width:100%;}
   h1{font-size:18px;margin-top:0;}
   .amount{font-size:32px;font-weight:700;text-align:center;margin:14px 0;}
@@ -1625,6 +1874,10 @@ function render(o){
   if (o.coupon_code) {
     html += '<div class="row"><span>原始金額</span><span>$'+o.original_amount+'</span></div>';
     html += '<div class="row"><span>優惠碼 '+o.coupon_code+'</span><span>-$'+o.coupon_discount+'</span></div>';
+  }
+  if (o.points_used > 0) {
+    if (!o.coupon_code) html += '<div class="row"><span>原始金額</span><span>$'+o.original_amount+'</span></div>';
+    html += '<div class="row"><span>點數折抵（'+o.points_used+' 點）</span><span>-$'+o.points_discount+'</span></div>';
   }
   html += '<div class="amount">$'+o.amount+'</div>';
   html += '<div class="row"><span>付款對象</span><span>'+o.member_name_snapshot+'</span></div>';
@@ -1787,7 +2040,7 @@ async function selectMethod(method){
 
 load();
 </script>
-${SITE_FOOTER}</body>
+</body>
 </html>`;
 }
 
@@ -1912,6 +2165,15 @@ export function memberHtml() {
 
   @keyframes fadeIn{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:translateY(0);}}
 
+  .pts-balance{font-family:var(--mono);font-size:34px;font-weight:700;color:var(--accent-ink);line-height:1.1;}
+  .pts-balance small{font-size:14px;font-weight:500;color:var(--muted);margin-left:4px;}
+  .pts-rule{color:var(--muted);font-size:13px;margin-top:8px;line-height:1.6;}
+  .pts-sub{font-size:14px;font-weight:700;margin:18px 0 6px;}
+  .pts-item{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--line);}
+  .pts-item:last-child{border-bottom:none;}
+  .pts-item .nm{font-weight:600;} .pts-item .ds{font-size:12px;color:var(--muted);margin-top:2px;}
+  .pts-item .cost{font-family:var(--mono);font-size:13px;color:var(--accent-ink);white-space:nowrap;}
+  .pts-plus{color:var(--ok);font-weight:700;font-family:var(--mono);} .pts-minus{color:var(--danger);font-weight:700;font-family:var(--mono);}
   .estimate-badge{display:inline-block;background:var(--accent-soft);color:var(--accent-ink);font-family:var(--mono);font-size:13px;font-weight:600;padding:6px 12px;border-radius:20px;margin-top:10px;border:1px solid var(--accent);}
   .estimate-badge.hidden{display:none;}
 
@@ -2028,6 +2290,29 @@ export function memberHtml() {
       </div>
     </div>
 
+    <!-- === 我的點數 === -->
+    <div class="card" id="pointsCard">
+      <h2>我的點數</h2>
+      <div class="pts-balance"><span id="ptsBalance">0</span><small>點</small></div>
+      <div class="pts-rule" id="ptsRule"></div>
+
+      <div class="pts-sub">點數商城</div>
+      <div id="ptsShop"><div class="msg" style="color:var(--muted);">載入中…</div></div>
+      <div id="ptsRedeemMsg" class="msg"></div>
+
+      <div class="pts-sub">兌換紀錄</div>
+      <table id="ptsRedTable">
+        <thead><tr><th>時間</th><th>商品</th><th>點數</th><th>狀態</th></tr></thead>
+        <tbody></tbody>
+      </table>
+
+      <div class="pts-sub">點數明細（最近 100 筆）</div>
+      <table id="ptsLedgerTable">
+        <thead><tr><th>時間</th><th>異動</th><th>說明</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
     <!-- === 自助下單 === -->
     <div class="card">
       <h2>自助下單</h2>
@@ -2060,6 +2345,14 @@ export function memberHtml() {
         <button type="button" class="btn secondary" style="white-space:nowrap;" onclick="previewCoupon('mo')">套用</button>
       </div>
       <div id="mo_coupon_msg" class="msg"></div>
+      <div id="usePointsWrap" class="hidden">
+        <label id="usePointsLabel">使用點數折抵（選填）</label>
+        <div style="display:flex;gap:8px;">
+          <input id="use_points" type="number" min="0" step="1" placeholder="0" oninput="updatePointsHint()" onfocus="updatePointsHint()" />
+          <button type="button" class="btn secondary" style="white-space:nowrap;" onclick="useMaxPoints()">最多可用</button>
+        </div>
+        <div id="usePointsMsg" class="msg" style="color:var(--muted);"></div>
+      </div>
       <button class="btn" id="newOrderBtn" onclick="createOrder()">建立訂單</button>
       <div id="newOrderMsg" class="msg"></div>
       <div id="newOrderResult" class="hidden">
@@ -2256,6 +2549,7 @@ function calculateQuotes() {
 
 // === 更新「預估可獲得」徽章：必須同時選了儲值平台 + 有效金額才顯示 ===
 function updateEstimateBadge() {
+  if (typeof updatePointsHint === 'function') updatePointsHint();
   const badge = document.getElementById('estimateBadge');
   const platform = document.getElementById('new_platform').value;
   const input = document.getElementById('new_amount');
@@ -2337,6 +2631,7 @@ async function checkSession(){
     document.getElementById('appView').classList.remove('hidden');
     await loadRates();
     loadOrders();
+    loadPoints();
     startOrdersPolling();
     checkAnnouncement();
   }catch(e){ /* 尚未登入，維持登入畫面 */ }
@@ -2500,6 +2795,7 @@ async function createOrder(){
   const platform_account = document.getElementById('new_platform_account').value.trim();
   const platform_password = document.getElementById('new_platform_password').value;
   const coupon_code = document.getElementById('mo_coupon').value.trim() || null;
+  const use_points = Math.floor(Number(document.getElementById('use_points').value) || 0);
   msg.textContent=''; msg.className='msg';
   document.getElementById('newOrderResult').classList.add('hidden');
   if (!amount || Number(amount) <= 0){ msg.textContent='請輸入正確的金額'; msg.className='msg err'; return; }
@@ -2509,7 +2805,9 @@ async function createOrder(){
   if (!platform_password && PLATFORMS_REQUIRE_PASSWORD.has(platform)){ msg.textContent='請輸入密碼'; msg.className='msg err'; return; }
   btn.disabled = true;
   try{
-    const res = await api('/api/member/orders', {method:'POST', body: JSON.stringify({amount, platform, platform_account, platform_password, coupon_code})});
+    const res = await api('/api/member/orders', {method:'POST', body: JSON.stringify({amount, platform, platform_account, platform_password, coupon_code, use_points})});
+    document.getElementById('use_points').value = '';
+    document.getElementById('usePointsMsg').textContent = '';
     document.getElementById('new_amount').value = '';
     document.getElementById('new_amount').classList.add('hidden');
     document.getElementById('estimateBadge').classList.add('hidden');
@@ -2523,13 +2821,104 @@ async function createOrder(){
     const linkEl = document.getElementById('newOrderLink');
     linkEl.href = res.link;
     document.getElementById('newOrderResult').classList.remove('hidden');
-    const discountNote = res.discount ? \`，已折抵 $\${res.discount}，實付 $\${res.amount}\` : '';
+    const totalOff = (res.discount || 0) + (res.points_discount || 0);
+    const discountNote = totalOff ? \`，已折抵 $\${totalOff}\${res.points_used ? '（含點數 '+res.points_used+' 點）' : ''}，實付 $\${res.amount}\` : '';
     const coinsNote = res.coins != null ? \`，預計獲得 🪙 \${Number(res.coins).toLocaleString()} 抖幣\` : '';
     document.getElementById('newOrderMsg').textContent = \`訂單編號 \${res.order_no}\${discountNote}\${coinsNote}\`;
     document.getElementById('newOrderMsg').className = 'msg ok';
     loadOrders();
+    loadPoints();
   }catch(e){ msg.textContent = e.message; msg.className='msg err'; }
   finally{ btn.disabled = false; }
+}
+
+// ---- 點數 ----
+let pointsState = null;
+const PTS_TYPE_LABEL = {earn:'付款回饋', spend:'訂單折抵', redeem:'商城兌換', refund:'退回', admin:'店家調整'};
+const RED_STATUS = {pending:['處理中','b-await'], fulfilled:['已完成','b-paid'], rejected:['已退回點數','b-cancel']};
+
+function ptsEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+async function loadPoints(){
+  try{
+    const d = await api('/api/member/points');
+    pointsState = d;
+    document.getElementById('pointsCard').classList.toggle('hidden', !d.enabled && d.balance === 0 && !d.ledger.length);
+    document.getElementById('ptsBalance').textContent = Number(d.balance).toLocaleString();
+    const c = d.config;
+    document.getElementById('ptsRule').innerHTML = d.enabled
+      ? '訂單付款完成後，每實付 <b>$' + c.earn_per + '</b> 得 1 點。1 點可折抵 <b>$' + c.redeem_value + '</b>，單筆訂單最多折抵 <b>' + c.max_percent + '%</b>，也可以到下方點數商城兌換商品。'
+      : '點數功能目前暫停，已累積的點數會保留。';
+
+    const shop = document.getElementById('ptsShop');
+    shop.innerHTML = d.items.map(function(it){
+      const can = d.enabled && d.balance >= it.cost;
+      return '<div class="pts-item"><div><div class="nm">' + ptsEsc(it.name) + '</div>' +
+        (it.description ? '<div class="ds">' + ptsEsc(it.description) + '</div>' : '') +
+        (it.stock != null ? '<div class="ds">剩餘 ' + it.stock + ' 份</div>' : '') +
+        '</div><div style="text-align:right;"><div class="cost">' + Number(it.cost).toLocaleString() + ' 點</div>' +
+        '<button class="btn small ' + (can ? '' : 'secondary') + '" ' + (can ? '' : 'disabled') + ' onclick="redeemItem(' + it.id + ')">' + (can ? '兌換' : '點數不足') + '</button></div></div>';
+    }).join('') || '<div class="msg" style="color:var(--muted);">目前沒有可兌換的商品</div>';
+
+    document.querySelector('#ptsRedTable tbody').innerHTML = d.redemptions.map(function(r){
+      const st = RED_STATUS[r.status] || [r.status,'b-pending'];
+      return '<tr><td data-label="時間">' + toTaipeiTime(r.created_at) + '</td><td data-label="商品">' + ptsEsc(r.item_name) +
+        (r.admin_note ? '<br/><span class="msg" style="margin:0;color:var(--muted);">' + ptsEsc(r.admin_note) + '</span>' : '') +
+        '</td><td data-label="點數">' + Number(r.cost).toLocaleString() + '</td><td data-label="狀態"><span class="badge ' + st[1] + '">' + st[0] + '</span></td></tr>';
+    }).join('') || '<tr><td colspan="4">尚無兌換紀錄</td></tr>';
+
+    document.querySelector('#ptsLedgerTable tbody').innerHTML = d.ledger.map(function(l){
+      const plus = l.delta > 0;
+      return '<tr><td data-label="時間">' + toTaipeiTime(l.created_at) + '</td><td data-label="異動"><span class="' + (plus ? 'pts-plus' : 'pts-minus') + '">' +
+        (plus ? '+' : '') + l.delta + '</span> <span class="msg" style="margin:0;color:var(--muted);">' + (PTS_TYPE_LABEL[l.type] || l.type) + '</span></td><td data-label="說明">' + ptsEsc(l.note || '') + '</td></tr>';
+    }).join('') || '<tr><td colspan="3">尚無點數紀錄</td></tr>';
+
+    document.getElementById('usePointsWrap').classList.toggle('hidden', !(d.enabled && d.balance > 0));
+    updatePointsHint();
+  }catch(e){ /* 點數載入失敗不影響其他功能 */ }
+}
+
+function maxUsablePoints(){
+  if (!pointsState || !pointsState.enabled) return 0;
+  const amt = Number(document.getElementById('new_amount').value) || 0;
+  const c = pointsState.config;
+  const byAmount = Math.floor(amt * c.max_percent / 100 / c.redeem_value);
+  return Math.max(0, Math.min(pointsState.balance, byAmount));
+}
+
+function updatePointsHint(){
+  if (!pointsState) return;
+  const input = document.getElementById('use_points');
+  const hint = document.getElementById('usePointsMsg');
+  const amt = Number(document.getElementById('new_amount').value) || 0;
+  const max = maxUsablePoints();
+  const v = Math.floor(Number(input.value) || 0);
+  document.getElementById('usePointsLabel').textContent = '使用點數折抵（選填，目前餘額 ' + pointsState.balance + ' 點）';
+  if (!amt) { hint.textContent = '請先選擇金額，再決定要使用多少點數'; hint.className = 'msg'; hint.style.color = 'var(--muted)'; return; }
+  if (v > pointsState.balance) { hint.textContent = '點數不足，目前餘額 ' + pointsState.balance + ' 點'; hint.className = 'msg err'; return; }
+  if (v > max) { hint.textContent = '此金額最多可使用 ' + max + ' 點'; hint.className = 'msg err'; return; }
+  hint.className = 'msg'; hint.style.color = 'var(--muted)';
+  hint.textContent = v > 0
+    ? '將折抵 $' + (v * pointsState.config.redeem_value) + '（優惠碼折抵後，實際可用上限以送出時為準）'
+    : '此金額最多可使用 ' + max + ' 點';
+}
+
+function useMaxPoints(){
+  document.getElementById('use_points').value = maxUsablePoints() || '';
+  updatePointsHint();
+}
+
+async function redeemItem(id){
+  const msg = document.getElementById('ptsRedeemMsg');
+  const it = pointsState && pointsState.items.find(function(x){ return x.id === id; });
+  if (!it) return;
+  if (!confirm('確定用 ' + it.cost + ' 點兌換「' + it.name + '」嗎？')) return;
+  msg.textContent = ''; msg.className = 'msg';
+  try{
+    await api('/api/member/points/redeem', {method:'POST', body: JSON.stringify({item_id: id})});
+    msg.textContent = '兌換成功，店家會盡快為你處理。'; msg.className = 'msg ok';
+    loadPoints();
+  }catch(e){ msg.textContent = e.message; msg.className = 'msg err'; loadPoints(); }
 }
 
 // ---- 訂單自動更新（輪詢）----
@@ -2561,9 +2950,11 @@ async function loadOrders(){
     const action = ACTIVE.has(o.status)
       ? \`<a href="/pay/\${o.token}" target="_blank">前往付款</a>\`
       : \`<a href="/pay/\${o.token}" target="_blank">查看</a>\`;
-    const couponInfo = o.coupon_code
+    let couponInfo = o.coupon_code
       ? \`<code>\${o.coupon_code}</code><br/><span class="msg" style="margin:0;color:var(--muted);">-$\${o.coupon_discount}</span>\`
-      : '-';
+      : '';
+    if (o.points_used > 0) couponInfo += (couponInfo ? '<br/>' : '') + \`<span class="msg" style="margin:0;color:var(--muted);">點數 \${o.points_used} 點 -$\${o.points_discount}</span>\`;
+    if (!couponInfo) couponInfo = '-';
     return \`<tr>
       <td data-label="訂單編號"><code>\${o.order_no}</code></td>
       <td data-label="建立時間">\${toTaipeiTime(o.created_at)}</td>
@@ -2583,7 +2974,7 @@ loadRates().then(() => {
   checkSession();
 });
 </script>
-${SITE_FOOTER}</body>
+</body>
 </html>`;
 }
 
@@ -2753,6 +3144,6 @@ export function memberRegisterHtml({ emailVerify = true } = {}) {
     }
   }
 </script>
-${SITE_FOOTER}</body>
+</body>
 </html>`;
 }

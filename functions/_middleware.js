@@ -47,7 +47,6 @@ h1{font-size:22px;margin:0 0 10px}p{margin:6px 0;color:var(--sub);line-height:1.
   <div id="ts"></div>
   <p id="status">正在驗證…</p>
   <a class="btn" href="${NEW_ORIGIN}/">立即前往</a>
-  <div style="margin-top:22px;padding-top:14px;border-top:1px solid rgba(128,128,128,.25);font-size:12px;line-height:1.7;color:var(--sub);text-align:center"><div style="font-weight:600">網頁宣告</div><div>本網站為會員自助查詢與訂單結帳頁面，內容僅供參考，實際以訂單確認內容為準。</div><div>客服信箱：<a href="mailto:service@ytgp168.com" style="color:inherit;text-decoration:underline">service@ytgp168.com</a></div></div>
 </div>
 <script>
 var SITE_KEY=${JSON.stringify(siteKey || "")};
@@ -62,12 +61,10 @@ if(!SITE_KEY){go()}else{
         st.textContent="驗證中…";
         fetch("/api/verify",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({token:token})})
           .then(function(r){return r.json()})
-          .then(function(d){if(d&&d.success)go();else{st.textContent="驗證未通過，將自動前往新網址…";setTimeout(go,1500)}})
-          .catch(function(){st.textContent="無法連線驗證服務，將自動前往新網址…";setTimeout(go,1500)});
+          .then(function(d){if(d&&d.success)go();else st.textContent="驗證未通過，請重新整理頁面再試。"})
+          .catch(function(){st.textContent="無法連線驗證服務，請稍後再試。"});
       },
-      "error-callback":function(c){st.textContent="驗證失敗"+(c?"（錯誤碼 "+c+"）":"")+"，將自動前往新網址…";setTimeout(go,1500);return true},
-      "timeout-callback":function(){go()},
-      "unsupported-callback":function(){go()}
+      "error-callback":function(){st.textContent="驗證失敗，請重新整理或點擊「立即前往」。"}
     });
   });
 }

@@ -56,6 +56,8 @@ CREATE TABLE IF NOT EXISTS orders (
   platform TEXT,                       -- 儲值平台：tiktok | kuaishou | xiaohongshu | douyin，NULL 表示未指定
   platform_account TEXT,               -- 客人填寫的儲值平台帳號/ID，供店家登入該帳號進行儲值
   platform_password TEXT,              -- 客人填寫的儲值平台密碼（明碼儲存，供店家實際登入儲值使用，非會員登入密碼）
+  points_used INTEGER NOT NULL DEFAULT 0,   -- 這筆訂單使用的點數
+  points_discount REAL,                -- 點數折抵的金額
   coins REAL,                          -- 依下單當下的費率試算出的預計獲得幣數（以優惠碼折抵前的金額計算），NULL 表示未計算（例如未指定平台或金額不在範圍）
   FOREIGN KEY (member_id) REFERENCES members(id)
 );
@@ -122,3 +124,44 @@ INSERT OR IGNORE INTO settings (key, value) VALUES ('bank_name', '請於後台�
 INSERT OR IGNORE INTO settings (key, value) VALUES ('bank_account_number', '請於後台設定填入帳號');
 INSERT OR IGNORE INTO settings (key, value) VALUES ('bank_account_holder', '請於後台設定填入戶名');
 INSERT OR IGNORE INTO settings (key, value) VALUES ('rate_rules', '[{"min":0,"rate":2.5}]');
+
+-- 點數異動紀錄（餘額 = 該會員所有 delta 加總，不另外存餘額，避免對不上）
+CREATE TABLE IF NOT EXISTS points_ledger (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  member_id INTEGER NOT NULL,
+  delta INTEGER NOT NULL,            -- 正數＝獲得，負數＝扣除
+  type TEXT NOT NULL,                -- earn（付款回饋）| spend（訂單折抵）| redeem（商城兌換）| refund（兌換退回）| admin（後台調整）
+  order_id INTEGER,
+  ref_id INTEGER,                    -- 兌換單 id
+  note TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_points_ledger_member ON points_ledger(member_id, id);
+CREATE INDEX IF NOT EXISTS idx_points_ledger_order ON points_ledger(order_id);
+
+-- 點數商城商品
+CREATE TABLE IF NOT EXISTS points_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  description TEXT,
+  cost INTEGER NOT NULL,             -- 需要幾點
+  stock INTEGER,                     -- 剩餘數量，NULL 表示不限
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+-- 兌換單
+CREATE TABLE IF NOT EXISTS points_redemptions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  member_id INTEGER NOT NULL,
+  item_id INTEGER,
+  item_name TEXT NOT NULL,           -- 兌換當下的商品名稱快照
+  cost INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',   -- pending（待處理）| fulfilled（已完成）| rejected（已拒絕並退點）
+  member_note TEXT,
+  admin_note TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  processed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_points_redemptions_member ON points_redemptions(member_id, id);
+CREATE INDEX IF NOT EXISTS idx_points_redemptions_status ON points_redemptions(status);
