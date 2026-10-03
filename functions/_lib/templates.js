@@ -49,6 +49,8 @@ export function adminHtml() {
   img.proof-thumb{max-width:56px;max-height:40px;border-radius:4px;border:1px solid var(--border);cursor:pointer;display:block;}
   .filter-row{display:flex;align-items:center;gap:6px;margin-top:10px;font-size:13px;color:var(--muted);}
   button.btn.small{padding:5px 10px;font-size:12px;margin:2px;}
+  .pager{display:flex;align-items:center;justify-content:center;gap:12px;margin-top:12px;font-size:13px;color:var(--muted);}
+  .pager button.btn{margin-top:0;}
 
   .member-picker{position:relative;}
   .member-picker-input{width:100%;padding:9px 28px 9px 10px;border:1px solid var(--border);border-radius:6px;font-size:14px;background:#fff;}
@@ -372,7 +374,7 @@ export function adminHtml() {
         <h2>點數規則</h2>
         <small class="hint">三個功能各自獨立，可以只開其中幾個；關閉的功能，下方對應的欄位可以不填。</small>
         <div style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:10px;">
-          <label style="display:flex;align-items:center;gap:8px;color:var(--ink);margin-top:0;"><input id="pt_earn_enabled" type="checkbox" style="width:auto;" /> <b>付款回饋</b>：訂單付款後自動發點（關閉後不再發新點，已發的保留）</label>
+          <label style="display:flex;align-items:center;gap:8px;color:var(--ink);margin-top:0;"><input id="pt_earn_enabled" type="checkbox" style="width:auto;" /> <b>訂單回饋</b>：訂單標記為「訂單完成」後自動發點（關閉後不再發新點，已發的保留）</label>
           <label>每實付幾元得 1 點</label><input id="pt_earn_per" type="number" min="1" step="1" />
         </div>
         <div style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:10px;">
@@ -385,7 +387,7 @@ export function adminHtml() {
         <div style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:10px;">
           <label style="display:flex;align-items:center;gap:8px;color:var(--ink);margin-top:0;"><input id="pt_shop_enabled" type="checkbox" style="width:auto;" /> <b>點數商城</b>：會員可用點數兌換商品</label>
         </div>
-        <small class="hint">訂單標記為「已付款」時依實付金額發點；訂單取消、刪除或金額更正時，點數會自動跟著扣回或調整。</small><br/>
+        <small class="hint">訂單「已付款」並標記為「訂單完成」時，依實付金額發點（只標已付款不會發）。取消結案、取消或刪除訂單時，點數會自動扣回；要更正金額需先取消結案，重新「訂單完成」後會依新金額重發。</small><br/>
         <button class="btn" onclick="savePointsConfigAdmin()">儲存規則</button>
         <div id="pt_cfg_msg" class="msg"></div>
       </div>
@@ -396,6 +398,7 @@ export function adminHtml() {
           <thead><tr><th>時間</th><th>會員</th><th>商品</th><th>點數</th><th>狀態</th><th>操作</th></tr></thead>
           <tbody></tbody>
         </table>
+        <div id="pt_red_pager" class="pager"></div>
         <div id="pt_red_msg" class="msg"></div>
       </div>
 
@@ -1423,7 +1426,7 @@ let editingCouponId = null;
 // ================= 點數系統（後台）=================
 let ptItemsCache = [];
 let ptEditingItemId = null;
-const PT_TYPE = {earn:'付款回饋', spend:'訂單折抵', redeem:'商城兌換', refund:'退回', admin:'店家調整'};
+const PT_TYPE = {earn:'完成回饋', spend:'訂單折抵', redeem:'商城兌換', refund:'退回', admin:'店家調整'};
 const PT_RED = {pending:'待處理', fulfilled:'已完成', rejected:'已拒絕並退點'};
 
 function loadPointsAdmin(){
@@ -1461,11 +1464,16 @@ async function savePointsConfigAdmin(){
   }catch(e){ m.textContent=e.message; m.className='msg err'; }
 }
 
-async function loadRedemptionsAdmin(){
+let ptRedPage = 1;
+const PT_RED_SIZE = 10;
+
+async function loadRedemptionsAdmin(page){
+  if (page) ptRedPage = page;
   const m = document.getElementById('pt_red_msg');
   try{
-    const list = await api('/api/admin/points/redemptions');
-    document.querySelector('#pt_red_table tbody').innerHTML = list.map(function(r){
+    const d = await api('/api/admin/points/redemptions?page='+ptRedPage+'&size='+PT_RED_SIZE);
+    ptRedPage = d.page;
+    document.querySelector('#pt_red_table tbody').innerHTML = d.rows.map(function(r){
       const ops = r.status === 'pending'
         ? '<button class="btn small" onclick="processRedemption('+r.id+',\\'fulfill\\')">標記完成</button>' +
           '<button class="btn danger small" onclick="processRedemption('+r.id+',\\'reject\\')">拒絕並退點</button>'
@@ -1477,6 +1485,14 @@ async function loadRedemptionsAdmin(){
         '<td data-label="狀態">'+(PT_RED[r.status]||r.status)+'</td>' +
         '<td data-label="操作">'+ops+'</td></tr>';
     }).join('') || '<tr><td colspan="6">尚無兌換單</td></tr>';
+    const pg = document.getElementById('pt_red_pager');
+    if (d.total > PT_RED_SIZE) {
+      pg.innerHTML = '<button class="btn secondary small" '+(d.page<=1?'disabled':'')+' onclick="loadRedemptionsAdmin('+(d.page-1)+')">‹ 上一頁</button>' +
+        '<span>第 '+d.page+' / '+d.pages+' 頁（共 '+d.total+' 筆）</span>' +
+        '<button class="btn secondary small" '+(d.page>=d.pages?'disabled':'')+' onclick="loadRedemptionsAdmin('+(d.page+1)+')">下一頁 ›</button>';
+    } else {
+      pg.innerHTML = d.total ? '<span>共 '+d.total+' 筆</span>' : '';
+    }
   }catch(e){ m.textContent=e.message; m.className='msg err'; }
 }
 
@@ -2259,6 +2275,11 @@ export function memberHtml() {
   .pts-balance small{font-size:14px;font-weight:500;color:var(--muted);margin-left:4px;}
   .pts-rule{color:var(--muted);font-size:13px;margin-top:8px;line-height:1.6;}
   .pts-sub{font-size:14px;font-weight:700;margin:18px 0 6px;}
+  .pts-fold{display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer;user-select:none;padding:10px 0;border-bottom:1px solid var(--line);}
+  .pts-fold .cnt{font-weight:500;font-size:12.5px;color:var(--muted);margin-left:6px;}
+  .pts-fold .arrow{color:var(--muted);font-size:12px;}
+  .pts-pager{display:flex;align-items:center;justify-content:center;gap:12px;margin-top:12px;font-size:13px;color:var(--muted);}
+  .pts-pager .btn{margin-top:0;}
   .pts-item{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--line);}
   .pts-item:last-child{border-bottom:none;}
   .pts-item .nm{font-weight:600;} .pts-item .ds{font-size:12px;color:var(--muted);margin-top:2px;}
@@ -2383,18 +2404,24 @@ export function memberHtml() {
       <div id="ptsShop"><div class="msg" style="color:var(--muted);">載入中…</div></div>
       <div id="ptsRedeemMsg" class="msg"></div>
 
-      <div class="pts-sub">兌換紀錄</div>
-      <table id="ptsRedTable">
-        <thead><tr><th>時間</th><th>商品</th><th>點數</th><th>狀態</th></tr></thead>
-        <tbody></tbody>
-      </table>
+      <div class="pts-sub pts-fold" onclick="togglePtsFold('Red')"><span>兌換紀錄<span class="cnt" id="ptsRedCnt"></span></span><span class="arrow" id="ptsRedArrow">▾ 展開</span></div>
+      <div id="ptsRedBody" class="hidden">
+        <table id="ptsRedTable">
+          <thead><tr><th>時間</th><th>商品</th><th>點數</th><th>狀態</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div class="pts-pager" id="ptsRedPager"></div>
+      </div>
       </div>
 
-      <div class="pts-sub">點數明細（最近 100 筆）</div>
-      <table id="ptsLedgerTable">
-        <thead><tr><th>時間</th><th>異動</th><th>說明</th></tr></thead>
-        <tbody></tbody>
-      </table>
+      <div class="pts-sub pts-fold" onclick="togglePtsFold('Led')"><span>點數明細<span class="cnt" id="ptsLedCnt"></span></span><span class="arrow" id="ptsLedArrow">▾ 展開</span></div>
+      <div id="ptsLedBody" class="hidden">
+        <table id="ptsLedgerTable">
+          <thead><tr><th>時間</th><th>異動</th><th>說明</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div class="pts-pager" id="ptsLedPager"></div>
+      </div>
     </div>
   </div></div>
 
@@ -3114,10 +3141,62 @@ function toggleProfile(){
 
 // ---- 點數 ----
 let pointsState = null;
-const PTS_TYPE_LABEL = {earn:'付款回饋', spend:'訂單折抵', redeem:'商城兌換', refund:'退回', admin:'店家調整'};
+const PTS_TYPE_LABEL = {earn:'完成回饋', spend:'訂單折抵', redeem:'商城兌換', refund:'退回', admin:'店家調整'};
 const RED_STATUS = {pending:['處理中','b-await'], fulfilled:['已完成','b-paid'], rejected:['已退回點數','b-cancel']};
 
 function ptsEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+// ---- 兌換紀錄（5 筆 1 頁）/ 點數明細（10 筆 1 頁）：可收合、上一頁 / 下一頁 ----
+const PTS_PAGE_SIZE = {Red: 5, Led: 10};
+const ptsPage = {Red: 1, Led: 1};
+
+function togglePtsFold(k){
+  const body = document.getElementById('pts'+k+'Body');
+  const nowHidden = body.classList.toggle('hidden');
+  document.getElementById('pts'+k+'Arrow').textContent = nowHidden ? '▾ 展開' : '▴ 收合';
+}
+
+function ptsGo(k, delta){
+  ptsPage[k] += delta;
+  if (k === 'Red') renderPtsRed(); else renderPtsLed();
+}
+
+function renderPtsPager(k, total){
+  const size = PTS_PAGE_SIZE[k];
+  const pages = Math.max(1, Math.ceil(total / size));
+  if (ptsPage[k] > pages) ptsPage[k] = pages;
+  if (ptsPage[k] < 1) ptsPage[k] = 1;
+  const p = ptsPage[k];
+  document.getElementById('pts'+k+'Pager').innerHTML = total > size
+    ? '<button type="button" class="btn secondary small" ' + (p <= 1 ? 'disabled' : '') + ' onclick="ptsGo(\\'' + k + '\\',-1)">‹ 上一頁</button>' +
+      '<span>第 ' + p + ' / ' + pages + ' 頁</span>' +
+      '<button type="button" class="btn secondary small" ' + (p >= pages ? 'disabled' : '') + ' onclick="ptsGo(\\'' + k + '\\',1)">下一頁 ›</button>'
+    : '';
+  return (p - 1) * size;
+}
+
+function renderPtsRed(){
+  const list = (pointsState && pointsState.redemptions) || [];
+  const start = renderPtsPager('Red', list.length);
+  document.getElementById('ptsRedCnt').textContent = list.length ? '（共 ' + list.length + ' 筆）' : '';
+  document.querySelector('#ptsRedTable tbody').innerHTML = list.slice(start, start + PTS_PAGE_SIZE.Red).map(function(r){
+    const st = RED_STATUS[r.status] || [r.status,'b-pending'];
+    return '<tr><td data-label="時間">' + toTaipeiTime(r.created_at) + '</td><td data-label="商品">' + ptsEsc(r.item_name) +
+      (r.admin_note ? '<br/><span class="msg" style="margin:0;color:var(--muted);">' + ptsEsc(r.admin_note) + '</span>' : '') +
+      '</td><td data-label="點數">' + Number(r.cost).toLocaleString() + '</td><td data-label="狀態"><span class="badge ' + st[1] + '">' + st[0] + '</span></td></tr>';
+  }).join('') || '<tr><td colspan="4">尚無兌換紀錄</td></tr>';
+}
+
+function renderPtsLed(){
+  const list = (pointsState && pointsState.ledger) || [];
+  const start = renderPtsPager('Led', list.length);
+  document.getElementById('ptsLedCnt').textContent = list.length ? (list.length >= 100 ? '（最近 100 筆）' : '（共 ' + list.length + ' 筆）') : '';
+  document.querySelector('#ptsLedgerTable tbody').innerHTML = list.slice(start, start + PTS_PAGE_SIZE.Led).map(function(l){
+    const plus = l.delta > 0;
+    return '<tr><td data-label="時間">' + toTaipeiTime(l.created_at) + '</td><td data-label="異動"><span class="' + (plus ? 'pts-plus' : 'pts-minus') + '">' +
+      (plus ? '+' : '') + l.delta + '</span> <span class="msg" style="margin:0;color:var(--muted);">' + (PTS_TYPE_LABEL[l.type] || l.type) + '</span></td><td data-label="說明">' + ptsEsc(l.note || '') + '</td></tr>';
+  }).join('') || '<tr><td colspan="3">尚無點數紀錄</td></tr>';
+}
 
 async function loadPoints(){
   try{
@@ -3133,7 +3212,7 @@ async function loadPoints(){
     whoPts.classList.toggle('hidden', !anyOn && d.balance === 0 && !d.ledger.length);
     const c = d.config;
     const rules = [];
-    if (d.earn_enabled) rules.push('訂單付款完成後，每實付 <b>$' + c.earn_per + '</b> 得 1 點。');
+    if (d.earn_enabled) rules.push('訂單完成後，每實付 <b>$' + c.earn_per + '</b> 得 1 點。');
     if (d.discount_enabled) rules.push('下單時 1 點可折抵 <b>$' + c.redeem_value + '</b>，單筆訂單最多折抵 <b>' + c.max_percent + '%</b>。');
     if (d.shop_enabled) rules.push('也可以到下方點數商城兌換商品。');
     document.getElementById('ptsRule').innerHTML = rules.length ? rules.join('') : '點數功能目前暫停，已累積的點數會保留。';
@@ -3149,18 +3228,8 @@ async function loadPoints(){
         '<button class="btn small ' + (can ? '' : 'secondary') + '" ' + (can ? '' : 'disabled') + ' onclick="redeemItem(' + it.id + ')">' + (can ? '兌換' : '點數不足') + '</button></div></div>';
     }).join('') || '<div class="msg" style="color:var(--muted);">目前沒有可兌換的商品</div>';
 
-    document.querySelector('#ptsRedTable tbody').innerHTML = d.redemptions.map(function(r){
-      const st = RED_STATUS[r.status] || [r.status,'b-pending'];
-      return '<tr><td data-label="時間">' + toTaipeiTime(r.created_at) + '</td><td data-label="商品">' + ptsEsc(r.item_name) +
-        (r.admin_note ? '<br/><span class="msg" style="margin:0;color:var(--muted);">' + ptsEsc(r.admin_note) + '</span>' : '') +
-        '</td><td data-label="點數">' + Number(r.cost).toLocaleString() + '</td><td data-label="狀態"><span class="badge ' + st[1] + '">' + st[0] + '</span></td></tr>';
-    }).join('') || '<tr><td colspan="4">尚無兌換紀錄</td></tr>';
-
-    document.querySelector('#ptsLedgerTable tbody').innerHTML = d.ledger.map(function(l){
-      const plus = l.delta > 0;
-      return '<tr><td data-label="時間">' + toTaipeiTime(l.created_at) + '</td><td data-label="異動"><span class="' + (plus ? 'pts-plus' : 'pts-minus') + '">' +
-        (plus ? '+' : '') + l.delta + '</span> <span class="msg" style="margin:0;color:var(--muted);">' + (PTS_TYPE_LABEL[l.type] || l.type) + '</span></td><td data-label="說明">' + ptsEsc(l.note || '') + '</td></tr>';
-    }).join('') || '<tr><td colspan="3">尚無點數紀錄</td></tr>';
+    renderPtsRed();
+    renderPtsLed();
 
     document.getElementById('usePointsWrap').classList.toggle('hidden', !(d.discount_enabled && d.balance > 0));
     updatePointsHint();

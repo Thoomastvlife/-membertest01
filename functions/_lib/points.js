@@ -1,7 +1,7 @@
 // ========================================================================
 // 點數系統
 // - 餘額 = points_ledger 該會員所有 delta 加總（不另存餘額）
-// - 付款回饋：訂單「已付款」時依實付金額給點；取消 / 刪除 / 改會員時自動扣回或轉移
+// - 訂單回饋：訂單「已付款」且標記為「訂單完成(結案)」時依實付金額給點；取消結案 / 取消 / 刪除 / 改會員時自動扣回或轉移
 // - 訂單折抵：下單當下先扣點；訂單取消 / 過期 / 刪除時自動退回
 // - 點數商城：兌換當下扣點；後台拒絕時退點並補回庫存
 // ========================================================================
@@ -118,9 +118,9 @@ export async function reconcileOrderPoints(env, order, { gone = false, recalc = 
 
   if (!target) return;
 
-  // 付款回饋
+  // 訂單回饋：必須「已付款」而且「訂單完成(結案)」才給點；取消結案 / 取消訂單會自動扣回
   let wantEarn = 0;
-  if (order.status === "paid") {
+  if (order.status === "paid" && order.is_completed) {
     if (cfg.earnEnabled) wantEarn = currEarn > 0 && !recalc ? currEarn : Math.floor(Number(order.amount) / cfg.earnPer);
     else wantEarn = currEarn; // 發點關閉時：不再發新點，但已發的不動
   }
@@ -132,9 +132,11 @@ export async function reconcileOrderPoints(env, order, { gone = false, recalc = 
       orderId: order.id,
       note:
         wantEarn > currEarn
-          ? `訂單 ${orderNo} 付款回饋`
-          : order.status === "paid"
+          ? `訂單 ${orderNo} 完成回饋`
+          : order.status === "paid" && order.is_completed
           ? `訂單 ${orderNo} 金額調整`
+          : order.status === "paid"
+          ? `訂單 ${orderNo} 取消結案，扣回回饋點數`
           : `訂單 ${orderNo} ${order.status === "cancelled" ? "已取消" : "未付款"}，扣回回饋點數`,
     });
   }
@@ -171,4 +173,11 @@ export async function reconcileMemberSpends(env, memberId) {
     .bind(memberId)
     .all();
   for (const o of results) await reconcileOrderPoints(env, o);
+}
+
+// ---- 分頁工具 ----
+export function parsePage(url, defaultSize, maxSize = 50) {
+  const page = Math.max(1, parseInt(url.searchParams.get("page"), 10) || 1);
+  const size = Math.min(maxSize, Math.max(1, parseInt(url.searchParams.get("size"), 10) || defaultSize));
+  return { page, size, offset: (page - 1) * size };
 }

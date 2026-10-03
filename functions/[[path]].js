@@ -8,6 +8,7 @@ import {
   reconcileOrderPoints,
   reconcileOrderById,
   reconcileMemberSpends,
+  parsePage,
 } from "./_lib/points.js";
 import { getRateRules, saveRateRules, getAllRateRules, getRateGroupForPlatform, RATE_GROUPS, DEFAULT_RATE_RULES, MIN_QUOTE_AMOUNT, calcCoins } from "./_lib/rates.js";
 
@@ -813,11 +814,13 @@ async function handleCompleteOrder(id, env) {
   if (!order) return json({ error: "找不到訂單" }, 404);
   if (order.status !== "paid") return json({ error: "只有已完成付款的訂單才能標記為訂單完成" }, 400);
   await env.DB.prepare("UPDATE orders SET is_completed=1, completed_at=? WHERE id=?").bind(nowIso(), id).run();
+  await reconcileOrderById(env, id); // 訂單完成 → 發放回饋點數
   return json({ ok: true });
 }
 
 async function handleUncompleteOrder(id, env) {
   await env.DB.prepare("UPDATE orders SET is_completed=0, completed_at=NULL WHERE id=?").bind(id).run();
+  await reconcileOrderById(env, id); // 取消結案 → 扣回回饋點數
   return json({ ok: true });
 }
 
@@ -1613,17 +1616,26 @@ async function handleAdminDeletePointItem(id, env) {
 
 // 後台：兌換單
 async function handleAdminListRedemptions(request, env) {
-  const status = new URL(request.url).searchParams.get("status");
-  let q =
-    "SELECT r.*, m.name AS member_name, m.account AS member_account, m.phone AS member_phone FROM points_redemptions r LEFT JOIN members m ON m.id=r.member_id";
+  const url = new URL(request.url);
+  const status = url.searchParams.get("status");
+  const { page, size, offset } = parsePage(url, 10);
+  let where = "";
   const binds = [];
   if (status && ["pending", "fulfilled", "rejected"].includes(status)) {
-    q += " WHERE r.status=?";
+    where = " WHERE r.status=?";
     binds.push(status);
   }
-  q += " ORDER BY CASE r.status WHEN 'pending' THEN 0 ELSE 1 END, r.id DESC LIMIT 200";
-  const { results } = await env.DB.prepare(q).bind(...binds).all();
-  return json(results);
+  const totalRow = await env.DB.prepare("SELECT COUNT(*) AS c FROM points_redemptions r" + where).bind(...binds).first();
+  const total = totalRow ? totalRow.c : 0;
+  const pages = Math.max(1, Math.ceil(total / size));
+  const { results } = await env.DB.prepare(
+    "SELECT r.*, m.name AS member_name, m.account AS member_account, m.phone AS member_phone FROM points_redemptions r LEFT JOIN members m ON m.id=r.member_id" +
+      where +
+      " ORDER BY CASE r.status WHEN 'pending' THEN 0 ELSE 1 END, r.id DESC LIMIT ? OFFSET ?"
+  )
+    .bind(...binds, size, offset)
+    .all();
+  return json({ rows: results, total, page: Math.min(page, pages), pages, size });
 }
 
 async function handleAdminProcessRedemption(id, action, request, env) {
