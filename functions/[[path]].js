@@ -1510,7 +1510,7 @@ async function handleSavePointsConfigAdmin(request, env) {
 // 後台：所有會員的點數餘額
 async function handleAdminPointsMembers(env) {
   const { results } = await env.DB.prepare(
-    `SELECT m.id, m.name, m.account,
+    `SELECT m.id, m.name, m.account, m.phone, m.email,
             COALESCE((SELECT SUM(delta) FROM points_ledger WHERE member_id=m.id), 0) AS balance,
             COALESCE((SELECT SUM(delta) FROM points_ledger WHERE member_id=m.id AND delta>0), 0) AS earned_total
      FROM members m ORDER BY balance DESC, m.id ASC`

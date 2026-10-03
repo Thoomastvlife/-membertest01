@@ -418,22 +418,34 @@ export function adminHtml() {
         </table>
       </div>
 
-      <div class="card">
-        <h2>會員點數</h2>
-        <div class="grid2">
-          <div><label>調整點數（正數加、負數扣）</label><input id="pt_adj_delta" type="number" step="1" placeholder="例如：50 或 -20" /></div>
-          <div><label>調整原因 *</label><input id="pt_adj_note" placeholder="例如：活動贈點" /></div>
+      <div class="card" id="pt_members_card">
+        <div id="pt_list_view">
+          <h2>會員點數</h2>
+          <input id="pt_mem_search" placeholder="搜尋會員（姓名、帳號、手機、信箱）" oninput="onPtSearch()" autocomplete="off" />
+          <div id="pt_mem_count" class="msg" style="color:var(--muted);"></div>
+          <table id="pt_mem_table">
+            <thead><tr><th>會員</th><th>帳號</th><th>目前點數</th><th>累計獲得</th><th>操作</th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <button type="button" id="pt_mem_more" class="btn secondary hidden" onclick="showMorePointMembers()">顯示更多</button>
         </div>
-        <small class="hint">先在下方列表點「選擇」挑會員，再按送出。</small><br/>
-        <div id="pt_adj_target" class="msg" style="color:var(--muted);">尚未選擇會員</div>
-        <button class="btn" onclick="submitPointAdjust()">送出調整</button>
-        <div id="pt_adj_msg" class="msg"></div>
-        <table id="pt_mem_table">
-          <thead><tr><th>會員</th><th>帳號</th><th>目前點數</th><th>累計獲得</th><th>操作</th></tr></thead>
-          <tbody></tbody>
-        </table>
-        <div id="pt_ledger_wrap" class="hidden">
-          <h2 id="pt_ledger_title" style="margin-top:18px;">點數明細</h2>
+
+        <div id="pt_detail_view" class="hidden">
+          <button type="button" class="btn secondary" style="margin-top:0;" onclick="closePointDetail()">← 返回會員列表</button>
+          <h2 id="pt_detail_title" style="margin-top:16px;margin-bottom:4px;"></h2>
+          <div id="pt_detail_bal" style="font-size:14px;color:var(--muted);"></div>
+
+          <div style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:12px;">
+            <b style="font-size:14px;">人工調整點數</b>
+            <div class="grid2">
+              <div><label>調整點數（正數加、負數扣）</label><input id="pt_adj_delta" type="number" step="1" placeholder="例如：50 或 -20" /></div>
+              <div><label>調整原因 *</label><input id="pt_adj_note" placeholder="例如：活動贈點" /></div>
+            </div>
+            <button class="btn" onclick="submitPointAdjust()">送出調整</button>
+            <div id="pt_adj_msg" class="msg"></div>
+          </div>
+
+          <h2 style="margin-top:18px;">點數明細（最近 200 筆）</h2>
           <table id="pt_ledger_table">
             <thead><tr><th>時間</th><th>異動</th><th>類型</th><th>說明</th></tr></thead>
             <tbody></tbody>
@@ -1411,7 +1423,6 @@ let editingCouponId = null;
 // ================= 點數系統（後台）=================
 let ptItemsCache = [];
 let ptEditingItemId = null;
-let ptSelectedMember = null;
 const PT_TYPE = {earn:'付款回饋', spend:'訂單折抵', redeem:'商城兌換', refund:'退回', admin:'店家調整'};
 const PT_RED = {pending:'待處理', fulfilled:'已完成', rejected:'已拒絕並退點'};
 
@@ -1555,48 +1566,101 @@ async function deletePointItem(id){
   }catch(e){ alert(e.message); }
 }
 
+let ptMembers = [];
+let ptMemShown = 10;
+let ptDetailId = null;
+
 async function loadPointMembersAdmin(){
   try{
-    const list = await api('/api/admin/points/members');
-    document.querySelector('#pt_mem_table tbody').innerHTML = list.map(function(r){
-      return '<tr><td data-label="會員">'+escapeHtml(r.name)+'</td><td data-label="帳號">'+escapeHtml(r.account||'')+'</td>' +
-        '<td data-label="目前點數"><b>'+r.balance+'</b></td><td data-label="累計獲得">'+r.earned_total+'</td>' +
-        '<td data-label="操作"><button class="btn secondary small" onclick="selectPointMember('+r.id+',\\''+escapeHtml(r.name).replace(/'/g,'')+'\\')">選擇</button>' +
-        '<button class="btn secondary small" onclick="viewPointLedger('+r.id+',\\''+escapeHtml(r.name).replace(/'/g,'')+'\\')">明細</button></td></tr>';
-    }).join('') || '<tr><td colspan="5">尚無會員</td></tr>';
+    ptMembers = await api('/api/admin/points/members');
+    renderPointMembers();
+    if (ptDetailId) renderPointDetailHeader();
   }catch(e){ /* ignore */ }
 }
 
-function selectPointMember(id, name){
-  ptSelectedMember = id;
-  document.getElementById('pt_adj_target').textContent = '已選擇：' + name;
+function ptFilteredMembers(){
+  const q = document.getElementById('pt_mem_search').value.trim().toLowerCase();
+  if (!q) return ptMembers;
+  return ptMembers.filter(function(m){
+    return [m.name, m.account, m.phone, m.email].some(function(v){ return v && String(v).toLowerCase().indexOf(q) >= 0; });
+  });
 }
 
-async function viewPointLedger(id, name){
+function onPtSearch(){ ptMemShown = 10; renderPointMembers(); }
+function showMorePointMembers(){ ptMemShown += 10; renderPointMembers(); }
+
+function renderPointMembers(){
+  const list = ptFilteredMembers();
+  const shown = list.slice(0, ptMemShown);
+  document.querySelector('#pt_mem_table tbody').innerHTML = shown.map(function(r){
+    return '<tr><td data-label="會員">'+escapeHtml(r.name)+(r.phone ? '<br/><span style="color:var(--muted);font-size:12px;">'+escapeHtml(r.phone)+'</span>' : '')+'</td>' +
+      '<td data-label="帳號">'+escapeHtml(r.account||'')+'</td>' +
+      '<td data-label="目前點數"><b>'+r.balance+'</b></td><td data-label="累計獲得">'+r.earned_total+'</td>' +
+      '<td data-label="操作"><button class="btn secondary small" onclick="openPointDetail('+r.id+')">查看明細</button>' +
+      '<button class="btn small" onclick="openPointDetail('+r.id+', true)">調整點數</button></td></tr>';
+  }).join('') || '<tr><td colspan="5">'+(ptMembers.length ? '找不到符合的會員' : '尚無會員')+'</td></tr>';
+  const q = document.getElementById('pt_mem_search').value.trim();
+  document.getElementById('pt_mem_count').textContent = q
+    ? '符合 ' + list.length + ' 位（共 ' + ptMembers.length + ' 位會員）'
+    : '共 ' + ptMembers.length + ' 位會員';
+  document.getElementById('pt_mem_more').classList.toggle('hidden', list.length <= ptMemShown);
+  document.getElementById('pt_mem_more').textContent = '顯示更多（還有 ' + (list.length - ptMemShown) + ' 位）';
+}
+
+function renderPointDetailHeader(){
+  const m = ptMembers.find(function(x){ return x.id === ptDetailId; });
+  if (!m) return;
+  document.getElementById('pt_detail_title').textContent = m.name + (m.account ? '（' + m.account + '）' : '');
+  document.getElementById('pt_detail_bal').innerHTML = '目前點數：<b style="color:var(--ink);">' + m.balance + '</b> 點　累計獲得：' + m.earned_total + ' 點';
+}
+
+async function loadPointLedger(){
+  const tbody = document.querySelector('#pt_ledger_table tbody');
+  tbody.innerHTML = '<tr><td colspan="4">載入中…</td></tr>';
   try{
-    const list = await api('/api/admin/points/ledger?member_id='+id);
-    document.getElementById('pt_ledger_title').textContent = name + ' 的點數明細（最近 200 筆）';
-    document.querySelector('#pt_ledger_table tbody').innerHTML = list.map(function(l){
+    const list = await api('/api/admin/points/ledger?member_id='+ptDetailId);
+    tbody.innerHTML = list.map(function(l){
       return '<tr><td data-label="時間">'+toTaipeiTime(l.created_at)+'</td><td data-label="異動"><b style="color:'+(l.delta>0?'var(--ok)':'var(--danger)')+'">'+(l.delta>0?'+':'')+l.delta+'</b></td>' +
         '<td data-label="類型">'+(PT_TYPE[l.type]||l.type)+'</td><td data-label="說明">'+escapeHtml(l.note||'')+'</td></tr>';
     }).join('') || '<tr><td colspan="4">尚無紀錄</td></tr>';
-    document.getElementById('pt_ledger_wrap').classList.remove('hidden');
-  }catch(e){ alert(e.message); }
+  }catch(e){ tbody.innerHTML = '<tr><td colspan="4">'+escapeHtml(e.message)+'</td></tr>'; }
+}
+
+// 進入單一會員：整個會員列表（含搜尋）收合，只留這位會員的調整表單與明細
+async function openPointDetail(id, focusAdjust){
+  ptDetailId = id;
+  document.getElementById('pt_list_view').classList.add('hidden');
+  document.getElementById('pt_detail_view').classList.remove('hidden');
+  document.getElementById('pt_adj_delta').value = '';
+  document.getElementById('pt_adj_note').value = '';
+  document.getElementById('pt_adj_msg').textContent = '';
+  renderPointDetailHeader();
+  document.getElementById('pt_members_card').scrollIntoView({behavior:'smooth', block:'start'});
+  if (focusAdjust) document.getElementById('pt_adj_delta').focus();
+  await loadPointLedger();
+}
+
+function closePointDetail(){
+  ptDetailId = null;
+  document.getElementById('pt_detail_view').classList.add('hidden');
+  document.getElementById('pt_list_view').classList.remove('hidden');
+  loadPointMembersAdmin();
 }
 
 async function submitPointAdjust(){
   const m = document.getElementById('pt_adj_msg');
   m.textContent=''; m.className='msg';
-  if (!ptSelectedMember){ m.textContent='請先在下方列表選擇會員'; m.className='msg err'; return; }
+  if (!ptDetailId){ return; }
   try{
     const r = await api('/api/admin/points/adjust', {method:'POST', body: JSON.stringify({
-      member_id: ptSelectedMember,
+      member_id: ptDetailId,
       delta: document.getElementById('pt_adj_delta').value,
       note: document.getElementById('pt_adj_note').value,
     })});
     document.getElementById('pt_adj_delta').value=''; document.getElementById('pt_adj_note').value='';
-    m.textContent='已調整，該會員目前 '+r.balance+' 點'; m.className='msg ok';
-    loadPointMembersAdmin();
+    m.textContent='已調整，目前 '+r.balance+' 點'; m.className='msg ok';
+    await loadPointMembersAdmin();
+    loadPointLedger();
   }catch(e){ m.textContent=e.message; m.className='msg err'; }
 }
 
@@ -2188,6 +2252,9 @@ export function memberHtml() {
 
   @keyframes fadeIn{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:translateY(0);}}
 
+  .upd-card{border-color:var(--accent);background:linear-gradient(0deg,#fff,#fffaf0);}
+  .upd-count{display:inline-block;min-width:20px;padding:1px 7px;margin-left:6px;border-radius:12px;background:var(--accent);color:#fff;font-size:12px;font-weight:700;text-align:center;vertical-align:middle;}
+  .upd-count:empty{display:none;}
   .pts-balance{font-family:var(--mono);font-size:34px;font-weight:700;color:var(--accent-ink);line-height:1.1;}
   .pts-balance small{font-size:14px;font-weight:500;color:var(--muted);margin-left:4px;}
   .pts-rule{color:var(--muted);font-size:13px;margin-top:8px;line-height:1.6;}
@@ -2341,6 +2408,13 @@ export function memberHtml() {
         <button class="btn secondary" onclick="copyMyReferralLink()">複製邀請連結</button>
       </div>
       <div class="msg" style="color:var(--muted);margin-top:8px;">分享此連結給朋友，讓他們自行註冊成為會員</div>
+    </div>
+
+    <!-- === 更新提醒（有訂單 / 兌換狀態變化才會出現）=== -->
+    <div class="card upd-card hidden" id="updatesCard">
+      <h2>最新更新<span class="upd-count" id="updCount"></span></h2>
+      <div id="updList"></div>
+      <button type="button" class="btn secondary" onclick="dismissUpdates()">知道了</button>
     </div>
 
     <!-- === 查價專區（可收合） === -->
@@ -2892,6 +2966,61 @@ async function createOrder(){
   finally{ btn.disabled = false; }
 }
 
+// ---- 更新提醒（訂單狀態變化、兌換單被處理）----
+// 這裡只記錄「上次看過的狀態」在這支手機 / 瀏覽器上；有新的變化才會在最上方出現提醒卡，按「知道了」後消失。
+let updOrders = null;
+let updRed = null;
+const UPD_STATE = {
+  ready_to_pay: '條碼已準備好，請前往付款',
+  paid: '已完成付款',
+  cancelled: '訂單已取消',
+  expired: '付款時效已過，訂單已過期',
+};
+
+function updSeenKey(){ return 'mc_seen_' + (meState && meState.id ? meState.id : ''); }
+function updReadSeen(){ try{ const r = localStorage.getItem(updSeenKey()); return r ? JSON.parse(r) : null; }catch(e){ return null; } }
+function updWriteSeen(m){ try{ localStorage.setItem(updSeenKey(), JSON.stringify(m)); }catch(e){} }
+function updOrderSig(o){ return o.status + (o.is_completed ? '+c' : ''); }
+
+function updCurrentSigs(){
+  const m = {};
+  (updOrders || []).forEach(function(o){ m['o' + o.id] = updOrderSig(o); });
+  (updRed || []).forEach(function(r){ m['r' + r.id] = r.status; });
+  return m;
+}
+
+function refreshUpdates(){
+  if (updOrders === null || updRed === null || !meState) return;
+  let seen = updReadSeen();
+  if (!seen){ seen = updCurrentSigs(); updWriteSeen(seen); } // 這支裝置第一次使用：現有的都當作已看過，避免一次跳出一堆舊訂單
+  const items = [];
+  updOrders.forEach(function(o){
+    if (seen['o' + o.id] === updOrderSig(o)) return;
+    const text = o.is_completed ? '訂單已結案' : UPD_STATE[o.status];
+    if (!text) return;
+    items.push({title: '訂單 ' + o.order_no, desc: text + '（$' + o.amount + '）', href: '/pay/' + o.token});
+  });
+  updRed.forEach(function(r){
+    if (r.status === 'pending' || seen['r' + r.id] === r.status) return;
+    const text = r.status === 'fulfilled'
+      ? '兌換「' + r.item_name + '」已完成'
+      : '兌換「' + r.item_name + '」未成立，已退回 ' + r.cost + ' 點';
+    items.push({title: '點數兌換', desc: text + (r.admin_note ? '（' + r.admin_note + '）' : ''), href: ''});
+  });
+  const card = document.getElementById('updatesCard');
+  card.classList.toggle('hidden', items.length === 0);
+  document.getElementById('updCount').textContent = items.length ? String(items.length) : '';
+  document.getElementById('updList').innerHTML = items.map(function(it){
+    return '<div class="pts-item"><div><div class="nm">' + ptsEsc(it.title) + '</div><div class="ds">' + ptsEsc(it.desc) + '</div></div>' +
+      (it.href ? '<a href="' + it.href + '" target="_blank">查看</a>' : '') + '</div>';
+  }).join('');
+}
+
+function dismissUpdates(){
+  updWriteSeen(Object.assign({}, updReadSeen() || {}, updCurrentSigs()));
+  document.getElementById('updatesCard').classList.add('hidden');
+}
+
 // ---- 個人資料：修改手機 / 信箱（信箱要驗證）----
 let meState = null;
 let pfCooldownTimer = null;
@@ -2994,6 +3123,8 @@ async function loadPoints(){
   try{
     const d = await api('/api/member/points');
     pointsState = d;
+    updRed = d.redemptions || [];
+    refreshUpdates();
     const anyOn = d.earn_enabled || d.discount_enabled || d.shop_enabled;
     document.getElementById('pointsCard').classList.toggle('hidden', !anyOn && d.balance === 0 && !d.ledger.length);
     document.getElementById('ptsBalance').textContent = Number(d.balance).toLocaleString();
@@ -3033,7 +3164,7 @@ async function loadPoints(){
 
     document.getElementById('usePointsWrap').classList.toggle('hidden', !(d.discount_enabled && d.balance > 0));
     updatePointsHint();
-  }catch(e){ /* 點數載入失敗不影響其他功能 */ }
+  }catch(e){ /* 點數載入失敗不影響其他功能 */ if (updRed === null) { updRed = []; refreshUpdates(); } }
 }
 
 function maxUsablePoints(){
@@ -3082,6 +3213,8 @@ async function redeemItem(id){
 // ---- 訂單自動更新（輪詢）----
 let ordersPollTimer = null;
 
+let pointsPollTimer = null;
+
 function startOrdersPolling(){
   stopOrdersPolling();
   ordersPollTimer = setInterval(()=> {
@@ -3090,16 +3223,25 @@ function startOrdersPolling(){
       loadOrders();
     }
   }, 5000);
+  // 兌換單被處理的提醒：30 秒檢查一次就夠
+  pointsPollTimer = setInterval(()=> {
+    const appView = document.getElementById('appView');
+    if (appView && !appView.classList.contains('hidden') && !document.hidden) {
+      loadPoints();
+    }
+  }, 30000);
 }
 
 function stopOrdersPolling(){
   if (ordersPollTimer) { clearInterval(ordersPollTimer); ordersPollTimer = null; }
+  if (pointsPollTimer) { clearInterval(pointsPollTimer); pointsPollTimer = null; }
 }
 
 async function loadOrders(){
   const month = document.getElementById('ord_month').value;
   const qs = month ? ('?month='+encodeURIComponent(month)) : '';
   const list = await api('/api/member/orders'+qs);
+  if (!month) { updOrders = list; refreshUpdates(); }
   const tbody = document.querySelector('#ord_table tbody');
   const ACTIVE = new Set(['pending_method','awaiting_payment','awaiting_barcode','ready_to_pay']);
   tbody.innerHTML = list.map(o=>{
