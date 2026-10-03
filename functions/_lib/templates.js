@@ -430,7 +430,7 @@ export function adminHtml() {
             <thead><tr><th>會員</th><th>帳號</th><th>目前點數</th><th>累計獲得</th><th>操作</th></tr></thead>
             <tbody></tbody>
           </table>
-          <button type="button" id="pt_mem_more" class="btn secondary hidden" onclick="showMorePointMembers()">顯示更多</button>
+          <div id="pt_mem_pager" class="pager"></div>
         </div>
 
         <div id="pt_detail_view" class="hidden">
@@ -1583,7 +1583,8 @@ async function deletePointItem(id){
 }
 
 let ptMembers = [];
-let ptMemShown = 10;
+const PT_MEM_SIZE = 10;
+let ptMemPage = 1;
 let ptDetailId = null;
 
 async function loadPointMembersAdmin(){
@@ -1602,12 +1603,15 @@ function ptFilteredMembers(){
   });
 }
 
-function onPtSearch(){ ptMemShown = 10; renderPointMembers(); }
-function showMorePointMembers(){ ptMemShown += 10; renderPointMembers(); }
+function onPtSearch(){ ptMemPage = 1; renderPointMembers(); }
+function gotoPtMemPage(p){ ptMemPage = p; renderPointMembers(); }
 
 function renderPointMembers(){
   const list = ptFilteredMembers();
-  const shown = list.slice(0, ptMemShown);
+  const pages = Math.max(1, Math.ceil(list.length / PT_MEM_SIZE));
+  if (ptMemPage > pages) ptMemPage = pages;
+  if (ptMemPage < 1) ptMemPage = 1;
+  const shown = list.slice((ptMemPage - 1) * PT_MEM_SIZE, ptMemPage * PT_MEM_SIZE);
   document.querySelector('#pt_mem_table tbody').innerHTML = shown.map(function(r){
     return '<tr><td data-label="會員">'+escapeHtml(r.name)+(r.phone ? '<br/><span style="color:var(--muted);font-size:12px;">'+escapeHtml(r.phone)+'</span>' : '')+'</td>' +
       '<td data-label="帳號">'+escapeHtml(r.account||'')+'</td>' +
@@ -1619,8 +1623,11 @@ function renderPointMembers(){
   document.getElementById('pt_mem_count').textContent = q
     ? '符合 ' + list.length + ' 位（共 ' + ptMembers.length + ' 位會員）'
     : '共 ' + ptMembers.length + ' 位會員';
-  document.getElementById('pt_mem_more').classList.toggle('hidden', list.length <= ptMemShown);
-  document.getElementById('pt_mem_more').textContent = '顯示更多（還有 ' + (list.length - ptMemShown) + ' 位）';
+  document.getElementById('pt_mem_pager').innerHTML = list.length > PT_MEM_SIZE
+    ? '<button type="button" class="btn secondary small" ' + (ptMemPage <= 1 ? 'disabled' : '') + ' onclick="gotoPtMemPage(' + (ptMemPage - 1) + ')">‹ 上一頁</button>' +
+      '<span>第 ' + ptMemPage + ' / ' + pages + ' 頁</span>' +
+      '<button type="button" class="btn secondary small" ' + (ptMemPage >= pages ? 'disabled' : '') + ' onclick="gotoPtMemPage(' + (ptMemPage + 1) + ')">下一頁 ›</button>'
+    : '';
 }
 
 function renderPointDetailHeader(){
