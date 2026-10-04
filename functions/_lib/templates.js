@@ -83,8 +83,9 @@ ${THEME_HEAD}
   @media (max-width:700px){
     header{padding:10px 12px;flex-wrap:nowrap;gap:8px;}
     header h1{font-size:16px;white-space:nowrap;}
-    header > div{flex:0 0 auto;display:flex;flex-wrap:nowrap;align-items:center;gap:6px;}
-    header #whoami{display:none;}
+    header h1{flex:0 0 auto;}
+    header > div{flex:1 1 auto;min-width:0;display:flex;flex-wrap:nowrap;align-items:center;justify-content:flex-end;gap:6px;}
+    header #whoami{margin:0 !important;font-size:12px;min-width:0;max-width:24vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
     header .btn{margin:0 !important;padding:8px 10px;font-size:14px;white-space:nowrap;}
     header .pb-lb,header .btn.js-theme-toggle .tg-label{display:none;}
     nav{padding:8px 8px 0;gap:4px;overflow-x:auto;flex-wrap:nowrap;-webkit-overflow-scrolling:touch;}
