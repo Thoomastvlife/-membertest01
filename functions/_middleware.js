@@ -1,5 +1,5 @@
 // 功能一：舊網址 (coffee1688.pages.dev) 顯示「網頁已更新」+ Turnstile 驗證後跳轉到新網址。
-// 功能二：新網址 (member.ytgp168.com) 的「會員登入 / 會員註冊 / 寄送驗證碼 / 管理員登入」
+// 功能二：新網址 (member.ytgp168.com) 的「會員登入 / 會員註冊 / 寄送驗證碼 / 管理員登入 / 會員下單」
 //         加上 Turnstile 人機驗證（前端自動注入、後端強制檢查），不需要修改 templates.js 與 [[path]].js。
 //
 // 需要的環境變數（Pages 專案設定）：
@@ -78,6 +78,7 @@ const PROTECTED_API = [
   "/api/member/send-email-code",
   "/api/member/register",
   "/api/admin/login",
+  "/api/member/orders", // 會員自助下單（POST）；GET 查詢訂單不受影響
 ];
 const PROTECTED_PAGES = ["/member", "/member/", "/member/register", "/member/register/", "/admin", "/admin/"];
 

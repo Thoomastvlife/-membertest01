@@ -270,3 +270,9 @@ member-checkout-pages/
 - **後台**：「兌換單」每頁 10 筆，有上一頁／下一頁（`GET /api/admin/points/redemptions?page=&size=`，回傳 `{rows,total,page,pages,size}`）。
 - **後台「會員點數」列表**：原本的「顯示更多」改成上一頁／下一頁，每頁 10 位，只顯示該頁內容（搜尋時會回到第 1 頁）。
 - 不需要跑新的資料庫升級腳本。
+
+## 人機驗證（Cloudflare Turnstile）保護範圍
+- 受保護的 POST：會員登入、寄送信箱驗證碼、會員註冊、管理員登入、**會員自助下單（`/api/member/orders`）**。
+- 驗證方式：頁面載入時背景預先取得 token（通常看不到任何勾選框，只有可疑流量才會跳出互動式驗證），送出時自動帶上；後端沒有有效 token 一律回 403。
+- 需設定 `TURNSTILE_SITE_KEY`（一般變數）與 `TURNSTILE_SECRET`（Secret）才會啟用；任一沒設定就整組不啟用。
+- 結帳櫃檯（後台建單）本身要先通過後台登入驗證，不另外加驗證。
