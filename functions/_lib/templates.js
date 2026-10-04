@@ -44,6 +44,10 @@ export function adminHtml() {
   .msg{font-size:13px;margin-top:8px;}
   .msg.err{color:var(--danger);} .msg.ok{color:var(--ok);}
   .link-box{display:flex;gap:8px;margin-top:10px;}
+  .card-toggle{display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none;}
+  .card-toggle h2{margin:0;padding-top:0;}
+  .card-toggle .arrow{transition:transform .2s;color:var(--accent);font-size:14px;}
+  .card-toggle.open .arrow{transform:rotate(180deg);}
   .link-box input{flex:1;background:#f0f2f5;}
   .hidden{display:none;}
   #loginView{max-width:360px;margin:80px auto;}
@@ -235,11 +239,19 @@ export function adminHtml() {
         <div id="mem_msg" class="msg"></div>
       </div>
       <div class="card">
-        <h2>會員列表</h2>
-        <table id="mem_table">
-          <thead><tr><th>ID</th><th>姓名</th><th>帳號</th><th>電話</th><th>電子信箱</th><th>備註</th><th>推薦碼</th><th>推薦人</th><th>操作</th></tr></thead>
-          <tbody></tbody>
-        </table>
+        <div class="card-toggle open" id="membersToggle" onclick="toggleMembersPanel()">
+          <h2>會員列表</h2>
+          <span class="arrow">▼</span>
+        </div>
+        <div id="membersPanel">
+          <input id="mem_search" placeholder="搜尋會員（姓名、帳號、電話、信箱、備註）" oninput="onMemberSearch()" autocomplete="off" style="margin-top:14px;" />
+          <div id="mem_count" class="msg" style="color:var(--muted);"></div>
+          <table id="mem_table">
+            <thead><tr><th>ID</th><th>姓名</th><th>帳號</th><th>電話</th><th>電子信箱</th><th>備註</th><th>推薦碼</th><th>推薦人</th><th>操作</th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <div id="mem_pager" class="pager"></div>
+        </div>
       </div>
     </section>
 
@@ -1116,10 +1128,34 @@ async function cancelOrder(id){
   loadOrders();
 }
 
-async function loadMembers(){
-  const list = await api('/api/admin/members');
+const MEM_PAGE_SIZE = 20;
+let memPage = 1;
+
+function toggleMembersPanel(){
+  document.getElementById('membersToggle').classList.toggle('open');
+  document.getElementById('membersPanel').classList.toggle('hidden');
+}
+
+function memFilteredList(){
+  const q = document.getElementById('mem_search').value.trim().toLowerCase();
+  if (!q) return membersCache;
+  return membersCache.filter(m=>
+    [m.name, m.account, m.phone, m.email, m.note].some(v=> v && String(v).toLowerCase().indexOf(q) >= 0)
+  );
+}
+
+function onMemberSearch(){ memPage = 1; renderMembersTable(); }
+function gotoMemPage(p){ memPage = p; renderMembersTable(); }
+
+function renderMembersTable(){
+  const list = memFilteredList();
+  const pages = Math.max(1, Math.ceil(list.length / MEM_PAGE_SIZE));
+  if (memPage > pages) memPage = pages;
+  if (memPage < 1) memPage = 1;
+  const shown = list.slice((memPage - 1) * MEM_PAGE_SIZE, memPage * MEM_PAGE_SIZE);
+
   const tbody = document.querySelector('#mem_table tbody');
-  tbody.innerHTML = list.map(m=>\`<tr>
+  tbody.innerHTML = shown.map(m=>\`<tr>
     <td data-label="ID">\${m.id}</td><td data-label="姓名">\${m.name}</td><td data-label="帳號">\${m.account||''}</td><td data-label="電話">\${m.phone||''}</td><td data-label="電子信箱">\${m.email||''}\${m.email && m.email_verified_at ? ' <span title="已通過信箱驗證" style="color:#1E7A56">✓</span>' : ''}</td><td data-label="備註">\${m.note||''}</td>
     <td data-label="推薦碼"><code>\${m.referral_code||''}</code> <button class="btn secondary small" onclick="copyReferralLink('\${m.referral_code}')">複製邀請連結</button></td>
     <td data-label="推薦人">\${m.referred_by_name||'-'}</td>
@@ -1128,8 +1164,22 @@ async function loadMembers(){
       <button class="btn secondary small" onclick="resetPassword(\${m.id})">設定密碼</button>
       <button class="btn danger small" onclick="deleteMember(\${m.id})">刪除</button>
     </td>
-  </tr>\`).join('') || '<tr><td colspan="9">尚無會員</td></tr>';
-  loadMembersIntoSelect();
+  </tr>\`).join('') || '<tr><td colspan="9">'+(membersCache.length ? '找不到符合的會員' : '尚無會員')+'</td></tr>';
+
+  const q = document.getElementById('mem_search').value.trim();
+  document.getElementById('mem_count').textContent = q
+    ? '符合 ' + list.length + ' 位（共 ' + membersCache.length + ' 位會員）'
+    : '共 ' + membersCache.length + ' 位會員';
+  document.getElementById('mem_pager').innerHTML = list.length > MEM_PAGE_SIZE
+    ? '<button type="button" class="btn secondary small" ' + (memPage <= 1 ? 'disabled' : '') + ' onclick="gotoMemPage(' + (memPage - 1) + ')">‹ 上一頁</button>' +
+      '<span>第 ' + memPage + ' / ' + pages + ' 頁</span>' +
+      '<button type="button" class="btn secondary small" ' + (memPage >= pages ? 'disabled' : '') + ' onclick="gotoMemPage(' + (memPage + 1) + ')">下一頁 ›</button>'
+    : '';
+}
+
+async function loadMembers(){
+  membersCache = await api('/api/admin/members');
+  renderMembersTable();
 }
 
 function copyReferralLink(code){
