@@ -487,12 +487,15 @@ export async function hashEmailCode(env, email, code) {
   return sha256Hex(`${env.ADMIN_SESSION_SECRET}|${email}|${code}`);
 }
 
-export async function sendEmail(env, { to, subject, html, text }) {
-  if (!env.RESEND_API_KEY || !env.EMAIL_FROM) throw new Error("EMAIL_NOT_CONFIGURED");
+// from 可選填，不給的話預設用 EMAIL_FROM（會員驗證信那組寄件人）。
+// 想讓某一類信件（例如訂單完成通知）用不同寄件人顯示，呼叫端傳 from 覆蓋即可。
+export async function sendEmail(env, { to, subject, html, text, from }) {
+  const sender = from || env.EMAIL_FROM;
+  if (!env.RESEND_API_KEY || !sender) throw new Error("EMAIL_NOT_CONFIGURED");
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ from: env.EMAIL_FROM, to: [to], subject, html, text }),
+    body: JSON.stringify({ from: sender, to: [to], subject, html, text }),
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => "");

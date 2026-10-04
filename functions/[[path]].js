@@ -849,10 +849,15 @@ function maskEmail(e) {
 
 // 訂單完成通知信：回傳 { sent, reason?, to? }；任何失敗都只回報原因，不會讓「訂單完成」本身失敗
 async function sendOrderCompleteEmail(env, order) {
-  if (!order.member_id) return { sent: false, reason: "此訂單不是會員訂單，沒有信箱可寄" };
-  const m = await env.DB.prepare("SELECT name, email FROM members WHERE id=?").bind(order.member_id).first();
-  if (!m || !m.email || !String(m.email).trim()) return { sent: false, reason: "此會員沒有填寫信箱，未寄送" };
-  if (!env.RESEND_API_KEY || !env.EMAIL_FROM) return { sent: false, reason: "尚未設定寄信服務（RESEND_API_KEY / EMAIL_FROM），未寄送" };
+  const ownAddr = order.notify_email_addr && String(order.notify_email_addr).trim() ? String(order.notify_email_addr).trim() : null;
+  if (!order.member_id && !ownAddr) return { sent: false, reason: "此訂單不是會員訂單，沒有信箱可寄" };
+  const m = order.member_id
+    ? await env.DB.prepare("SELECT name, email FROM members WHERE id=?").bind(order.member_id).first()
+    : { name: order.member_name_snapshot, email: null };
+  const toAddr = ownAddr || (m && m.email ? String(m.email).trim() : "");
+  if (!toAddr) return { sent: false, reason: "此會員沒有填寫信箱，未寄送" };
+  const orderSender = env.EMAIL_FROM_ORDER || env.EMAIL_FROM;
+  if (!env.RESEND_API_KEY || !orderSender) return { sent: false, reason: "尚未設定寄信服務（RESEND_API_KEY / EMAIL_FROM_ORDER 或 EMAIL_FROM），未寄送" };
 
   const orderNo = formatOrderNo(order.id);
   const PM = { transfer: "轉帳", store_barcode: "超商條碼", taiwan_pay: "TWQR" };
@@ -864,13 +869,14 @@ async function sendOrderCompleteEmail(env, order) {
   }
   rows.push(["完成時間", new Date().toLocaleString("zh-TW", { timeZone: "Asia/Taipei", hour12: false })]);
 
-  const name = m.name || "會員";
+  const name = (m && m.name) || order.member_name_snapshot || "會員";
   const tableHtml = rows
     .map((r) => `<tr><td style="padding:6px 12px 6px 0;color:#767B8C;white-space:nowrap;">${escHtmlMail(r[0])}</td><td style="padding:6px 0;font-weight:600;">${escHtmlMail(r[1])}</td></tr>`)
     .join("");
   try {
     await sendEmail(env, {
-      to: String(m.email).trim(),
+      to: toAddr,
+      from: orderSender,
       subject: `【訂單完成】${orderNo} 已完成`,
       text: `${name} 您好，您的訂單 ${orderNo} 已完成，謝謝您的惠顧。\n` + rows.map((r) => `${r[0]}：${r[1]}`).join("\n"),
       html: `<div style="font-family:-apple-system,'PingFang TC','Microsoft JhengHei',sans-serif;max-width:440px;margin:auto;padding:20px;">
@@ -879,7 +885,7 @@ async function sendOrderCompleteEmail(env, order) {
         <table style="border-collapse:collapse;margin:12px 0;font-size:14px;">${tableHtml}</table>
         <p style="color:#767B8C;font-size:13px;">這是系統自動發送的通知信，如有任何問題請直接聯絡店家。</p></div>`,
     });
-    return { sent: true, to: maskEmail(String(m.email).trim()) };
+    return { sent: true, to: maskEmail(toAddr) };
   } catch (e) {
     return { sent: false, reason: "寄信失敗：" + String(e.message || e).slice(0, 120) };
   }
@@ -1433,6 +1439,21 @@ async function handleMemberCreateOrder(session, request, env) {
   }
   const hasDiscount = !!couponResult || pointsUsed > 0;
 
+  // 訂單完成通知信：顧客可勾選，並可改填「這筆訂單專用」的信箱（沒填就用會員資料中的信箱）。
+  // 在建立訂單「之前」先驗證完，格式不對就直接擋下，避免訂單建立後才報錯。
+  const notifyEmail = body.notify_email === true;
+  let notifyAddr = null; // NULL = 用會員資料中的信箱
+  if (notifyEmail) {
+    const typed = typeof body.notify_email_addr === "string" ? body.notify_email_addr.trim().toLowerCase() : "";
+    const profile = member.email ? String(member.email).trim().toLowerCase() : "";
+    if (!typed && !profile) return json({ error: "請填寫要接收通知的電子信箱" }, 400);
+    if (typed && typed !== profile) {
+      if (!EMAIL_RE.test(typed)) return json({ error: "通知信箱格式不正確" }, 400);
+      if (!isAllowedEmailDomain(typed)) return json({ error: "目前僅接受常見信箱（Gmail、Outlook、Hotmail、Yahoo、iCloud 等）" }, 400);
+      notifyAddr = typed;
+    }
+  }
+
   // 預計獲得幣數：以優惠碼折抵前的金額（amt）+ 下單當下的費率試算。
   // TikTok 用自己的一組費率，快手/小紅書/陸抖 共用另一組。
   // 一律由伺服器端計算，不採信前端送來的數字，避免被竄改。
@@ -1486,9 +1507,8 @@ async function handleMemberCreateOrder(session, request, env) {
   if (couponResult) await incrementCouponUsage(env, couponResult.coupon.id);
 
   // 顧客勾選「訂單完成寄信通知我」：需要有信箱才記錄（沒有信箱就忽略，避免之後完成時寄不出去）
-  const notifyEmail = body.notify_email === true && !!member.email && !!String(member.email).trim();
   if (notifyEmail) {
-    await env.DB.prepare("UPDATE orders SET notify_email=1 WHERE id=?").bind(inserted.meta.last_row_id).run();
+    await env.DB.prepare("UPDATE orders SET notify_email=1, notify_email_addr=? WHERE id=?").bind(notifyAddr, inserted.meta.last_row_id).run();
   }
 
   await notifyAdminsOfNewOrder(env, { id: inserted.meta.last_row_id, member_name_snapshot: member.name, amount: finalAmount });
