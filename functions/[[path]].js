@@ -887,9 +887,11 @@ async function sendOrderCompleteEmail(env, order) {
 
 async function handleCompleteOrder(id, request, env) {
   const body = await request.json().catch(() => ({}));
-  const wantEmail = body.send_email === true || body.send_email === 1 || body.send_email === "1";
+  const adminWantsEmail = body.send_email === true || body.send_email === 1 || body.send_email === "1";
   const order = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).first();
   if (!order) return json({ error: "找不到訂單" }, 404);
+  // 後台有勾，或顧客下單時自己勾選了要通知 → 寄信
+  const wantEmail = adminWantsEmail || order.notify_email === 1;
   if (order.status !== "paid") return json({ error: "只有已完成付款的訂單才能標記為訂單完成" }, 400);
   const alreadyCompleted = !!order.is_completed;
   await env.DB.prepare("UPDATE orders SET is_completed=1, completed_at=? WHERE id=?").bind(nowIso(), id).run();
@@ -1482,6 +1484,12 @@ async function handleMemberCreateOrder(session, request, env) {
   }
 
   if (couponResult) await incrementCouponUsage(env, couponResult.coupon.id);
+
+  // 顧客勾選「訂單完成寄信通知我」：需要有信箱才記錄（沒有信箱就忽略，避免之後完成時寄不出去）
+  const notifyEmail = body.notify_email === true && !!member.email && !!String(member.email).trim();
+  if (notifyEmail) {
+    await env.DB.prepare("UPDATE orders SET notify_email=1 WHERE id=?").bind(inserted.meta.last_row_id).run();
+  }
 
   await notifyAdminsOfNewOrder(env, { id: inserted.meta.last_row_id, member_name_snapshot: member.name, amount: finalAmount });
 

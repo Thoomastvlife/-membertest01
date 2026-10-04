@@ -485,7 +485,7 @@ export function adminHtml() {
       <input type="checkbox" id="cpl_email" style="width:auto;margin:0;" />
       <span>同時寄信通知會員訂單已完成</span>
     </label>
-    <small class="hint" style="display:block;margin-top:6px;">會寄到會員資料中的信箱；非會員或沒有信箱的訂單不會寄出。</small>
+    <small class="hint" id="cpl_email_note" style="display:block;margin-top:6px;">會寄到會員資料中的信箱；非會員或沒有信箱的訂單不會寄出。</small>
     <div style="display:flex;gap:8px;margin-top:14px;">
       <button class="btn" id="cpl_ok" onclick="submitComplete()">確定完成</button>
       <button class="btn secondary" onclick="closeComplete()">取消</button>
@@ -931,7 +931,7 @@ function renderOrders(){
     return \`<tr>
       <td data-label="訂單編號"><code>\${o.order_no}</code></td>
       <td data-label="建立時間">\${toTaipeiTime(o.created_at)}</td>
-      <td data-label="會員">\${o.member_name_snapshot}</td>
+      <td data-label="會員">\${o.member_name_snapshot}\${o.notify_email ? ' <span title="顧客下單時選擇：訂單完成寄信通知" style="color:var(--accent);">✉</span>' : ''}</td>
       <td data-label="儲值平台">\${PLATFORM_LABEL[o.platform]||'<span class="muted" style="color:var(--muted)">未指定</span>'}</td>
       <td data-label="帳號/密碼">\${accountInfo}</td>
       <td data-label="金額">$\${o.amount}</td>
@@ -1013,7 +1013,13 @@ function completeOrder(id){
   completingId = id;
   const o = (typeof ordersCache !== 'undefined' && Array.isArray(ordersCache)) ? ordersCache.find(function(x){ return x.id === id; }) : null;
   document.getElementById('cpl_no').textContent = o && o.order_no ? o.order_no : '';
-  document.getElementById('cpl_email').checked = false;
+  const cb = document.getElementById('cpl_email');
+  const optedIn = !!(o && o.notify_email);
+  cb.checked = optedIn;
+  cb.disabled = optedIn;
+  document.getElementById('cpl_email_note').textContent = optedIn
+    ? '顧客下單時已選擇要信箱通知，完成後會自動寄出。'
+    : '會寄到會員資料中的信箱；非會員或沒有信箱的訂單不會寄出。';
   const msg = document.getElementById('cpl_msg'); msg.textContent = ''; msg.className = 'msg';
   document.getElementById('cpl_ok').disabled = false;
   document.getElementById('completeModal').classList.remove('hidden');
@@ -1034,7 +1040,7 @@ async function submitComplete(){
     const r = await api('/api/admin/orders/'+completingId+'/complete', {method:'POST', body: JSON.stringify({send_email: wantEmail})});
     closeComplete();
     loadOrders();
-    if (wantEmail && r && r.email) {
+    if (r && r.email) {
       alert(r.email.sent ? '訂單已完成，已寄出通知信至 ' + r.email.to : '訂單已完成，但通知信未寄出：' + r.email.reason);
     }
   }catch(e){ msg.textContent = e.message; msg.className = 'msg err'; btn.disabled = false; }
@@ -2617,6 +2623,10 @@ ${SITE_DISCLAIMER_CSS}
         </div>
         <div id="usePointsMsg" class="msg" style="color:var(--muted);"></div>
       </div>
+      <label id="notifyWrap" style="display:flex;align-items:flex-start;gap:8px;font-size:14px;cursor:pointer;margin-top:14px;">
+        <input type="checkbox" id="new_notify_email" style="width:auto;margin:3px 0 0;" />
+        <span>訂單完成時寄信通知我<br/><span id="notifyEmailHint" style="color:var(--muted);font-size:12.5px;"></span></span>
+      </label>
       <button class="btn" id="newOrderBtn" onclick="createOrder()">建立訂單</button>
       <div id="newOrderMsg" class="msg"></div>
       <div id="newOrderResult" class="hidden">
@@ -3062,6 +3072,7 @@ async function createOrder(){
   const platform_password = document.getElementById('new_platform_password').value;
   const coupon_code = document.getElementById('mo_coupon').value.trim() || null;
   const use_points = Math.floor(Number(document.getElementById('use_points').value) || 0);
+  const notify_email = !!document.getElementById('new_notify_email').checked;
   msg.textContent=''; msg.className='msg';
   document.getElementById('newOrderResult').classList.add('hidden');
   if (!amount || Number(amount) <= 0){ msg.textContent='請輸入正確的金額'; msg.className='msg err'; return; }
@@ -3071,8 +3082,9 @@ async function createOrder(){
   if (!platform_password && PLATFORMS_REQUIRE_PASSWORD.has(platform)){ msg.textContent='請輸入密碼'; msg.className='msg err'; return; }
   btn.disabled = true;
   try{
-    const res = await api('/api/member/orders', {method:'POST', body: JSON.stringify({amount, platform, platform_account, platform_password, coupon_code, use_points})});
+    const res = await api('/api/member/orders', {method:'POST', body: JSON.stringify({amount, platform, platform_account, platform_password, coupon_code, use_points, notify_email})});
     document.getElementById('use_points').value = '';
+    document.getElementById('new_notify_email').checked = false;
     document.getElementById('usePointsMsg').textContent = '';
     document.getElementById('new_amount').value = '';
     document.getElementById('new_amount').classList.add('hidden');
@@ -3165,6 +3177,18 @@ function renderProfile(me){
   const verified = me.email && me.email_verified_at ? ' <span style="color:var(--ok);font-size:12px;">✓ 已驗證</span>' : '';
   document.getElementById('pf_email').innerHTML = (me.email ? ptsEsc(me.email) : '-') + verified;
   document.getElementById('pf_created').textContent = me.created_at ? toTaipeiTime(me.created_at) : '-';
+  syncNotifyEmailBox(me);
+}
+
+function syncNotifyEmailBox(me){
+  const box = document.getElementById('new_notify_email');
+  const hint = document.getElementById('notifyEmailHint');
+  if (!box || !hint) return;
+  const has = !!(me && me.email && String(me.email).trim());
+  box.disabled = !has;
+  if (!has) box.checked = false;
+  hint.textContent = has ? '將寄到 ' + me.email : '請先到「個人資料」填寫電子信箱，才能使用此功能';
+  document.getElementById('notifyWrap').style.opacity = has ? '1' : '.6';
 }
 
 function openProfileEdit(){
