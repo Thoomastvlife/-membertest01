@@ -1,5 +1,13 @@
 import { ALLOWED_EMAIL_DOMAINS } from "./helpers.js";
 
+// ===== 網頁宣告（會員頁 / 註冊頁 / 付款頁 共用）=====
+const SUPPORT_EMAIL = "service@ytgp168.com";
+const SITE_DISCLAIMER_CSS = `
+  .site-disclaimer{flex:0 0 100%;width:100%;max-width:420px;margin:22px auto 8px;padding:0 14px;text-align:center;font-size:12.5px;line-height:1.7;color:#767B8C;box-sizing:border-box;}
+  .site-disclaimer b{display:block;font-size:13px;margin-bottom:2px;color:inherit;}
+  .site-disclaimer a{color:inherit;text-decoration:underline;}`;
+const SITE_DISCLAIMER_HTML = `<div class="site-disclaimer"><b>網頁宣告</b>本網站為會員自助查詢與訂單結帳頁面，內容僅供參考，實際以訂單確認內容為準。<br/>客服信箱：<a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a></div>`;
+
 export function adminHtml() {
   return `<!DOCTYPE html>
 <html lang="zh-Hant">
@@ -467,6 +475,23 @@ export function adminHtml() {
     </section>
 
   </main>
+</div>
+
+<div id="completeModal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <h2>訂單完成 <span id="cpl_no"></span></h2>
+    <p style="margin:0 0 12px;font-size:14px;line-height:1.6;">確定將此訂單標記為「訂單完成」？<br/><span style="color:var(--muted);font-size:13px;">（結案標記；若有開啟點數回饋，會在此時發放點數）</span></p>
+    <label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;margin:0;">
+      <input type="checkbox" id="cpl_email" style="width:auto;margin:0;" />
+      <span>同時寄信通知會員訂單已完成</span>
+    </label>
+    <small class="hint" style="display:block;margin-top:6px;">會寄到會員資料中的信箱；非會員或沒有信箱的訂單不會寄出。</small>
+    <div style="display:flex;gap:8px;margin-top:14px;">
+      <button class="btn" id="cpl_ok" onclick="submitComplete()">確定完成</button>
+      <button class="btn secondary" onclick="closeComplete()">取消</button>
+    </div>
+    <div id="cpl_msg" class="msg"></div>
+  </div>
 </div>
 
 <div id="correctModal" class="modal-overlay hidden">
@@ -982,10 +1007,37 @@ async function submitCorrect(){
   }catch(e){ msg.textContent = e.message; msg.className='msg err'; }
 }
 
-async function completeOrder(id){
-  if (!confirm('確定將此訂單標記為「訂單完成」？（只是結案標記，方便篩選，不影響金流）')) return;
-  try{ await api('/api/admin/orders/'+id+'/complete', {method:'POST'}); loadOrders(); }
-  catch(e){ alert(e.message); }
+let completingId = null;
+
+function completeOrder(id){
+  completingId = id;
+  const o = (typeof ordersCache !== 'undefined' && Array.isArray(ordersCache)) ? ordersCache.find(function(x){ return x.id === id; }) : null;
+  document.getElementById('cpl_no').textContent = o && o.order_no ? o.order_no : '';
+  document.getElementById('cpl_email').checked = false;
+  const msg = document.getElementById('cpl_msg'); msg.textContent = ''; msg.className = 'msg';
+  document.getElementById('cpl_ok').disabled = false;
+  document.getElementById('completeModal').classList.remove('hidden');
+}
+
+function closeComplete(){
+  completingId = null;
+  document.getElementById('completeModal').classList.add('hidden');
+}
+
+async function submitComplete(){
+  if (!completingId) return;
+  const btn = document.getElementById('cpl_ok');
+  const msg = document.getElementById('cpl_msg');
+  const wantEmail = document.getElementById('cpl_email').checked;
+  btn.disabled = true;
+  try{
+    const r = await api('/api/admin/orders/'+completingId+'/complete', {method:'POST', body: JSON.stringify({send_email: wantEmail})});
+    closeComplete();
+    loadOrders();
+    if (wantEmail && r && r.email) {
+      alert(r.email.sent ? '訂單已完成，已寄出通知信至 ' + r.email.to : '訂單已完成，但通知信未寄出：' + r.email.reason);
+    }
+  }catch(e){ msg.textContent = e.message; msg.className = 'msg err'; btn.disabled = false; }
 }
 
 async function uncompleteOrder(id){
@@ -1916,7 +1968,7 @@ export function payHtml() {
 <style>
   *{box-sizing:border-box;}
   body{margin:0;font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif;background:#f5f6f8;color:#1f2430;
-    display:flex;justify-content:center;padding:24px 14px;}
+    display:flex;flex-wrap:wrap;align-content:flex-start;justify-content:center;padding:24px 14px;}
   .card{background:#fff;border:1px solid #e2e4e8;border-radius:12px;padding:24px;max-width:420px;width:100%;}
   h1{font-size:18px;margin-top:0;}
   .amount{font-size:32px;font-weight:700;text-align:center;margin:14px 0;}
@@ -1939,6 +1991,7 @@ export function payHtml() {
   .proof-box input[type=text]{width:100%;padding:9px 10px;border:1px solid #e2e4e8;border-radius:6px;font-size:14px;box-sizing:border-box;}
   .proof-box button{width:100%;margin-top:10px;padding:10px;border-radius:8px;border:none;background:#2f6fed;color:#fff;font-size:14px;cursor:pointer;}
   .proof-done{background:#eef9f0;color:#1f9d55;border-radius:8px;padding:10px;margin-top:14px;font-size:13px;text-align:center;}
+${SITE_DISCLAIMER_CSS}
 </style>
 </head>
 <body>
@@ -2181,6 +2234,7 @@ async function selectMethod(method, store){
 
 load();
 </script>
+${SITE_DISCLAIMER_HTML}
 </body>
 </html>`;
 }
@@ -2388,6 +2442,7 @@ export function memberHtml() {
     #ord_table td > *{min-width:0;max-width:100%;}
     #ord_table code{word-break:break-all;}
   }
+${SITE_DISCLAIMER_CSS}
 </style>
 </head>
 <body>
@@ -3393,6 +3448,7 @@ loadRates().then(() => {
   checkSession();
 });
 </script>
+${SITE_DISCLAIMER_HTML}
 </body>
 </html>`;
 }
@@ -3437,6 +3493,7 @@ export function memberRegisterHtml({ emailVerify = true } = {}) {
   .row{display:flex;gap:8px;}
   button.btn2{white-space:nowrap;padding:0 12px;border:1px solid var(--line);background:#fff;color:var(--accent-ink);border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;}
   button.btn2:disabled{opacity:.55;cursor:default;}
+${SITE_DISCLAIMER_CSS}
 </style>
 </head>
 <body>
@@ -3563,6 +3620,7 @@ export function memberRegisterHtml({ emailVerify = true } = {}) {
     }
   }
 </script>
+${SITE_DISCLAIMER_HTML}
 </body>
 </html>`;
 }

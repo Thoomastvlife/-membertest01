@@ -837,13 +837,70 @@ async function handleCorrectOrder(id, request, env) {
   return json({ ok: true });
 }
 
-async function handleCompleteOrder(id, env) {
+function escHtmlMail(v) {
+  return String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function maskEmail(e) {
+  const [u, d] = String(e).split("@");
+  if (!d) return e;
+  return (u.length <= 2 ? u[0] + "*" : u.slice(0, 2) + "***") + "@" + d;
+}
+
+// 訂單完成通知信：回傳 { sent, reason?, to? }；任何失敗都只回報原因，不會讓「訂單完成」本身失敗
+async function sendOrderCompleteEmail(env, order) {
+  if (!order.member_id) return { sent: false, reason: "此訂單不是會員訂單，沒有信箱可寄" };
+  const m = await env.DB.prepare("SELECT name, email FROM members WHERE id=?").bind(order.member_id).first();
+  if (!m || !m.email || !String(m.email).trim()) return { sent: false, reason: "此會員沒有填寫信箱，未寄送" };
+  if (!env.RESEND_API_KEY || !env.EMAIL_FROM) return { sent: false, reason: "尚未設定寄信服務（RESEND_API_KEY / EMAIL_FROM），未寄送" };
+
+  const orderNo = formatOrderNo(order.id);
+  const PM = { transfer: "轉帳", store_barcode: "超商條碼", taiwan_pay: "TWQR" };
+  const CVS = { seven: "7-11", family: "全家", hilife: "萊爾富" };
+  const rows = [["訂單編號", orderNo], ["訂單金額", "$" + order.amount]];
+  if (order.platform) rows.push(["儲值平台", PLATFORM_LABEL[order.platform] || order.platform]);
+  if (order.payment_method) {
+    rows.push(["付款方式", (PM[order.payment_method] || order.payment_method) + (order.store_brand && CVS[order.store_brand] ? "（" + CVS[order.store_brand] + "）" : "")]);
+  }
+  rows.push(["完成時間", new Date().toLocaleString("zh-TW", { timeZone: "Asia/Taipei", hour12: false })]);
+
+  const name = m.name || "會員";
+  const tableHtml = rows
+    .map((r) => `<tr><td style="padding:6px 12px 6px 0;color:#767B8C;white-space:nowrap;">${escHtmlMail(r[0])}</td><td style="padding:6px 0;font-weight:600;">${escHtmlMail(r[1])}</td></tr>`)
+    .join("");
+  try {
+    await sendEmail(env, {
+      to: String(m.email).trim(),
+      subject: `【訂單完成】${orderNo} 已完成`,
+      text: `${name} 您好，您的訂單 ${orderNo} 已完成，謝謝您的惠顧。\n` + rows.map((r) => `${r[0]}：${r[1]}`).join("\n"),
+      html: `<div style="font-family:-apple-system,'PingFang TC','Microsoft JhengHei',sans-serif;max-width:440px;margin:auto;padding:20px;">
+        <p style="font-size:16px;">${escHtmlMail(name)} 您好，</p>
+        <p>您的訂單已完成，謝謝您的惠顧！</p>
+        <table style="border-collapse:collapse;margin:12px 0;font-size:14px;">${tableHtml}</table>
+        <p style="color:#767B8C;font-size:13px;">這是系統自動發送的通知信，如有任何問題請直接聯絡店家。</p></div>`,
+    });
+    return { sent: true, to: maskEmail(String(m.email).trim()) };
+  } catch (e) {
+    return { sent: false, reason: "寄信失敗：" + String(e.message || e).slice(0, 120) };
+  }
+}
+
+async function handleCompleteOrder(id, request, env) {
+  const body = await request.json().catch(() => ({}));
+  const wantEmail = body.send_email === true || body.send_email === 1 || body.send_email === "1";
   const order = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).first();
   if (!order) return json({ error: "找不到訂單" }, 404);
   if (order.status !== "paid") return json({ error: "只有已完成付款的訂單才能標記為訂單完成" }, 400);
+  const alreadyCompleted = !!order.is_completed;
   await env.DB.prepare("UPDATE orders SET is_completed=1, completed_at=? WHERE id=?").bind(nowIso(), id).run();
   await reconcileOrderById(env, id); // 訂單完成 → 發放回饋點數
-  return json({ ok: true });
+
+  // 勾選了才寄信；已經是完成狀態的訂單（例如重複點擊）不重複寄
+  let email = null;
+  if (wantEmail) {
+    email = alreadyCompleted ? { sent: false, reason: "此訂單先前已標記完成，未重複寄信" } : await sendOrderCompleteEmail(env, order);
+  }
+  return json({ ok: true, email });
 }
 
 async function handleUncompleteOrder(id, env) {
@@ -1896,7 +1953,7 @@ export async function onRequest(context) {
       if (correctMatch && method === "DELETE") return handleDeleteOrder(correctMatch[1], env);
 
       const completeMatch = path.match(/^\/api\/admin\/orders\/(\d+)\/complete$/);
-      if (completeMatch && method === "POST") return handleCompleteOrder(completeMatch[1], env);
+      if (completeMatch && method === "POST") return handleCompleteOrder(completeMatch[1], request, env);
 
       const uncompleteMatch = path.match(/^\/api\/admin\/orders\/(\d+)\/uncomplete$/);
       if (uncompleteMatch && method === "POST") return handleUncompleteOrder(uncompleteMatch[1], env);
