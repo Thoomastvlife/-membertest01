@@ -212,7 +212,7 @@ export function adminHtml() {
           <label for="ord_hide_completed" style="margin:0;">隱藏已結案訂單</label>
         </div>
         <table id="ord_table">
-          <thead><tr><th>訂單編號</th><th>建立時間</th><th>會員</th><th>儲值平台</th><th>帳號/密碼</th><th>金額</th><th>預計幣數</th><th>優惠</th><th>付款方式</th><th>狀態</th><th>結案</th><th>核對資訊</th><th>操作</th></tr></thead>
+          <thead><tr><th>訂單編號</th><th>建立時間</th><th>會員</th><th>儲值平台</th><th>帳號/密碼</th><th>金額</th><th>預計幣數</th><th>優惠</th><th>付款方式</th><th>狀態</th><th>結案</th><th>核對資訊</th><th>備註</th><th>操作</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -953,9 +953,26 @@ function renderOrders(){
       <td data-label="狀態"><span class="badge \${st[1]}">\${st[0]}</span></td>
       <td data-label="結案">\${o.is_completed ? '<span class="badge b-completed">已結案</span>' : ''}</td>
       <td data-label="核對資訊">\${proofInfo}</td>
+      <td data-label="備註"><input class="ord-note-input" value="\${escapeHtml(o.admin_note||'')}" placeholder="內部備註" style="width:130px;font-size:12px;padding:5px 7px;" onblur="saveOrderNote(\${o.id}, this)" onkeydown="if(event.key==='Enter'){this.blur();}" /></td>
       <td data-label="操作">\${actions}</td>
     </tr>\`;
-  }).join('') || '<tr><td colspan="13">本月尚無訂單</td></tr>';
+  }).join('') || '<tr><td colspan="14">本月尚無訂單</td></tr>';
+}
+
+async function saveOrderNote(id, inputEl){
+  const value = inputEl.value.trim();
+  const o = ordersCache.find(x=>x.id===id);
+  if (o && (o.admin_note||'') === value) return; // 沒改變就不送請求
+  const original = inputEl.style.borderColor;
+  try{
+    await api('/api/admin/orders/'+id+'/note', {method:'PATCH', body: JSON.stringify({note: value})});
+    if (o) o.admin_note = value;
+    inputEl.style.borderColor = 'var(--ok)';
+    setTimeout(()=>{ inputEl.style.borderColor = original; }, 800);
+  }catch(e){
+    inputEl.style.borderColor = 'var(--danger)';
+    alert('備註儲存失敗：'+e.message);
+  }
 }
 
 function viewLink(token){

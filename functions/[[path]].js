@@ -837,6 +837,16 @@ async function handleCorrectOrder(id, request, env) {
   return json({ ok: true });
 }
 
+// 訂單內部備註：只給後台看，跟「更正」是分開的動作，不受訂單狀態（已取消/已結案）限制，隨時可以補寫。
+async function handleUpdateOrderNote(id, request, env) {
+  const order = await env.DB.prepare("SELECT id FROM orders WHERE id=?").bind(id).first();
+  if (!order) return json({ error: "找不到訂單" }, 404);
+  const body = await request.json().catch(() => ({}));
+  const note = body.note && String(body.note).trim() ? String(body.note).trim() : null;
+  await env.DB.prepare("UPDATE orders SET admin_note=? WHERE id=?").bind(note, id).run();
+  return json({ ok: true });
+}
+
 function escHtmlMail(v) {
   return String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
@@ -943,7 +953,7 @@ async function handleExport(request, env) {
     cancelled: "已取消",
   };
 
-  const header = ["訂單編號", "建立時間", "會員/客人", "儲值平台", "儲值帳號", "儲值密碼", "原始金額", "優惠碼", "折抵金額", "使用點數", "點數折抵", "實付金額", "預計獲得幣數", "付款方式", "狀態", "訂單完成(結案)", "付款證明末幾碼", "付款方式選擇時間", "完成付款時間", "到期時間"];
+  const header = ["訂單編號", "建立時間", "會員/客人", "儲值平台", "儲值帳號", "儲值密碼", "原始金額", "優惠碼", "折抵金額", "使用點數", "點數折抵", "實付金額", "預計獲得幣數", "付款方式", "狀態", "訂單完成(結案)", "付款證明末幾碼", "付款方式選擇時間", "完成付款時間", "到期時間", "備註"];
   const rows = results.map((o) => [
     formatOrderNo(o.id),
     toTaipeiTime(o.created_at),
@@ -965,6 +975,7 @@ async function handleExport(request, env) {
     toTaipeiTime(o.method_selected_at),
     toTaipeiTime(o.paid_at),
     toTaipeiTime(o.expires_at),
+    o.admin_note || "",
   ]);
 
   const csvLines = [header, ...rows].map((row) =>
@@ -1985,6 +1996,9 @@ export async function onRequest(context) {
 
       const uncompleteMatch = path.match(/^\/api\/admin\/orders\/(\d+)\/uncomplete$/);
       if (uncompleteMatch && method === "POST") return handleUncompleteOrder(uncompleteMatch[1], env);
+
+      const noteMatch = path.match(/^\/api\/admin\/orders\/(\d+)\/note$/);
+      if (noteMatch && method === "PATCH") return handleUpdateOrderNote(noteMatch[1], request, env);
 
       if (path === "/api/admin/points/config" && method === "GET") return handleGetPointsConfigAdmin(env);
       if (path === "/api/admin/points/config" && method === "POST") return handleSavePointsConfigAdmin(request, env);

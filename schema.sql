@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS orders (
   points_used INTEGER NOT NULL DEFAULT 0,   -- 這筆訂單使用的點數
   points_discount REAL,                -- 點數折抵的金額
   coins REAL,                          -- 依下單當下的費率試算出的預計獲得幣數（以優惠碼折抵前的金額計算），NULL 表示未計算（例如未指定平台或金額不在範圍）
+  admin_note TEXT,                     -- 後台內部備註，不會顯示給客人看，單純方便店家自己記錄
   FOREIGN KEY (member_id) REFERENCES members(id)
 );
 
