@@ -83,9 +83,16 @@ ${THEME_HEAD}
   @media (max-width:700px){
     header{padding:10px 12px;flex-wrap:wrap;gap:8px;}
     header h1{font-size:16px;}
-    nav{padding:8px 8px 0;gap:4px;overflow-x:auto;flex-wrap:nowrap;-webkit-overflow-scrolling:touch;}
-    nav button{flex:0 0 auto;padding:8px 12px;font-size:13px;white-space:nowrap;}
-    main{padding:10px;}
+    header > div{width:100%;display:flex;flex-wrap:wrap;align-items:center;gap:8px;}
+    header #whoami{flex:1 1 100%;margin:0 !important;}
+    header .btn{margin:0 !important;flex:1 1 auto;min-width:0;justify-content:center;padding:8px 10px;font-size:13px;white-space:nowrap;}
+    nav{padding:8px 8px 0;gap:6px;flex-wrap:wrap;}
+    nav button{flex:1 1 auto;padding:8px 12px;font-size:13px;white-space:nowrap;border-radius:8px;}
+    html,body{max-width:100%;overflow-x:hidden;}
+    main{padding:10px;max-width:100%;min-width:0;}
+    .filter-row{flex-wrap:wrap;}
+    .link-box{flex-wrap:wrap;}
+    .link-box input{min-width:0;}
     .card{padding:12px;border-radius:8px;}
     .grid2{grid-template-columns:1fr;gap:0;}
     input,select,textarea{font-size:16px;}
@@ -2503,6 +2510,12 @@ ${THEME_HEAD}
   /* === 手機版：訂單表格改為卡片式 === */
   @media (max-width:600px){
     .profile-panel{padding:14px 10px 0;}
+    header{padding:12px 14px;flex-wrap:wrap;gap:10px;}
+    header h1{font-size:17px;}
+    header .who{width:100%;flex-wrap:wrap;gap:8px;}
+    .who-btn{flex:1 1 100%;max-width:100%;min-width:0;}
+    .who-btn #whoami{flex:1 1 auto;text-align:left;}
+    header .who > button.btn{flex:1 1 0;min-width:0;justify-content:center;padding:8px 10px;font-size:13px;white-space:nowrap;}
     main{padding:14px 10px 50px;}
     .card{padding:16px 14px;}
     .card::before{left:14px;}
@@ -3611,6 +3624,8 @@ ${THEME_HEAD}
   .foot{margin-top:16px;text-align:center;font-size:12.5px;color:var(--muted);}
   .foot a{color:var(--accent-ink);}
   .row{display:flex;gap:8px;}
+  .row input{flex:1 1 auto;min-width:0;}
+  html,body{max-width:100%;overflow-x:hidden;}
   button.btn2{white-space:nowrap;padding:0 12px;border:1px solid var(--line);background:#fff;color:var(--accent-ink);border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;}
   button.btn2:disabled{opacity:.55;cursor:default;}
 ${SITE_DISCLAIMER_CSS}
