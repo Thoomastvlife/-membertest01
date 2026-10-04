@@ -3,7 +3,7 @@ import { ALLOWED_EMAIL_DOMAINS } from "./helpers.js";
 // ===== 網頁宣告（會員頁 / 註冊頁 / 付款頁 共用）=====
 const SUPPORT_EMAIL = "service@ytgp168.com";
 const SITE_DISCLAIMER_CSS = `
-  .site-disclaimer{flex:0 0 100%;width:100%;max-width:420px;margin:22px auto 8px;padding:0 14px;text-align:center;font-size:12.5px;line-height:1.7;color:#767B8C;box-sizing:border-box;}
+  .site-disclaimer{width:100%;max-width:420px;margin:22px auto 8px;padding:0 14px;text-align:center;font-size:12.5px;line-height:1.7;color:#767B8C;box-sizing:border-box;}
   .site-disclaimer b{display:block;font-size:13px;margin-bottom:2px;color:inherit;}
   .site-disclaimer a{color:inherit;text-decoration:underline;}`;
 const SITE_DISCLAIMER_HTML = `<div class="site-disclaimer"><b>網頁宣告</b>本網站為會員自助查詢與訂單結帳頁面，內容僅供參考，實際以訂單確認內容為準。<br/>客服信箱：<a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a></div>`;
@@ -1968,7 +1968,7 @@ export function payHtml() {
 <style>
   *{box-sizing:border-box;}
   body{margin:0;font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif;background:#f5f6f8;color:#1f2430;
-    display:flex;flex-wrap:wrap;align-content:flex-start;justify-content:center;padding:24px 14px;}
+    display:flex;flex-direction:column;align-items:center;padding:24px 14px;}
   .card{background:#fff;border:1px solid #e2e4e8;border-radius:12px;padding:24px;max-width:420px;width:100%;}
   h1{font-size:18px;margin-top:0;}
   .amount{font-size:32px;font-weight:700;text-align:center;margin:14px 0;}
