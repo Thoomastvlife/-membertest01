@@ -81,13 +81,14 @@ ${THEME_HEAD}
   .member-picker-empty{padding:10px 12px;font-size:13px;color:var(--muted);}
 
   @media (max-width:700px){
-    header{padding:10px 12px;flex-wrap:wrap;gap:8px;}
-    header h1{font-size:16px;}
-    header > div{width:100%;display:flex;flex-wrap:wrap;align-items:center;gap:8px;}
-    header #whoami{flex:1 1 100%;margin:0 !important;}
-    header .btn{margin:0 !important;flex:1 1 auto;min-width:0;justify-content:center;padding:8px 10px;font-size:13px;white-space:nowrap;}
-    nav{padding:8px 8px 0;gap:6px;flex-wrap:wrap;}
-    nav button{flex:1 1 auto;padding:8px 12px;font-size:13px;white-space:nowrap;border-radius:8px;}
+    header{padding:10px 12px;flex-wrap:nowrap;gap:8px;}
+    header h1{font-size:16px;white-space:nowrap;}
+    header > div{flex:0 0 auto;display:flex;flex-wrap:nowrap;align-items:center;gap:6px;}
+    header #whoami{display:none;}
+    header .btn{margin:0 !important;padding:8px 10px;font-size:14px;white-space:nowrap;}
+    header .pb-lb,header .btn.js-theme-toggle .tg-label{display:none;}
+    nav{padding:8px 8px 0;gap:4px;overflow-x:auto;flex-wrap:nowrap;-webkit-overflow-scrolling:touch;}
+    nav button{flex:0 0 auto;padding:8px 12px;font-size:13px;white-space:nowrap;}
     html,body{max-width:100%;overflow-x:hidden;}
     main{padding:10px;max-width:100%;min-width:0;}
     .filter-row{flex-wrap:wrap;}
@@ -130,7 +131,7 @@ ${THEME_CSS_ADMIN}
   <header>
     <h1>會員結帳後台</h1>
     <div><span id="whoami" style="margin-right:12px;color:var(--muted);font-size:13px;"></span>
-      <button class="btn secondary" id="pushBtn" onclick="togglePush()" style="margin-right:8px;">🔔 開啟通知</button>
+      <button class="btn secondary" id="pushBtn" onclick="togglePush()" style="margin-right:8px;" aria-label="開啟通知" title="開啟通知"><span class="pb-ic">🔕</span><span class="pb-lb"> 開啟通知</span></button>
       ${THEME_HEADER_BTN.replace('class="btn secondary', 'style="margin-right:8px;" class="btn secondary')}
       <button class="btn secondary" onclick="doLogout()">登出</button></div>
   </header>
@@ -658,15 +659,21 @@ async function getExistingPushSubscription(){
   }catch(e){ return null; }
 }
 
+function setPushLabel(btn, icon, label){
+  btn.innerHTML = '<span class="pb-ic">' + icon + '</span><span class="pb-lb"> ' + label + '</span>';
+  btn.title = label; btn.setAttribute('aria-label', label);
+}
+
 async function refreshPushButton(){
   const btn = document.getElementById('pushBtn');
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-    btn.textContent = '🔕 此瀏覽器不支援通知';
+    setPushLabel(btn, '🔕', '此瀏覽器不支援通知');
     btn.disabled = true;
     return;
   }
   const sub = await getExistingPushSubscription();
-  btn.textContent = sub ? '🔔 通知已開啟' : '🔔 開啟通知';
+  if (sub) setPushLabel(btn, '🔔', '通知已開啟');
+  else setPushLabel(btn, '🔕', '開啟通知');
 }
 
 async function togglePush(){
@@ -2510,12 +2517,13 @@ ${THEME_HEAD}
   /* === 手機版：訂單表格改為卡片式 === */
   @media (max-width:600px){
     .profile-panel{padding:14px 10px 0;}
-    header{padding:12px 14px;flex-wrap:wrap;gap:10px;}
-    header h1{font-size:17px;}
-    header .who{width:100%;flex-wrap:wrap;gap:8px;}
-    .who-btn{flex:1 1 100%;max-width:100%;min-width:0;}
-    .who-btn #whoami{flex:1 1 auto;text-align:left;}
-    header .who > button.btn{flex:1 1 0;min-width:0;justify-content:center;padding:8px 10px;font-size:13px;white-space:nowrap;}
+    header{padding:12px;flex-wrap:nowrap;gap:8px;}
+    header h1{font-size:16px;white-space:nowrap;flex:0 0 auto;}
+    header .who{flex:1 1 auto;min-width:0;justify-content:flex-end;gap:6px;flex-wrap:nowrap;}
+    .who-btn{flex:0 1 auto;min-width:0;max-width:100%;padding:6px 10px;gap:6px;}
+    .who-btn #whoami{flex:0 1 auto;min-width:0;}
+    header .who > button.btn{flex:0 0 auto;padding:8px 10px;font-size:13px;white-space:nowrap;}
+    header .btn.js-theme-toggle .tg-label{display:none;}
     main{padding:14px 10px 50px;}
     .card{padding:16px 14px;}
     .card::before{left:14px;}
