@@ -1,4 +1,5 @@
 import { ALLOWED_EMAIL_DOMAINS } from "./helpers.js";
+import { THEME_HEAD, THEME_TOGGLE_HTML, THEME_CSS_ADMIN, THEME_CSS_PAY, THEME_CSS_PORTAL } from "./theme.js";
 
 // ===== 網頁宣告（會員頁 / 註冊頁 / 付款頁 共用）=====
 const SUPPORT_EMAIL = "service@ytgp168.com";
@@ -17,6 +18,7 @@ export function adminHtml() {
 <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 <link rel="apple-touch-icon" href="/favicon.svg" />
 <title>後台管理系統</title>
+${THEME_HEAD}
 <style>
   :root{--bg:#f5f6f8;--card:#fff;--border:#e2e4e8;--text:#1f2430;--muted:#6b7280;--accent:#2f6fed;--danger:#e0453c;--ok:#1f9d55;}
   *{box-sizing:border-box;}
@@ -101,6 +103,7 @@ export function adminHtml() {
     table td[colspan]{display:block;text-align:center;}
     table td .btn.small{margin:2px 0 2px 6px;}
   }
+${THEME_CSS_ADMIN}
 </style>
 </head>
 <body>
@@ -2025,6 +2028,7 @@ coMemberPicker = setupMemberPicker('co', (id)=>{ document.getElementById('co_non
 corMemberPicker = setupMemberPicker('cor', (id)=>{ document.getElementById('cor_nonmember_wrap').style.display = id ? 'none':'block'; });
 checkSession();
 </script>
+${THEME_TOGGLE_HTML}
 </body>
 </html>`;
 }
@@ -2038,6 +2042,7 @@ export function payHtml() {
 <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 <link rel="apple-touch-icon" href="/favicon.svg" />
 <title>付款頁面</title>
+${THEME_HEAD}
 <style>
   *{box-sizing:border-box;}
   body{margin:0;font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif;background:#f5f6f8;color:#1f2430;
@@ -2065,6 +2070,7 @@ export function payHtml() {
   .proof-box button{width:100%;margin-top:10px;padding:10px;border-radius:8px;border:none;background:#2f6fed;color:#fff;font-size:14px;cursor:pointer;}
   .proof-done{background:#eef9f0;color:#1f9d55;border-radius:8px;padding:10px;margin-top:14px;font-size:13px;text-align:center;}
 ${SITE_DISCLAIMER_CSS}
+${THEME_CSS_PAY}
 </style>
 </head>
 <body>
@@ -2308,6 +2314,7 @@ async function selectMethod(method, store){
 load();
 </script>
 ${SITE_DISCLAIMER_HTML}
+${THEME_TOGGLE_HTML}
 </body>
 </html>`;
 }
@@ -2324,6 +2331,7 @@ export function memberHtml() {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+${THEME_HEAD}
 <style>
   :root{
     --bg:#EEF0F6; --card:#fff; --line:#E2E4ED;
@@ -2516,6 +2524,7 @@ export function memberHtml() {
     #ord_table code{word-break:break-all;}
   }
 ${SITE_DISCLAIMER_CSS}
+${THEME_CSS_PORTAL}
 </style>
 </head>
 <body>
@@ -3556,6 +3565,7 @@ loadRates().then(() => {
 });
 </script>
 ${SITE_DISCLAIMER_HTML}
+${THEME_TOGGLE_HTML}
 </body>
 </html>`;
 }
@@ -3573,6 +3583,7 @@ export function memberRegisterHtml({ emailVerify = true } = {}) {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+${THEME_HEAD}
 <style>
   :root{
     --bg:#EEF0F6; --card:#fff; --line:#E2E4ED;
@@ -3601,6 +3612,7 @@ export function memberRegisterHtml({ emailVerify = true } = {}) {
   button.btn2{white-space:nowrap;padding:0 12px;border:1px solid var(--line);background:#fff;color:var(--accent-ink);border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;}
   button.btn2:disabled{opacity:.55;cursor:default;}
 ${SITE_DISCLAIMER_CSS}
+${THEME_CSS_PORTAL}
 </style>
 </head>
 <body>
@@ -3728,6 +3740,7 @@ ${SITE_DISCLAIMER_CSS}
   }
 </script>
 ${SITE_DISCLAIMER_HTML}
+${THEME_TOGGLE_HTML}
 </body>
 </html>`;
 }
