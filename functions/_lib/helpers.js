@@ -122,6 +122,11 @@ export function parseTaipeiDatetimeLocalToUtc(value) {
 
 export const PAYMENT_METHODS = new Set(["transfer", "store_barcode", "taiwan_pay"]);
 
+// 超商條碼：可選超商、單筆上限、客人自付手續費
+export const CVS_STORES = { seven: "7-11", family: "全家", hilife: "萊爾富" };
+export const CVS_LIMIT = 10000;
+export const CVS_FEE = 15;
+
 // 儲值平台：訂單要儲值到哪個平台的帳號（純資訊記錄，不影響金流/付款方式）
 export const PLATFORMS = new Set(["tiktok", "kuaishou", "xiaohongshu", "douyin"]);
 export const PLATFORM_LABEL = { tiktok: "TikTok", kuaishou: "快手", xiaohongshu: "小紅書", douyin: "陸抖" };
@@ -184,6 +189,7 @@ export function publicOrderView(o) {
     amount: o.amount,
     member_name_snapshot: o.member_name_snapshot,
     payment_method: o.payment_method,
+    store_brand: o.store_brand || null,
     platform: o.platform || null,
     status: o.status,
     bank_name: o.bank_name,

@@ -50,6 +50,8 @@ import {
   generateNumericCode,
   hashEmailCode,
   sendEmail,
+  CVS_STORES,
+  CVS_LIMIT,
 } from "./_lib/helpers.js";
 
 // 付款連結建立後，最多可以被開啟／操作幾小時，超過就整條連結失效（跟訂單本身 3 小時付款時效是兩回事）。
@@ -561,10 +563,12 @@ async function handleCouponPreview(request, env) {
 async function handleCreateOrder(request, env) {
   const body = await request.json().catch(() => ({}));
   const { amount, member_id, non_member_name, payment_method, coupon_code, platform } = body;
+  const storeBrand = payment_method === "store_barcode" && body.store_brand ? String(body.store_brand) : null;
 
   const amt = parseFloat(amount);
   if (!amt || amt <= 0) return json({ error: "金額不正確" }, 400);
   if (payment_method && !PAYMENT_METHODS.has(payment_method)) return json({ error: "付款方式不正確" }, 400);
+  if (storeBrand && !CVS_STORES[storeBrand]) return json({ error: "超商選擇不正確" }, 400);
   if (platform && !PLATFORMS.has(platform)) return json({ error: "儲值平台不正確" }, 400);
 
   let memberNameSnapshot = non_member_name && non_member_name.trim() ? non_member_name.trim() : "非會員";
@@ -582,6 +586,9 @@ async function handleCreateOrder(request, env) {
     couponResult = await applyCouponToAmount(env, coupon_code, amt);
     if (!couponResult.ok) return json({ error: couponResult.error }, 400);
     finalAmount = couponResult.finalAmount;
+  }
+  if (payment_method === "store_barcode" && finalAmount > CVS_LIMIT) {
+    return json({ error: `超商條碼單筆上限 $${CVS_LIMIT.toLocaleString()}，超過請分筆訂單` }, 400);
   }
 
   // 預計獲得幣數：只有指定了儲值平台才試算（TikTok 用自己一組費率，快手/小紅書/陸抖 共用另一組）
@@ -640,6 +647,9 @@ async function handleCreateOrder(request, env) {
     .run();
 
   if (couponResult) await incrementCouponUsage(env, couponResult.coupon.id);
+  if (storeBrand) {
+    await env.DB.prepare("UPDATE orders SET store_brand=? WHERE id=?").bind(storeBrand, insertResult.meta.last_row_id).run();
+  }
 
   const url = new URL(request.url);
   const link = `${url.origin}/pay/${token}`;
@@ -732,11 +742,29 @@ async function handleCorrectOrder(id, request, env) {
   const fields = [];
   const binds = [];
 
+  let correctedAmount = order.amount;
   if (body.amount !== undefined && body.amount !== null && String(body.amount).trim() !== "") {
     const amt = parseFloat(body.amount);
     if (!amt || amt <= 0) return json({ error: "金額不正確" }, 400);
     fields.push("amount=?");
     binds.push(amt);
+    correctedAmount = amt;
+  }
+
+  // 超商條碼：單筆上限、超商選擇
+  const finalMethod = body.payment_method !== undefined ? body.payment_method || null : order.payment_method;
+  if (finalMethod === "store_barcode" && correctedAmount > CVS_LIMIT) {
+    return json({ error: `超商條碼單筆上限 $${CVS_LIMIT.toLocaleString()}，超過請分筆訂單或改用其他付款方式` }, 400);
+  }
+  if (body.payment_method !== undefined && (body.payment_method || null) !== order.payment_method) {
+    fields.push("store_brand=?");
+    binds.push(null); // 換付款方式 → 先清掉超商（下面若指定了超商會覆蓋）
+  }
+  if (finalMethod === "store_barcode" && body.store_brand !== undefined) {
+    const sb = body.store_brand ? String(body.store_brand) : null;
+    if (sb && !CVS_STORES[sb]) return json({ error: "超商選擇不正確" }, 400);
+    fields.push("store_brand=?");
+    binds.push(sb);
   }
 
   if (body.member_id !== undefined) {
@@ -925,6 +953,8 @@ async function handleSelectMethod(token, request, env) {
   const body = await request.json().catch(() => ({}));
   const { method } = body;
   if (!PAYMENT_METHODS.has(method)) return json({ error: "付款方式不正確" }, 400);
+  const store = method === "store_barcode" ? String(body.store || "") : null;
+  if (method === "store_barcode" && !CVS_STORES[store]) return json({ error: "請先選擇超商（7-11、全家或萊爾富）" }, 400);
 
   let order = await env.DB.prepare("SELECT * FROM orders WHERE token=?").bind(token).first();
   if (!order) return json({ error: "找不到此訂單" }, 404);
@@ -935,6 +965,9 @@ async function handleSelectMethod(token, request, env) {
   if (order.status === "expired") return json({ error: "此連結已過期" }, 400);
   if (order.status === "paid" || order.status === "cancelled") return json({ error: "此訂單無法選擇付款方式" }, 400);
   if (order.payment_method) return json({ error: "已選擇過付款方式，無法變更" }, 400);
+  if (method === "store_barcode" && order.amount > CVS_LIMIT) {
+    return json({ error: `金額超過 $${CVS_LIMIT.toLocaleString()}，無法使用超商條碼，請分筆訂單` }, 400);
+  }
 
   let newStatus = "awaiting_barcode";
   let bankFields = {
@@ -954,9 +987,9 @@ async function handleSelectMethod(token, request, env) {
 
   await env.DB.prepare(
     `UPDATE orders SET payment_method=?, status=?, method_selected_at=?,
-      bank_name=?, bank_account_number=?, bank_account_holder=? WHERE token=?`
+      bank_name=?, bank_account_number=?, bank_account_holder=?, store_brand=? WHERE token=? AND payment_method IS NULL`
   )
-    .bind(method, newStatus, nowIso(), bankFields.bank_name, bankFields.bank_account_number, bankFields.bank_account_holder, token)
+    .bind(method, newStatus, nowIso(), bankFields.bank_name, bankFields.bank_account_number, bankFields.bank_account_holder, store, token)
     .run();
 
   const updated = await env.DB.prepare("SELECT * FROM orders WHERE token=?").bind(token).first();

@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS orders (
   member_id INTEGER,
   member_name_snapshot TEXT NOT NULL,
   payment_method TEXT,                 -- NULL | transfer | store_barcode | taiwan_pay
+  store_brand TEXT,                    -- 超商條碼所選超商：NULL | seven | family | hilife
   status TEXT NOT NULL DEFAULT 'pending_method',
   -- pending_method -> awaiting_payment (transfer) / awaiting_barcode -> ready_to_pay -> paid
   -- 也可能是 expired / cancelled

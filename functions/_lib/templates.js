@@ -151,12 +151,21 @@ export function adminHtml() {
           <option value="douyin">陸抖</option>
         </select>
         <label>付款方式（選填，不指定則由前台客人自行選擇）</label>
-        <select id="co_method">
+        <select id="co_method" onchange="document.getElementById('co_store_wrap').classList.toggle('hidden', this.value!=='store_barcode')">
           <option value="">-- 不指定 --</option>
           <option value="transfer">轉帳</option>
           <option value="store_barcode">超商條碼</option>
           <option value="taiwan_pay">TWQR</option>
         </select>
+        <div id="co_store_wrap" class="hidden">
+          <label>超商（選填；單筆上限 $10,000，客人需自付 $15 手續費）</label>
+          <select id="co_store">
+            <option value="">-- 不指定 --</option>
+            <option value="seven">7-11</option>
+            <option value="family">全家</option>
+            <option value="hilife">萊爾富</option>
+          </select>
+        </div>
         <label>優惠碼（選填）</label>
         <div style="display:flex;gap:8px;">
           <input id="co_coupon" placeholder="輸入優惠碼" style="text-transform:uppercase;" oninput="document.getElementById('co_coupon_msg').textContent='';" />
@@ -513,6 +522,7 @@ export function adminHtml() {
 <input type="file" id="barcode_file_input" accept="image/*" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0;" onchange="onBarcodeChosen(this)" />
 <script>
 const PM_LABEL = {transfer:'轉帳', store_barcode:'超商條碼', taiwan_pay:'TWQR'};
+const CVS_LABEL = {seven:'7-11', family:'全家', hilife:'萊爾富'};
 const PLATFORM_LABEL = {tiktok:'TikTok', kuaishou:'快手', xiaohongshu:'小紅書', douyin:'陸抖'};
 const STATUS_LABEL = {
   pending_method:['待選付款方式','b-pending'],
@@ -798,12 +808,13 @@ async function createOrder(){
   const non_member_name = document.getElementById('co_nonmember_name').value.trim();
   const platform = document.getElementById('co_platform').value || null;
   const payment_method = document.getElementById('co_method').value || null;
+  const store_brand = payment_method === 'store_barcode' ? (document.getElementById('co_store').value || null) : null;
   const coupon_code = document.getElementById('co_coupon').value.trim() || null;
   const msg = document.getElementById('co_msg');
   msg.textContent=''; msg.className='msg';
   if (!amount || amount<=0){ msg.textContent='請輸入正確金額'; msg.className='msg err'; return; }
   try{
-    const r = await api('/api/admin/orders', {method:'POST', body: JSON.stringify({amount, member_id, non_member_name, platform, payment_method, coupon_code})});
+    const r = await api('/api/admin/orders', {method:'POST', body: JSON.stringify({amount, member_id, non_member_name, platform, payment_method, store_brand, coupon_code})});
     document.getElementById('co_result').classList.remove('hidden');
     document.getElementById('co_link').value = r.link;
     document.getElementById('co_coupon').value = '';
@@ -901,7 +912,7 @@ function renderOrders(){
       <td data-label="金額">$\${o.amount}</td>
       <td data-label="預計幣數">\${o.coins != null ? ('🪙 '+Number(o.coins).toLocaleString()) : '<span class="muted" style="color:var(--muted)">-</span>'}</td>
       <td data-label="優惠">\${couponInfo}</td>
-      <td data-label="付款方式">\${PM_LABEL[o.payment_method]||'尚未選擇'}</td>
+      <td data-label="付款方式">\${PM_LABEL[o.payment_method]||'尚未選擇'}\${(o.payment_method==='store_barcode' && o.store_brand && CVS_LABEL[o.store_brand]) ? '<br/><span style="color:var(--muted);font-size:12px;">'+CVS_LABEL[o.store_brand]+'</span>' : ''}</td>
       <td data-label="狀態"><span class="badge \${st[1]}">\${st[0]}</span></td>
       <td data-label="結案">\${o.is_completed ? '<span class="badge b-completed">已結案</span>' : ''}</td>
       <td data-label="核對資訊">\${proofInfo}</td>
@@ -1936,6 +1947,11 @@ export function payHtml() {
 const token = location.pathname.split('/').pop();
 const PM_LABEL = {transfer:'轉帳', store_barcode:'超商條碼', taiwan_pay:'TWQR'};
 const PLATFORM_LABEL = {tiktok:'TikTok', kuaishou:'快手', xiaohongshu:'小紅書', douyin:'陸抖'};
+const CVS_STORES = {seven:'7-11', family:'全家', hilife:'萊爾富'};
+const CVS_LIMIT = 10000;
+const CVS_FEE = 15;
+let storePickOpen = false;
+let lastOrder = null;
 let pollTimer=null;
 
 // === 將 UTC 時間轉為台灣時間 (UTC+8) ===
@@ -1945,6 +1961,9 @@ function toTaipeiTime(dateStr) {
   return new Date(isoStr).toLocaleString("zh-TW", { timeZone: "Asia/Taipei", hour12: false });
 }
 // ========================================================
+
+function openStorePick(){ storePickOpen = true; if (lastOrder) render(lastOrder); }
+function closeStorePick(){ storePickOpen = false; if (lastOrder) render(lastOrder); }
 
 async function load(){
   const app = document.getElementById('app');
@@ -1965,6 +1984,7 @@ async function load(){
 const PROOF_ELIGIBLE = ['transfer', 'store_barcode'];
 
 function render(o){
+  lastOrder = o;
   const app = document.getElementById('app');
   let html = '<h1>付款資訊</h1>';
   if (o.order_no) {
@@ -2008,17 +2028,38 @@ function render(o){
   html += '<div class="row"><span>到期時間</span><span>'+toTaipeiTime(o.expires_at)+'</span></div>';
 
   if (!o.payment_method) {
-    html += '<div class="muted" style="margin-top:14px;">請選擇付款方式（選擇後將無法變更）</div>';
-    html += '<div class="methods">'+
-      '<button onclick="selectMethod(\\'transfer\\')">轉帳</button>'+
-      '<button onclick="selectMethod(\\'store_barcode\\')">超商條碼</button>'+
-      '<button onclick="selectMethod(\\'taiwan_pay\\')">TWQR</button>'+
-    '</div>';
+    const overLimit = o.amount > CVS_LIMIT;
+    const feeNote = '<div class=\"info-box\" style=\"margin-top:12px;\">使用超商條碼需<b>自付 $'+CVS_FEE+' 超商手續費</b>，繳費時請於超商另行支付。</div>';
+    if (storePickOpen && !overLimit) {
+      html += '<div class=\"muted\" style=\"margin-top:14px;\">請選擇要繳費的超商（選擇後將無法變更）</div>';
+      html += '<div class=\"methods\">'+
+        '<button onclick=\"selectMethod(\\'store_barcode\\',\\'seven\\')\">7-11</button>'+
+        '<button onclick=\"selectMethod(\\'store_barcode\\',\\'family\\')\">全家</button>'+
+        '<button onclick=\"selectMethod(\\'store_barcode\\',\\'hilife\\')\">萊爾富</button>'+
+      '</div>';
+      html += feeNote;
+      html += '<div class=\"center\" style=\"margin-top:12px;\"><a href=\"#\" onclick=\"closeStorePick();return false;\" style=\"color:#6b7280;font-size:14px;\">‹ 返回選擇付款方式</a></div>';
+    } else {
+      html += '<div class=\"muted\" style=\"margin-top:14px;\">請選擇付款方式（選擇後將無法變更）</div>';
+      html += '<div class=\"methods\">'+
+        '<button onclick=\"selectMethod(\\'transfer\\')\">轉帳</button>'+
+        (overLimit
+          ? '<button disabled style=\"opacity:.45;cursor:not-allowed;\">超商條碼</button>'
+          : '<button onclick=\"openStorePick()\">超商條碼</button>')+
+        '<button onclick=\"selectMethod(\\'taiwan_pay\\')\">TWQR</button>'+
+      '</div>';
+      if (overLimit) {
+        html += '<div style=\"color:#e0453c;font-size:14px;margin-top:12px;text-align:center;\">超過 $'+CVS_LIMIT.toLocaleString()+' 無法使用超商條碼，請分筆訂單</div>';
+      }
+    }
     app.innerHTML = html;
     return;
   }
 
-  html += '<div class="row"><span>付款方式</span><span>'+PM_LABEL[o.payment_method]+'</span></div>';
+  html += '<div class=\"row\"><span>付款方式</span><span>'+PM_LABEL[o.payment_method]+(o.payment_method==='store_barcode' && o.store_brand && CVS_STORES[o.store_brand] ? '（'+CVS_STORES[o.store_brand]+'）' : '')+'</span></div>';
+  if (o.payment_method === 'store_barcode') {
+    html += '<div class=\"row\"><span>超商手續費</span><span>自付 $'+CVS_FEE+'（繳費時於超商另付）</span></div>';
+  }
 
   if (o.payment_method === 'transfer') {
     html += '<div class="info-box">'+
@@ -2126,13 +2167,14 @@ function compressImage(file, maxDim, quality){
 }
 
 
-async function selectMethod(method){
+async function selectMethod(method, store){
   try{
     const res = await fetch('/api/order/'+token+'/select-method', {
-      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({method})
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({method, store})
     });
     const d = await res.json();
     if (!res.ok){ alert(d.error||'發生錯誤'); return; }
+    storePickOpen = false;
     render(d);
   }catch(e){ alert('發生錯誤，請重新整理再試一次'); }
 }
@@ -2572,6 +2614,7 @@ export function memberHtml() {
 
 <script>
 const PM_LABEL = {transfer:'轉帳', store_barcode:'超商條碼', taiwan_pay:'TWQR'};
+const CVS_LABEL = {seven:'7-11', family:'全家', hilife:'萊爾富'};
 const PLATFORM_LABEL = {tiktok:'TikTok', kuaishou:'快手', xiaohongshu:'小紅書', douyin:'陸抖'};
 const STATUS_LABEL = {
   pending_method:['待選付款方式','b-pending'],
@@ -3338,7 +3381,7 @@ async function loadOrders(){
       <td data-label="金額">$\${o.amount}</td>
       <td data-label="預計幣數">\${o.coins != null ? ('🪙 '+Number(o.coins).toLocaleString()) : '-'}</td>
       <td data-label="優惠">\${couponInfo}</td>
-      <td data-label="付款方式">\${PM_LABEL[o.payment_method]||'尚未選擇'}</td>
+      <td data-label="付款方式">\${PM_LABEL[o.payment_method]||'尚未選擇'}\${(o.payment_method==='store_barcode' && o.store_brand && CVS_LABEL[o.store_brand]) ? '<br/><span style="color:var(--muted);font-size:12px;">'+CVS_LABEL[o.store_brand]+'</span>' : ''}</td>
       <td data-label="狀態"><span class="badge \${st[1]}">\${st[0]}</span>\${completedTag}</td>
       <td data-label="操作">\${action}</td>
     </tr>\`;
