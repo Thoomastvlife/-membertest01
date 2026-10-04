@@ -1,8 +1,10 @@
 // ===== 深色模式（後台 / 會員頁 / 註冊頁 / 付款頁 共用）=====
 // 規則：
-//  - 第一次進站跟隨裝置的深色/淺色設定；按右下角按鈕後以手動選擇為準，存在 localStorage（key: theme）。
+//  - 第一次進站跟隨裝置的深色/淺色設定；按切換按鈕後以手動選擇為準，存在 localStorage（key: theme）。
 //  - <html data-theme="dark|light"> 由 <head> 裡的小腳本在畫面繪製前就設好，避免淺色閃一下。
 //  - 深色樣式全部掛在 html[data-theme="dark"] 底下，淺色模式完全沿用原本樣式。
+//  - 切換按鈕：未登入／註冊／付款頁在右下角顯示「深色模式／淺色模式」按鈕；
+//    後台與會員頁登入後，頁首有同樣功能的按鈕（此時右下角那顆自動隱藏）。
 
 // 放進 <head>：在繪製前決定主題
 export const THEME_HEAD = `<script>(function(){try{var t=localStorage.getItem('theme');if(t!=='light'&&t!=='dark'){t=(window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>`;
@@ -11,24 +13,33 @@ export const THEME_HEAD = `<script>(function(){try{var t=localStorage.getItem('t
 const TOGGLE_CSS = `
   html[data-theme="light"]{color-scheme:light;}
   html[data-theme="dark"]{color-scheme:dark;--tg-bg:#232736;--tg-fg:#F2D27A;--tg-bd:#3A3F52;}
-  .theme-toggle{position:fixed;right:14px;bottom:calc(14px + env(safe-area-inset-bottom,0px));z-index:40;width:40px;height:40px;padding:0;border-radius:50%;border:1px solid var(--tg-bd,#D5D8E0);background:var(--tg-bg,#fff);color:var(--tg-fg,#4B5160);display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.18);}
-  .theme-toggle svg{width:20px;height:20px;display:block;}
-  .theme-toggle .i-sun{display:none;}
-  html[data-theme="dark"] .theme-toggle .i-sun{display:block;}
-  html[data-theme="dark"] .theme-toggle .i-moon{display:none;}
-  .theme-toggle:focus-visible{outline:2px solid #5B8CFF;outline-offset:2px;}`;
+  .theme-toggle{position:fixed;right:14px;bottom:calc(14px + env(safe-area-inset-bottom,0px));z-index:40;height:42px;padding:0 16px 0 12px;gap:8px;border-radius:21px;border:1px solid var(--tg-bd,#D5D8E0);background:var(--tg-bg,#fff);color:var(--tg-fg,#4B5160);display:flex;align-items:center;justify-content:center;cursor:pointer;font:600 14px/1 -apple-system,"PingFang TC","Microsoft JhengHei",sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.2);}
+  .js-theme-toggle svg{width:18px;height:18px;display:block;flex:0 0 auto;}
+  .js-theme-toggle .i-sun{display:none;}
+  html[data-theme="dark"] .js-theme-toggle .i-sun{display:block;}
+  html[data-theme="dark"] .js-theme-toggle .i-moon{display:none;}
+  .js-theme-toggle .tg-label{white-space:nowrap;}
+  .theme-toggle:focus-visible,.js-theme-toggle:focus-visible{outline:2px solid #5B8CFF;outline-offset:2px;}
+  body:has(#appView:not(.hidden)) .theme-toggle{display:none;}
+  .btn.js-theme-toggle{display:inline-flex;align-items:center;gap:6px;}`;
 
-// 放進 </body> 前：按鈕 + 切換腳本
-export const THEME_TOGGLE_HTML = `<button type="button" class="theme-toggle" id="themeToggle" aria-label="切換為深色模式">
-<svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
-<svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
-</button>
+const ICONS = `<svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg><svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`;
+
+// 放進頁首（後台、會員頁）：沿用原本「btn secondary」外觀，帶文字說明
+export const THEME_HEADER_BTN = `<button type="button" class="btn secondary js-theme-toggle" aria-label="切換深色／淺色模式">${ICONS}<span class="tg-label">深色模式</span></button>`;
+
+// 放進 </body> 前：右下角按鈕 + 切換腳本（會綁定頁面上所有 .js-theme-toggle）
+export const THEME_TOGGLE_HTML = `<button type="button" class="theme-toggle js-theme-toggle" aria-label="切換深色／淺色模式">${ICONS}<span class="tg-label">深色模式</span></button>
 <script>(function(){
-  var b=document.getElementById('themeToggle'); if(!b) return;
+  var btns=document.querySelectorAll('.js-theme-toggle'); if(!btns.length) return;
   var root=document.documentElement;
   function cur(){return root.getAttribute('data-theme')==='dark'?'dark':'light';}
-  function paint(){var d=cur()==='dark';var t=d?'切換為淺色模式':'切換為深色模式';b.setAttribute('aria-label',t);b.title=t;b.setAttribute('aria-pressed',d?'true':'false');}
-  b.addEventListener('click',function(){var n=cur()==='dark'?'light':'dark';root.setAttribute('data-theme',n);try{localStorage.setItem('theme',n);}catch(e){}paint();});
+  function paint(){
+    var d=cur()==='dark';var t=d?'切換為淺色模式':'切換為深色模式';var l=d?'淺色模式':'深色模式';
+    for(var i=0;i<btns.length;i++){var b=btns[i];b.setAttribute('aria-label',t);b.title=t;b.setAttribute('aria-pressed',d?'true':'false');var s=b.querySelector('.tg-label');if(s)s.textContent=l;}
+  }
+  function flip(){var n=cur()==='dark'?'light':'dark';root.setAttribute('data-theme',n);try{localStorage.setItem('theme',n);}catch(e){}paint();}
+  for(var i=0;i<btns.length;i++)btns[i].addEventListener('click',flip);
   try{
     var mq=window.matchMedia&&matchMedia('(prefers-color-scheme: dark)');
     if(mq){

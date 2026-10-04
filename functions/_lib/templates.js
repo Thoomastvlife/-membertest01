@@ -1,5 +1,5 @@
 import { ALLOWED_EMAIL_DOMAINS } from "./helpers.js";
-import { THEME_HEAD, THEME_TOGGLE_HTML, THEME_CSS_ADMIN, THEME_CSS_PAY, THEME_CSS_PORTAL } from "./theme.js";
+import { THEME_HEAD, THEME_TOGGLE_HTML, THEME_HEADER_BTN, THEME_CSS_ADMIN, THEME_CSS_PAY, THEME_CSS_PORTAL } from "./theme.js";
 
 // ===== 網頁宣告（會員頁 / 註冊頁 / 付款頁 共用）=====
 const SUPPORT_EMAIL = "service@ytgp168.com";
@@ -124,6 +124,7 @@ ${THEME_CSS_ADMIN}
     <h1>會員結帳後台</h1>
     <div><span id="whoami" style="margin-right:12px;color:var(--muted);font-size:13px;"></span>
       <button class="btn secondary" id="pushBtn" onclick="togglePush()" style="margin-right:8px;">🔔 開啟通知</button>
+      ${THEME_HEADER_BTN.replace('class="btn secondary', 'style="margin-right:8px;" class="btn secondary')}
       <button class="btn secondary" onclick="doLogout()">登出</button></div>
   </header>
   <nav>
@@ -2545,6 +2546,7 @@ ${THEME_CSS_PORTAL}
   <header>
     <h1>會員查詢</h1>
     <div class="who"><button type="button" class="who-btn" id="whoBtn" onclick="toggleProfile()" aria-expanded="false"><span id="whoami"></span><span id="whoPts" class="who-pts hidden"></span><span class="who-caret" id="whoCaret">▾</span></button>
+      ${THEME_HEADER_BTN}
       <button class="btn secondary" onclick="doLogout()">登出</button></div>
   </header>
 
