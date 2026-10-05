@@ -21,11 +21,11 @@ LINK_HARD_EXPIRE_HOURS = "24"
 # 開啟時需要寄信服務（Resend）：EMAIL_FROM 填已在 Resend 驗證過網域的寄件人，API 金鑰用 secret 設定：
 #   wrangler pages secret put RESEND_API_KEY --project-name=member-checkout-pages
 EMAIL_VERIFY_ENABLED = "1"
-EMAIL_FROM = "會員驗證系統 <noreply@member.ytgp168.com>"
+EMAIL_FROM = "咖啡代儲會員驗證系統 <noreply@member.ytgp168.com>"
 # 「訂單完成通知信」要用的寄件人，選填。不設定的話會沿用上面的 EMAIL_FROM（跟驗證碼信同一個寄件人）。
 # 想讓訂單完成信顯示不同的寄件人名稱／信箱（例如不要顯示「會員驗證系統」），把下面這行取消註解並改成你要的寄件人，
 # 記得這個信箱所屬的網域也要先在 Resend 驗證過，不然寄信會失敗。
-# EMAIL_FROM_ORDER = "訂單通知 <order@member.ytgp168.com>"
+EMAIL_FROM_ORDER = "咖啡代儲會員訂單通知 <order@member.ytgp168.com>"
 
 # 部署前務必設定這個機密值（用來簽署登入 session）：
 #   wrangler pages secret put ADMIN_SESSION_SECRET --project-name=member-checkout-pages
