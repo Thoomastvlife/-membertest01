@@ -148,6 +148,7 @@ ${THEME_CSS_ADMIN}
     <button data-tab="rates" onclick="showTab('rates')">費率設定</button>
     <button data-tab="coupons" onclick="showTab('coupons')">優惠碼</button>
     <button data-tab="points" onclick="showTab('points')">點數系統</button>
+    <button data-tab="live" onclick="showTab('live')">直播下單</button>
   </nav>
   <main>
 
@@ -208,6 +209,68 @@ ${THEME_CSS_ADMIN}
       </div>
     </section>
 
+    <section id="tab-live" class="tab hidden">
+      <div class="card">
+        <h2>直播場次</h2>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+          <select id="live_round_sel" onchange="liveSelectRound(this.value)" style="flex:1;min-width:160px;"></select>
+          <button class="btn secondary" style="margin-top:0;" onclick="liveNewRound()">新增場次</button>
+        </div>
+        <div id="live_round_actions" class="hidden" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+          <button class="btn secondary small" id="live_toggle_btn" onclick="liveToggleRound()">結標</button>
+          <button class="btn secondary small" onclick="liveRenameRound()">改名</button>
+          <button class="btn danger small" onclick="liveDeleteRound()">刪除場次</button>
+        </div>
+        <div id="live_empty" class="msg" style="color:var(--muted);">還沒有場次，先按「新增場次」。</div>
+      </div>
+
+      <div id="live_work" class="hidden">
+        <div class="card">
+          <h2>這一標的商品</h2>
+          <div class="grid2">
+            <div><label>商品代號</label><input id="li_code" placeholder="例如 A201" autocapitalize="characters" /></div>
+            <div><label>商品名稱</label><input id="li_name" /></div>
+          </div>
+          <div class="grid2">
+            <div><label>單價</label><input id="li_price" type="number" min="1" step="1" /></div>
+            <div><label>庫存（留空 = 不限量）</label><input id="li_stock" type="number" min="0" step="1" /></div>
+          </div>
+          <button class="btn" onclick="liveAddItem()">新增商品</button>
+          <div id="li_msg" class="msg"></div>
+          <table id="li_table">
+            <thead><tr><th>代號</th><th>名稱</th><th>單價</th><th>庫存</th><th>已下單</th><th>狀態</th><th>操作</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <div class="card">
+          <h2>貼上直播留言</h2>
+          <label>一行一則，格式：TikTok 帳號 + 代號+數量（一則留言可以有多個商品）</label>
+          <textarea id="lc_text" rows="6" placeholder="@xiaoming A201+1&#10;@ahua a201 +2&#10;@someone A201+1 A202+2"></textarea>
+          <button class="btn" id="lc_btn" onclick="liveSubmitText()">解析並加入</button>
+          <div id="lc_msg" class="msg"></div>
+        </div>
+
+        <div class="card">
+          <h2>留言與歸戶</h2>
+          <div id="lc_summary" class="msg" style="color:var(--muted);"></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn secondary small" onclick="liveRematch()">重新比對會員</button>
+            <button class="btn small" id="lc_order_btn" onclick="liveCreateOrders()">建立訂單並產生連結</button>
+          </div>
+          <div id="lc_result" class="hidden">
+            <label>已建立的訂單連結（3 小時內有效）</label>
+            <div id="lc_result_list"></div>
+            <button class="btn secondary small" onclick="liveCopyAllLinks()">複製全部連結</button>
+          </div>
+          <table id="lc_table">
+            <thead><tr><th>TikTok</th><th>留言</th><th>商品</th><th>數量</th><th>會員</th><th>狀態</th><th>操作</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
     <section id="tab-orders" class="tab hidden">
       <div class="card">
         <h2>訂單列表</h2>
@@ -240,7 +303,7 @@ ${THEME_CSS_ADMIN}
         </div>
         <div class="grid2">
           <div><label>電子信箱（選填）</label><input id="mem_email" type="email" /></div>
-          <div></div>
+          <div><label>TikTok 帳號（選填，直播下單用）</label><input id="mem_tiktok" placeholder="例如 xiaoming 或 @xiaoming" autocapitalize="none" /></div>
         </div>
         <div class="grid2">
           <div><label>帳號（選填）</label><input id="mem_account" /></div>
@@ -260,7 +323,7 @@ ${THEME_CSS_ADMIN}
           <input id="mem_search" placeholder="搜尋會員（姓名、帳號、電話、信箱、備註）" oninput="onMemberSearch()" autocomplete="off" style="margin-top:14px;" />
           <div id="mem_count" class="msg" style="color:var(--muted);"></div>
           <table id="mem_table">
-            <thead><tr><th>ID</th><th>姓名</th><th>帳號</th><th>電話</th><th>電子信箱</th><th>備註</th><th>推薦碼</th><th>推薦人</th><th>操作</th></tr></thead>
+            <thead><tr><th>ID</th><th>姓名</th><th>帳號</th><th>TikTok</th><th>電話</th><th>電子信箱</th><th>備註</th><th>推薦碼</th><th>推薦人</th><th>操作</th></tr></thead>
             <tbody></tbody>
           </table>
           <div id="mem_pager" class="pager"></div>
@@ -519,6 +582,20 @@ ${THEME_CSS_ADMIN}
   </div>
 </div>
 
+<div id="liveBindModal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <h2>歸給會員</h2>
+    <div id="lb_info" class="msg"></div>
+    <input id="lb_search" placeholder="搜尋姓名／帳號／電話" oninput="liveBindRender()" autocomplete="off" />
+    <div id="lb_list" style="max-height:240px;overflow:auto;margin-top:8px;border:1px solid var(--border);border-radius:8px;"></div>
+    <div class="filter-row">
+      <input type="checkbox" id="lb_save" checked style="width:auto;" />
+      <label for="lb_save" style="margin:0;">記住這個 TikTok 帳號，之後自動歸戶</label>
+    </div>
+    <button class="btn secondary" onclick="liveBindClose()">取消</button>
+  </div>
+</div>
+
 <div id="correctModal" class="modal-overlay hidden">
   <div class="modal-box">
     <h2>更正訂單 <span id="cor_id"></span></h2>
@@ -710,6 +787,286 @@ async function togglePush(){
   }catch(e){ alert('開啟通知失敗: ' + e.message); }
 }
 
+// ---- 直播下單 ----
+let liveRounds = [], liveRoundId = null, liveData = null, liveBindCommentId = null, liveLastLinks = [];
+const LIVE_ST = {ok:['已歸戶','b-ready'], guest:['非會員','b-pending'], unbound:['未綁定','b-await'], waitlist:['候補','b-cancel'], invalid:['無效','b-expired'], ordered:['已建單','b-paid']};
+
+function liveMsg(id, text, ok){
+  const el = document.getElementById(id);
+  el.textContent = text || '';
+  el.className = 'msg' + (text ? (ok ? ' ok' : ' err') : '');
+}
+
+async function loadLive(){
+  try{
+    await loadMembersIntoSelect();
+    liveRounds = await api('/api/admin/live/rounds');
+  }catch(e){ liveMsg('lc_msg', e.message, false); return; }
+  if (!liveRounds.some(r=>r.id===liveRoundId)) {
+    const open = liveRounds.find(r=>r.status==='open');
+    liveRoundId = open ? open.id : (liveRounds[0] ? liveRounds[0].id : null);
+  }
+  const sel = document.getElementById('live_round_sel');
+  sel.innerHTML = liveRounds.map(r=>'<option value="'+r.id+'"'+(r.id===liveRoundId?' selected':'')+'>'+escapeHtml(r.name)+(r.status==='closed'?'（已結標）':'')+'</option>').join('');
+  sel.classList.toggle('hidden', !liveRounds.length);
+  document.getElementById('live_empty').classList.toggle('hidden', liveRounds.length>0);
+  document.getElementById('live_round_actions').classList.toggle('hidden', !liveRoundId);
+  document.getElementById('live_work').classList.toggle('hidden', !liveRoundId);
+  if (liveRoundId) await loadLiveRound(); else liveData = null;
+}
+
+async function liveSelectRound(id){
+  liveRoundId = parseInt(id, 10) || null;
+  document.getElementById('lc_result').classList.add('hidden');
+  liveLastLinks = [];
+  await loadLive();
+}
+
+async function loadLiveRound(){
+  liveData = await api('/api/admin/live/rounds/'+liveRoundId);
+  liveRender();
+}
+
+function liveRender(){
+  const d = liveData;
+  if (!d) return;
+  const closed = d.round.status === 'closed';
+  document.getElementById('live_toggle_btn').textContent = closed ? '重新開啟' : '結標';
+  document.getElementById('lc_btn').disabled = closed;
+
+  document.querySelector('#li_table tbody').innerHTML = d.items.map(i=>{
+    const left = i.stock==null ? '不限量' : Math.max(0, i.stock - i.used);
+    return '<tr>'+
+      '<td data-label="代號"><b>'+escapeHtml(i.code)+'</b></td>'+
+      '<td data-label="名稱">'+escapeHtml(i.name)+'</td>'+
+      '<td data-label="單價">$'+Number(i.price).toLocaleString()+'</td>'+
+      '<td data-label="庫存">'+(i.stock==null?'不限量':i.stock)+'</td>'+
+      '<td data-label="已下單">'+i.used+(i.stock==null?'':'（剩 '+left+'）')+'</td>'+
+      '<td data-label="狀態">'+(i.is_active?'啟用':'停用')+'</td>'+
+      '<td data-label="操作">'+
+        '<button class="btn secondary small" onclick="liveEditItem('+i.id+')">編輯</button>'+
+        '<button class="btn secondary small" onclick="liveToggleItem('+i.id+')">'+(i.is_active?'停用':'啟用')+'</button>'+
+        '<button class="btn danger small" onclick="liveDelItem('+i.id+')">刪除</button>'+
+      '</td></tr>';
+  }).join('') || '<tr><td colspan="7">還沒有商品，先新增上面的商品。</td></tr>';
+
+  const counts = {};
+  d.comments.forEach(c=>{ counts[c.status] = (counts[c.status]||0) + 1; });
+  document.getElementById('lc_summary').textContent = d.comments.length
+    ? '共 '+d.comments.length+' 筆：' + Object.keys(LIVE_ST).filter(k=>counts[k]).map(k=>LIVE_ST[k][0]+' '+counts[k]).join('、')
+    : '還沒有留言。';
+  document.getElementById('lc_order_btn').disabled = !((counts.ok||0) + (counts.guest||0));
+
+  document.querySelector('#lc_table tbody').innerHTML = d.comments.map(c=>{
+    const st = LIVE_ST[c.status] || [c.status, 'b-pending'];
+    let who = c.member_name ? escapeHtml(c.member_name) : '-';
+    let acts = '';
+    if (c.status==='unbound') acts += '<button class="btn secondary small" onclick="liveBindOpen('+c.id+')">歸給會員</button><button class="btn secondary small" onclick="liveGuest('+c.id+')">當非會員</button>';
+    if (c.status==='waitlist') acts += '<button class="btn secondary small" onclick="livePromote('+c.id+')">改為正式</button>';
+    if (c.status!=='ordered') acts += '<button class="btn danger small" onclick="liveDelComment('+c.id+')">刪除</button>';
+    const note = c.status==='ordered' ? (c.order_no||'') : (c.error ? '<div style="color:var(--danger);font-size:12px;">'+escapeHtml(c.error)+'</div>' : '');
+    return '<tr>'+
+      '<td data-label="TikTok">'+(c.tiktok_id?'@'+escapeHtml(c.tiktok_id):'-')+'</td>'+
+      '<td data-label="留言">'+escapeHtml(c.raw||'')+'</td>'+
+      '<td data-label="商品">'+escapeHtml(c.item_code||'-')+'</td>'+
+      '<td data-label="數量">'+(c.qty==null?'-':c.qty)+'</td>'+
+      '<td data-label="會員">'+who+'</td>'+
+      '<td data-label="狀態"><span class="badge '+st[1]+'">'+st[0]+'</span>'+note+'</td>'+
+      '<td data-label="操作">'+(acts||'-')+'</td></tr>';
+  }).join('') || '<tr><td colspan="7">還沒有留言。</td></tr>';
+}
+
+async function liveNewRound(){
+  const name = prompt('場次名稱（例如：10/06 晚間直播）：');
+  if (!name || !name.trim()) return;
+  let copy = null;
+  if (liveRoundId && confirm('要複製目前場次的商品清單嗎？\\n（按「取消」則建立空白場次）')) copy = liveRoundId;
+  try{
+    const r = await api('/api/admin/live/rounds', {method:'POST', body: JSON.stringify({name: name.trim(), copy_items_from: copy})});
+    liveRoundId = r.id;
+    liveLastLinks = [];
+    document.getElementById('lc_result').classList.add('hidden');
+    await loadLive();
+  }catch(e){ alert(e.message); }
+}
+
+async function liveRenameRound(){
+  const cur = liveRounds.find(r=>r.id===liveRoundId);
+  const name = prompt('場次名稱：', cur ? cur.name : '');
+  if (!name || !name.trim()) return;
+  try{ await api('/api/admin/live/rounds/'+liveRoundId, {method:'PATCH', body: JSON.stringify({name: name.trim()})}); await loadLive(); }
+  catch(e){ alert(e.message); }
+}
+
+async function liveToggleRound(){
+  const closed = liveData && liveData.round.status === 'closed';
+  try{ await api('/api/admin/live/rounds/'+liveRoundId, {method:'PATCH', body: JSON.stringify({status: closed ? 'open' : 'closed'})}); await loadLive(); }
+  catch(e){ alert(e.message); }
+}
+
+async function liveDeleteRound(){
+  if (!confirm('確定刪除這個場次？商品與留言紀錄會一併刪除（已建立的訂單不受影響）。')) return;
+  try{ await api('/api/admin/live/rounds/'+liveRoundId, {method:'DELETE'}); liveRoundId = null; await loadLive(); }
+  catch(e){ alert(e.message); }
+}
+
+async function liveAddItem(){
+  const body = {
+    code: document.getElementById('li_code').value.trim(),
+    name: document.getElementById('li_name').value.trim(),
+    price: document.getElementById('li_price').value,
+    stock: document.getElementById('li_stock').value,
+  };
+  try{
+    await api('/api/admin/live/rounds/'+liveRoundId+'/items', {method:'POST', body: JSON.stringify(body)});
+    ['li_code','li_name','li_price','li_stock'].forEach(id=>{ document.getElementById(id).value=''; });
+    liveMsg('li_msg', '已新增商品', true);
+    document.getElementById('li_code').focus();
+    await loadLiveRound();
+  }catch(e){ liveMsg('li_msg', e.message, false); }
+}
+
+async function liveEditItem(id){
+  const it = liveData.items.find(x=>x.id===id);
+  if (!it) return;
+  const name = prompt('商品名稱：', it.name);
+  if (name === null) return;
+  const price = prompt('單價：', it.price);
+  if (price === null) return;
+  const stock = prompt('庫存（留空 = 不限量）：', it.stock==null ? '' : it.stock);
+  if (stock === null) return;
+  try{ await api('/api/admin/live/items/'+id, {method:'PATCH', body: JSON.stringify({name, price, stock})}); await loadLiveRound(); }
+  catch(e){ alert(e.message); }
+}
+
+async function liveToggleItem(id){
+  const it = liveData.items.find(x=>x.id===id);
+  if (!it) return;
+  try{ await api('/api/admin/live/items/'+id, {method:'PATCH', body: JSON.stringify({is_active: !it.is_active})}); await loadLiveRound(); }
+  catch(e){ alert(e.message); }
+}
+
+async function liveDelItem(id){
+  if (!confirm('確定刪除這個商品？')) return;
+  try{ await api('/api/admin/live/items/'+id, {method:'DELETE'}); await loadLiveRound(); }
+  catch(e){ alert(e.message); }
+}
+
+async function liveSubmitText(){
+  const text = document.getElementById('lc_text').value;
+  if (!text.trim()) { liveMsg('lc_msg', '請貼上留言內容', false); return; }
+  const btn = document.getElementById('lc_btn');
+  btn.disabled = true;
+  try{
+    const r = await api('/api/admin/live/rounds/'+liveRoundId+'/comments', {method:'POST', body: JSON.stringify({text})});
+    const s = r.summary;
+    document.getElementById('lc_text').value = '';
+    liveMsg('lc_msg', '已加入 '+r.rows+' 筆（已歸戶 '+s.ok+'、未綁定 '+s.unbound+'、候補 '+s.waitlist+'、無效 '+s.invalid+'）', true);
+    await loadLiveRound();
+  }catch(e){ liveMsg('lc_msg', e.message, false); }
+  btn.disabled = liveData && liveData.round.status === 'closed';
+}
+
+function liveBindOpen(id){
+  const c = liveData.comments.find(x=>x.id===id);
+  if (!c) return;
+  liveBindCommentId = id;
+  document.getElementById('lb_info').textContent = '@' + (c.tiktok_id||'') + '：' + (c.raw||'');
+  document.getElementById('lb_search').value = '';
+  document.getElementById('lb_save').checked = true;
+  liveBindRender();
+  document.getElementById('liveBindModal').classList.remove('hidden');
+}
+
+function liveBindClose(){
+  document.getElementById('liveBindModal').classList.add('hidden');
+  liveBindCommentId = null;
+}
+
+function liveBindRender(){
+  const q = document.getElementById('lb_search').value.trim().toLowerCase();
+  const list = membersCache.filter(m=> !q || [m.name, m.account, m.phone, m.tiktok_id].some(v=> v && String(v).toLowerCase().indexOf(q) >= 0)).slice(0, 30);
+  document.getElementById('lb_list').innerHTML = list.map(m=>{
+    const sub = [m.account ? '帳號 '+m.account : '', m.phone || '', m.tiktok_id ? 'TikTok @'+m.tiktok_id : ''].filter(Boolean).join(' ・ ');
+    return '<div class="member-picker-option" onclick="liveBindPick('+m.id+')">'+escapeHtml(m.name)+(sub?'<div class="mp-sub">'+escapeHtml(sub)+'</div>':'')+'</div>';
+  }).join('') || '<div class="member-picker-empty">查無符合的會員</div>';
+}
+
+async function liveBindPick(memberId){
+  if (!liveBindCommentId) return;
+  try{
+    const r = await api('/api/admin/live/comments/'+liveBindCommentId+'/bind', {method:'POST', body: JSON.stringify({member_id: memberId, save_binding: document.getElementById('lb_save').checked})});
+    liveBindClose();
+    if (r.bound > 1) liveMsg('lc_msg', '已歸戶，並一併處理同帳號的 '+r.bound+' 筆未綁定留言', true);
+    await loadMembersIntoSelect();
+    await loadLiveRound();
+  }catch(e){ alert(e.message); }
+}
+
+async function liveGuest(id){
+  try{ await api('/api/admin/live/comments/'+id+'/guest', {method:'POST'}); await loadLiveRound(); }
+  catch(e){ alert(e.message); }
+}
+async function livePromote(id){
+  try{ await api('/api/admin/live/comments/'+id+'/promote', {method:'POST'}); await loadLiveRound(); }
+  catch(e){ alert(e.message); }
+}
+async function liveDelComment(id){
+  try{ await api('/api/admin/live/comments/'+id, {method:'DELETE'}); await loadLiveRound(); }
+  catch(e){ alert(e.message); }
+}
+
+async function liveRematch(){
+  try{
+    await loadMembersIntoSelect();
+    const r = await api('/api/admin/live/rounds/'+liveRoundId+'/rematch', {method:'POST'});
+    liveMsg('lc_msg', r.matched ? '已重新歸戶 '+r.matched+' 筆' : '沒有新的符合項目（請先到會員管理填上 TikTok 帳號）', !!r.matched);
+    await loadLiveRound();
+  }catch(e){ liveMsg('lc_msg', e.message, false); }
+}
+
+async function liveCreateOrders(){
+  const counts = {};
+  liveData.comments.forEach(c=>{ counts[c.status] = (counts[c.status]||0) + 1; });
+  const n = (counts.ok||0) + (counts.guest||0);
+  if (!n) return;
+  let tip = '將為「已歸戶」與「非會員」的 '+n+' 筆留言建立訂單（同一人合併成一張）。';
+  const skip = (counts.unbound||0) + (counts.waitlist||0);
+  if (skip) tip += '\\n另有 '+skip+' 筆未綁定／候補不會建立。';
+  if (!confirm(tip + '\\n\\n確定建立？')) return;
+  const btn = document.getElementById('lc_order_btn');
+  btn.disabled = true;
+  try{
+    const r = await api('/api/admin/live/rounds/'+liveRoundId+'/create-orders', {method:'POST'});
+    liveLastLinks = r.created;
+    const box = document.getElementById('lc_result');
+    box.classList.remove('hidden');
+    document.getElementById('lc_result_list').innerHTML = r.created.map((o,idx)=>
+      '<div class="link-box"><input readonly value="@'+escapeHtml(o.tiktok_id)+'　$'+Number(o.amount).toLocaleString()+'　'+escapeHtml(o.order_no)+'" />'+
+      '<button class="btn secondary" onclick="liveCopyLink('+idx+')">複製連結</button></div>'
+    ).join('');
+    let m = '已建立 '+r.created.length+' 張訂單';
+    if (r.failed.length) m += '；失敗 '+r.failed.length+' 張：' + r.failed.map(f=>'@'+f.tiktok_id+' '+f.error).join('、');
+    liveMsg('lc_msg', m, !r.failed.length);
+    await loadLiveRound();
+  }catch(e){ liveMsg('lc_msg', e.message, false); }
+  btn.disabled = false;
+}
+
+function liveCopyText(text, doneMsg){
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(()=>liveMsg('lc_msg', doneMsg, true)).catch(()=>prompt('複製失敗，請手動複製：', text));
+  } else { prompt('請手動複製：', text); }
+}
+function liveCopyLink(idx){
+  const o = liveLastLinks[idx];
+  if (o) liveCopyText(o.link, '已複製 @'+o.tiktok_id+' 的連結');
+}
+function liveCopyAllLinks(){
+  if (!liveLastLinks.length) return;
+  liveCopyText(liveLastLinks.map(o=>'@'+o.tiktok_id+' $'+Number(o.amount).toLocaleString()+' '+o.link).join('\\n'), '已複製全部連結');
+}
+
 function showTab(name, opts){
   opts = opts || {};
   document.querySelectorAll('.tab').forEach(t=>t.classList.add('hidden'));
@@ -725,6 +1082,7 @@ function showTab(name, opts){
   if (name==='rates') loadRates();
   if (name==='coupons') loadCoupons();
   if (name==='points') loadPointsAdmin();
+  if (name==='live') loadLive();
 }
 
 // ---- 訂單自動更新（輪詢）----
@@ -1176,7 +1534,7 @@ function memFilteredList(){
   const q = document.getElementById('mem_search').value.trim().toLowerCase();
   if (!q) return membersCache;
   return membersCache.filter(m=>
-    [m.name, m.account, m.phone, m.email, m.note].some(v=> v && String(v).toLowerCase().indexOf(q) >= 0)
+    [m.name, m.account, m.tiktok_id, m.phone, m.email, m.note].some(v=> v && String(v).toLowerCase().indexOf(q) >= 0)
   );
 }
 
@@ -1192,7 +1550,7 @@ function renderMembersTable(){
 
   const tbody = document.querySelector('#mem_table tbody');
   tbody.innerHTML = shown.map(m=>\`<tr>
-    <td data-label="ID">\${m.id}</td><td data-label="姓名">\${m.name}</td><td data-label="帳號">\${m.account||''}</td><td data-label="電話">\${m.phone||''}</td><td data-label="電子信箱">\${m.email||''}\${m.email && m.email_verified_at ? ' <span title="已通過信箱驗證" style="color:#1E7A56">✓</span>' : ''}</td><td data-label="備註">\${m.note||''}</td>
+    <td data-label="ID">\${m.id}</td><td data-label="姓名">\${m.name}</td><td data-label="帳號">\${m.account||''}</td><td data-label="TikTok">\${m.tiktok_id?'@'+m.tiktok_id:''}</td><td data-label="電話">\${m.phone||''}</td><td data-label="電子信箱">\${m.email||''}\${m.email && m.email_verified_at ? ' <span title="已通過信箱驗證" style="color:#1E7A56">✓</span>' : ''}</td><td data-label="備註">\${m.note||''}</td>
     <td data-label="推薦碼"><code>\${m.referral_code||''}</code> <button class="btn secondary small" onclick="copyReferralLink('\${m.referral_code}')">複製邀請連結</button></td>
     <td data-label="推薦人">\${m.referred_by_name||'-'}</td>
     <td data-label="操作">
@@ -1200,7 +1558,7 @@ function renderMembersTable(){
       <button class="btn secondary small" onclick="resetPassword(\${m.id})">設定密碼</button>
       <button class="btn danger small" onclick="deleteMember(\${m.id})">刪除</button>
     </td>
-  </tr>\`).join('') || '<tr><td colspan="9">'+(membersCache.length ? '找不到符合的會員' : '尚無會員')+'</td></tr>';
+  </tr>\`).join('') || '<tr><td colspan="10">'+(membersCache.length ? '找不到符合的會員' : '尚無會員')+'</td></tr>';
 
   const q = document.getElementById('mem_search').value.trim();
   document.getElementById('mem_count').textContent = q
@@ -1246,6 +1604,7 @@ function editMember(id){
   document.getElementById('mem_email').value = m.email || '';
   document.getElementById('mem_note').value = m.note || '';
   document.getElementById('mem_account').value = m.account || '';
+  document.getElementById('mem_tiktok').value = m.tiktok_id || '';
   document.getElementById('mem_password').value = '';
   document.getElementById('mem_password').placeholder = '不填則不變更密碼';
   document.getElementById('mem_submit_btn').textContent = '儲存修改';
@@ -1262,6 +1621,7 @@ function cancelEditMember(){
   document.getElementById('mem_email').value='';
   document.getElementById('mem_note').value='';
   document.getElementById('mem_account').value='';
+  document.getElementById('mem_tiktok').value='';
   document.getElementById('mem_password').value='';
   document.getElementById('mem_password').placeholder = '';
   document.getElementById('mem_submit_btn').textContent = '新增';
@@ -1275,22 +1635,24 @@ async function submitMember(){
   const email = document.getElementById('mem_email').value.trim();
   const note = document.getElementById('mem_note').value.trim();
   const account = document.getElementById('mem_account').value.trim();
+  const tiktok_id = document.getElementById('mem_tiktok').value.trim();
   const password = document.getElementById('mem_password').value;
   const msg = document.getElementById('mem_msg');
   if (!name){ msg.textContent='請輸入姓名'; msg.className='msg err'; return; }
   try{
     if (editingMemberId){
-      await api('/api/admin/members/'+editingMemberId, {method:'PATCH', body: JSON.stringify({name,phone,email,note,account})});
+      await api('/api/admin/members/'+editingMemberId, {method:'PATCH', body: JSON.stringify({name,phone,email,note,account,tiktok_id})});
       if (password) await api('/api/admin/members/'+editingMemberId+'/password', {method:'POST', body: JSON.stringify({password})});
       msg.textContent='已儲存修改'; msg.className='msg ok';
       cancelEditMember();
     } else {
-      await api('/api/admin/members', {method:'POST', body: JSON.stringify({name,phone,email,note,account,password})});
+      await api('/api/admin/members', {method:'POST', body: JSON.stringify({name,phone,email,note,account,tiktok_id,password})});
       document.getElementById('mem_name').value='';
       document.getElementById('mem_phone').value='';
       document.getElementById('mem_email').value='';
       document.getElementById('mem_note').value='';
       document.getElementById('mem_account').value='';
+      document.getElementById('mem_tiktok').value='';
       document.getElementById('mem_password').value='';
       msg.textContent='已新增'; msg.className='msg ok';
     }
@@ -3014,7 +3376,37 @@ async function checkSession(){
     loadPoints();
     startOrdersPolling();
     checkAnnouncement();
+    applyHomeIntent();
   }catch(e){ /* 尚未登入，維持登入畫面 */ }
+}
+
+// === 從首頁帶過來的平台與金額（?platform=tiktok&amount=500）：自動填入自助下單，只套用一次 ===
+function applyHomeIntent(){
+  try{
+    const q = new URLSearchParams(location.search);
+    const platform = q.get('platform');
+    const amount = parseInt(q.get('amount'), 10);
+    if (!platform && !amount) return;
+    const sel = document.getElementById('new_platform');
+    const okPlatform = platform && sel && Array.prototype.some.call(sel.options, o => o.value === platform);
+    if (amount >= MIN_QUOTE_AMOUNT && amount <= 50000){
+      selectQuote(amount, null, okPlatform ? platform : '');
+      const input = document.getElementById('new_amount');
+      const isChip = Array.prototype.some.call(document.querySelectorAll('#amountChips .chip[data-amount]'), c => Number(c.dataset.amount) === amount);
+      if (!isChip && input){
+        input.classList.remove('hidden');
+        const custom = document.getElementById('chipCustom');
+        if (custom) custom.classList.add('active');
+      }
+    } else if (okPlatform){
+      sel.value = platform;
+      updatePasswordRequirement();
+      updateEstimateBadge();
+      sel.scrollIntoView({behavior:'smooth', block:'center'});
+    }
+    if (sel) sel.scrollIntoView({behavior:'smooth', block:'center'});
+    history.replaceState(null, '', location.pathname);
+  }catch(e){ /* 帶入失敗不影響其他功能 */ }
 }
 
 // === 系統公告彈窗 ===

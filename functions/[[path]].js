@@ -1,4 +1,5 @@
 import { adminHtml, payHtml, memberHtml, memberRegisterHtml } from "./_lib/templates.js";
+import { homeHtml } from "./_lib/home.js";
 import {
   getPointsConfig,
   savePointsConfig,
@@ -10,6 +11,24 @@ import {
   reconcileMemberSpends,
   parsePage,
 } from "./_lib/points.js";
+import {
+  normalizeTiktokId,
+  handleLiveListRounds,
+  handleLiveCreateRound,
+  handleLiveUpdateRound,
+  handleLiveDeleteRound,
+  handleLiveGetRound,
+  handleLiveAddItem,
+  handleLiveUpdateItem,
+  handleLiveDeleteItem,
+  handleLiveAddComments,
+  handleLiveBindComment,
+  handleLiveGuestComment,
+  handleLivePromoteComment,
+  handleLiveDeleteComment,
+  handleLiveRematch,
+  handleLiveCreateOrders,
+} from "./_lib/live.js";
 import { getRateRules, saveRateRules, getAllRateRules, getRateGroupForPlatform, RATE_GROUPS, DEFAULT_RATE_RULES, MIN_QUOTE_AMOUNT, calcCoins } from "./_lib/rates.js";
 
 // 會員自助下單的最低金額，跟查價系統的最低查詢金額保持一致
@@ -155,7 +174,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 async function handleListMembers(env) {
   const { results } = await env.DB.prepare(
-    `SELECT m.id, m.name, m.account, m.phone, m.email, m.email_verified_at, m.note, m.created_at, m.referral_code,
+    `SELECT m.id, m.name, m.account, m.phone, m.email, m.email_verified_at, m.tiktok_id, m.note, m.created_at, m.referral_code,
             r.name as referred_by_name
      FROM members m LEFT JOIN members r ON r.id = m.referred_by
      ORDER BY m.created_at DESC`
@@ -171,6 +190,9 @@ async function handleAddMember(request, env) {
   const body = await request.json().catch(() => ({}));
   const { name, phone, email, note, account, password } = body;
   if (!name || !name.trim()) return json({ error: "請輸入姓名" }, 400);
+  const tiktokRaw = body.tiktok_id && String(body.tiktok_id).trim() ? String(body.tiktok_id).trim() : "";
+  const tiktokId = tiktokRaw ? normalizeTiktokId(tiktokRaw) : null;
+  if (tiktokRaw && !tiktokId) return json({ error: "TikTok 帳號格式不正確（只能英文、數字、底線、句點）" }, 400);
   if (password && password.length < 6) return json({ error: "密碼至少需要 6 碼" }, 400);
   // 後台彈性：電話、信箱都可以不填；有填信箱才檢查格式
   const emailClean = email && String(email).trim() ? String(email).trim() : null;
@@ -181,7 +203,7 @@ async function handleAddMember(request, env) {
     const referralCode = generateReferralCode();
     try {
       const r = await env.DB.prepare(
-        "INSERT INTO members (name, account, password_hash, phone, email, note, referral_code) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO members (name, account, password_hash, phone, email, note, referral_code, tiktok_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
       )
         .bind(
           name.trim(),
@@ -190,13 +212,15 @@ async function handleAddMember(request, env) {
           phone && String(phone).trim() ? String(phone).trim() : null,
           emailClean,
           note || null,
-          referralCode
+          referralCode,
+          tiktokId
         )
         .run();
       return json({ ok: true, id: r.meta.last_row_id, referral_code: referralCode });
     } catch (err) {
       const msg = String(err.message || "");
       if (msg.includes("referral_code")) continue; // 推薦碼恰好撞號，重新產生再試
+      if (msg.includes("tiktok_id")) return json({ error: "此 TikTok 帳號已綁定其他會員" }, 400);
       if (msg.includes("UNIQUE")) return json({ error: "此帳號已被使用，請換一個" }, 400);
       throw err;
     }
@@ -225,17 +249,26 @@ async function handleUpdateMember(id, request, env) {
   const newPhone = phone !== undefined ? phone || null : existing.phone;
   const newNote = note !== undefined ? note || null : existing.note;
   const newAccount = account !== undefined ? (account && account.trim() ? account.trim() : null) : existing.account;
+  let newTiktok = existing.tiktok_id || null;
+  if (body.tiktok_id !== undefined) {
+    const raw = body.tiktok_id && String(body.tiktok_id).trim() ? String(body.tiktok_id).trim() : "";
+    newTiktok = raw ? normalizeTiktokId(raw) : null;
+    if (raw && !newTiktok) return json({ error: "TikTok 帳號格式不正確（只能英文、數字、底線、句點）" }, 400);
+  }
 
   // 信箱有變更就清掉「已驗證」標記（只改大小寫視為同一個信箱）
   const sameEmail = (newEmail || "").toLowerCase() === (existing.email || "").toLowerCase();
   const newVerifiedAt = sameEmail ? existing.email_verified_at ?? null : null;
 
   try {
-    await env.DB.prepare("UPDATE members SET name=?, phone=?, email=?, email_verified_at=?, note=?, account=? WHERE id=?")
-      .bind(newName, newPhone, newEmail, newVerifiedAt, newNote, newAccount, id)
+    await env.DB.prepare("UPDATE members SET name=?, phone=?, email=?, email_verified_at=?, note=?, account=?, tiktok_id=? WHERE id=?")
+      .bind(newName, newPhone, newEmail, newVerifiedAt, newNote, newAccount, newTiktok, id)
       .run();
     return json({ ok: true });
   } catch (err) {
+    if (String(err.message || "").includes("tiktok_id")) {
+      return json({ error: "此 TikTok 帳號已綁定其他會員" }, 400);
+    }
     if (String(err.message || "").includes("UNIQUE")) {
       return json({ error: "此帳號已被使用，請換一個" }, 400);
     }
@@ -1889,7 +1922,7 @@ export async function onRequest(context) {
     if (path.startsWith("/pay/")) return html(payHtml());
     if (path === "/member" || path === "/member/") return html(memberHtml());
     if (path === "/member/register" || path === "/member/register/") return html(memberRegisterHtml({ emailVerify: emailVerifyEnabled(env) }));
-    if (path === "/") return Response.redirect(url.origin + "/member", 302);
+    if (path === "/") return html(homeHtml());
 
     // ---- Public API ----
     if (path === "/api/setup-status" && method === "GET") return handleSetupStatus(env);
@@ -2013,6 +2046,33 @@ export async function onRequest(context) {
       if (path === "/api/admin/points/redemptions" && method === "GET") return handleAdminListRedemptions(request, env);
       const redemptionMatch = path.match(/^\/api\/admin\/points\/redemptions\/(\d+)\/(fulfill|reject)$/);
       if (redemptionMatch && method === "POST") return handleAdminProcessRedemption(redemptionMatch[1], redemptionMatch[2], request, env);
+
+      // ---- 直播下單 ----
+      if (path === "/api/admin/live/rounds" && method === "GET") return handleLiveListRounds(env);
+      if (path === "/api/admin/live/rounds" && method === "POST") return handleLiveCreateRound(request, env);
+      const liveRoundMatch = path.match(/^\/api\/admin\/live\/rounds\/(\d+)$/);
+      if (liveRoundMatch && method === "GET") return handleLiveGetRound(liveRoundMatch[1], env);
+      if (liveRoundMatch && method === "PATCH") return handleLiveUpdateRound(liveRoundMatch[1], request, env);
+      if (liveRoundMatch && method === "DELETE") return handleLiveDeleteRound(liveRoundMatch[1], env);
+      const liveRoundSub = path.match(/^\/api\/admin\/live\/rounds\/(\d+)\/(items|comments|rematch|create-orders)$/);
+      if (liveRoundSub && method === "POST") {
+        const rid = liveRoundSub[1];
+        if (liveRoundSub[2] === "items") return handleLiveAddItem(rid, request, env);
+        if (liveRoundSub[2] === "comments") return handleLiveAddComments(rid, request, env);
+        if (liveRoundSub[2] === "rematch") return handleLiveRematch(rid, env);
+        if (liveRoundSub[2] === "create-orders") return handleLiveCreateOrders(rid, request, env, handleCreateOrder);
+      }
+      const liveItemMatch = path.match(/^\/api\/admin\/live\/items\/(\d+)$/);
+      if (liveItemMatch && method === "PATCH") return handleLiveUpdateItem(liveItemMatch[1], request, env);
+      if (liveItemMatch && method === "DELETE") return handleLiveDeleteItem(liveItemMatch[1], env);
+      const liveCommentMatch = path.match(/^\/api\/admin\/live\/comments\/(\d+)$/);
+      if (liveCommentMatch && method === "DELETE") return handleLiveDeleteComment(liveCommentMatch[1], env);
+      const liveCommentAct = path.match(/^\/api\/admin\/live\/comments\/(\d+)\/(bind|guest|promote)$/);
+      if (liveCommentAct && method === "POST") {
+        if (liveCommentAct[2] === "bind") return handleLiveBindComment(liveCommentAct[1], request, env);
+        if (liveCommentAct[2] === "guest") return handleLiveGuestComment(liveCommentAct[1], env);
+        if (liveCommentAct[2] === "promote") return handleLivePromoteComment(liveCommentAct[1], env);
+      }
 
       if (path === "/api/admin/export" && method === "GET") return handleExport(request, env);
       if (path === "/api/admin/stats/monthly" && method === "GET") return handleMonthlyStats(request, env);

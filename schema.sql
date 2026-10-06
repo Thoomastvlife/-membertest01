@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS members (
   phone TEXT,
   email TEXT,                   -- 電子信箱（自助註冊必填；後台建立可留空）
   email_verified_at TEXT,       -- 通過信箱驗證碼的時間；NULL 表示未驗證（後台手動建立／舊會員）
+  tiktok_id TEXT,               -- TikTok 帳號（小寫、不含 @），直播下單用來辨識會員；同一帳號只能綁一位會員
   note TEXT,
   referral_code TEXT UNIQUE,    -- 專屬推薦碼，供他人透過隱藏註冊連結自行加入時填寫
   referred_by INTEGER,          -- 透過哪位會員的推薦碼註冊（自行註冊才會有值）
@@ -169,3 +170,42 @@ CREATE TABLE IF NOT EXISTS points_redemptions (
 );
 CREATE INDEX IF NOT EXISTS idx_points_redemptions_member ON points_redemptions(member_id, id);
 CREATE INDEX IF NOT EXISTS idx_points_redemptions_status ON points_redemptions(status);
+
+-- ===== v19：直播下單 =====
+CREATE UNIQUE INDEX IF NOT EXISTS idx_members_tiktok_id ON members(tiktok_id) WHERE tiktok_id IS NOT NULL;
+
+-- 直播場次
+CREATE TABLE IF NOT EXISTS live_rounds (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open',      -- open（可貼留言）| closed（已結標）
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+-- 場次內的商品（代號例如 A201）
+CREATE TABLE IF NOT EXISTS live_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  round_id INTEGER NOT NULL,
+  code TEXT NOT NULL,                       -- 商品代號，大寫
+  name TEXT NOT NULL,
+  price REAL NOT NULL,
+  stock INTEGER,                            -- NULL 表示不限量
+  is_active INTEGER NOT NULL DEFAULT 1,
+  UNIQUE (round_id, code)
+);
+
+-- 貼進來的留言（一則留言含多個商品會拆成多列）
+CREATE TABLE IF NOT EXISTS live_comments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  round_id INTEGER NOT NULL,
+  tiktok_id TEXT,
+  raw TEXT,
+  item_code TEXT,
+  qty INTEGER,
+  member_id INTEGER,
+  status TEXT NOT NULL,                     -- ok | guest | unbound | waitlist | invalid | ordered
+  error TEXT,
+  order_id INTEGER,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_live_comments_round ON live_comments(round_id, id);

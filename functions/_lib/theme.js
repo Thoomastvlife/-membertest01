@@ -10,7 +10,7 @@
 export const THEME_HEAD = `<script>(function(){try{var t=localStorage.getItem('theme');if(t!=='light'&&t!=='dark'){t=(window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>`;
 
 // 切換按鈕的樣式（四個頁面共用）
-const TOGGLE_CSS = `
+export const TOGGLE_CSS = `
   html[data-theme="light"]{color-scheme:light;}
   html[data-theme="dark"]{color-scheme:dark;--tg-bg:#232736;--tg-fg:#F2D27A;--tg-bd:#3A3F52;}
   .theme-toggle{position:fixed;right:14px;bottom:calc(14px + env(safe-area-inset-bottom,0px));z-index:40;height:42px;padding:0 16px 0 12px;gap:8px;border-radius:21px;border:1px solid var(--tg-bd,#D5D8E0);background:var(--tg-bg,#fff);color:var(--tg-fg,#4B5160);display:flex;align-items:center;justify-content:center;cursor:pointer;font:600 14px/1 -apple-system,"PingFang TC","Microsoft JhengHei",sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.2);}
