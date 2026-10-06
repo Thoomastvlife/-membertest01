@@ -1,0 +1,29 @@
+name: TikTok 直播留言監聽
+
+on:
+  workflow_dispatch:
+    inputs:
+      tiktok_username:
+        description: 直播主的 TikTok 帳號（不含 @）
+        required: true
+
+jobs:
+  listen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: 安裝套件
+        run: npm install --omit=dev
+        working-directory: listener
+      - name: 開始監聽
+        run: node listener.js
+        working-directory: listener
+        env:
+          TIKTOK_USERNAME: ${{ inputs.tiktok_username }}
+          INGEST_URL: ${{ secrets.INGEST_URL }}
+          INGEST_KEY: ${{ secrets.INGEST_KEY }}
+          EULER_API_KEY: ${{ secrets.EULER_API_KEY }}
