@@ -139,6 +139,10 @@ ${THEME_HEAD}
   .step h3{margin:0 0 4px;font-size:18px}
   .step p{margin:0;color:var(--muted);font-size:14.5px}
   .loading{color:var(--muted);font-size:14px}
+  .plat-lock{grid-column:1/-1;background:var(--card);border:1px dashed var(--line);border-radius:var(--radius);padding:28px 20px;display:flex;flex-direction:column;align-items:flex-start;gap:10px}
+  .plat-lock h3{margin:0;font-size:18px}
+  .plat-lock p{margin:0;color:var(--muted);font-size:14px}
+  .plat-lock .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px}
   footer{margin-top:56px;background:var(--navy);color:var(--on-navy-muted);padding:30px 0 90px;font-size:14px}
   footer .wrap{display:flex;gap:24px;flex-wrap:wrap;align-items:center;justify-content:space-between}
   footer a{color:var(--on-navy)}
@@ -217,7 +221,7 @@ ${THEME_HEAD}
   </div>
 
   <section id="rates" aria-labelledby="ratesH">
-    <div class="sec-h"><h2 id="ratesH">各平台費率</h2><p>費率依金額分級，以下為目前的最新設定</p></div>
+    <div class="sec-h"><h2 id="ratesH">各平台費率</h2><p id="ratesSub">費率依金額分級，以下為目前的最新設定</p></div>
     <div class="plat-grid" id="platGrid"><p class="loading">費率載入中…</p></div>
   </section>
 
@@ -249,7 +253,7 @@ ${THEME_TOGGLE_HTML}
     {key:"xiaohongshu", label:"小紅書", group:"other", mark:"書"},
     {key:"douyin", label:"陸抖", group:"other", mark:"抖"}
   ];
-  var state = {platform:"tiktok", amount:500, rates:null, member:null};
+  var state = {platform:"tiktok", amount:500, rates:null, member:null, locked:false};
   var $ = function(id){ return document.getElementById(id); };
 
   function fmt(n){ return Number(n).toLocaleString("en-US", {maximumFractionDigits:2}); }
@@ -300,7 +304,9 @@ ${THEME_TOGGLE_HTML}
     var coinsEl = $("coins"), rateEl = $("rateLine"), go = $("go");
     rateEl.className = "rate";
     var ok = false;
-    if (!state.rates){
+    if (state.locked){
+      coinsEl.innerHTML = "—<small>幣</small>"; rateEl.textContent = "登入會員後，即可查看費率並試算";
+    } else if (!state.rates){
       coinsEl.innerHTML = "—<small>幣</small>"; rateEl.textContent = "費率載入中…";
     } else if (amt == null){
       coinsEl.innerHTML = "—<small>幣</small>"; rateEl.textContent = "請選擇或輸入金額";
@@ -317,8 +323,9 @@ ${THEME_TOGGLE_HTML}
         ok = true;
       }
     }
-    go.setAttribute("aria-disabled", String(!ok));
+    go.setAttribute("aria-disabled", String(!ok && !state.locked));
     go.href = ok ? orderUrl(state.platform, amt) : "/member";
+    if (state.locked){ go.textContent = "登入查看費率"; return; }
     go.textContent = state.member ? (ok ? "用 $" + fmt(amt) + " 下單" : "前往下單") : (ok ? "登入並用 $" + fmt(amt) + " 下單" : "登入並下單");
   }
 
@@ -326,6 +333,18 @@ ${THEME_TOGGLE_HTML}
   function renderPlatforms(){
     var wrap = $("platGrid");
     wrap.innerHTML = "";
+    if (state.locked){
+      var lock = document.createElement("div"); lock.className = "plat-lock";
+      var lh = document.createElement("h3"); lh.textContent = "費率僅限會員查看";
+      var lp = document.createElement("p"); lp.textContent = "登入或免費註冊後，即可查看各平台最新費率並直接下單。";
+      var lr = document.createElement("div"); lr.className = "row";
+      var l1 = document.createElement("a"); l1.className = "btn btn-gold"; l1.href = "/member"; l1.textContent = "登入";
+      var l2 = document.createElement("a"); l2.className = "btn btn-line"; l2.href = "/member/register"; l2.textContent = "免費註冊";
+      lr.appendChild(l1); lr.appendChild(l2);
+      lock.appendChild(lh); lock.appendChild(lp); lock.appendChild(lr);
+      wrap.appendChild(lock);
+      return;
+    }
     PLATS.forEach(function(p){
       var card = document.createElement("div"); card.className = "plat";
       var h = document.createElement("h3");
@@ -386,8 +405,12 @@ ${THEME_TOGGLE_HTML}
 
   /* ---- 費率 ---- */
   function loadRates(){
-    fetch("/api/rates").then(function(r){ if(!r.ok) throw new Error(); return r.json(); }).then(function(d){
-      state.rates = d.groups || null; renderPlatforms(); render();
+    fetch("/api/rates", {credentials:"same-origin"}).then(function(r){
+      if (r.status === 401){ state.locked = true; state.rates = null; $("ratesSub").textContent = "登入會員後可查看"; renderPlatforms(); render(); return null; }
+      if(!r.ok) throw new Error(); return r.json();
+    }).then(function(d){
+      if (!d) return;
+      state.locked = false; state.rates = d.groups || null; renderPlatforms(); render();
     }).catch(function(){
       $("platGrid").innerHTML = "";
       var p = document.createElement("p"); p.className = "loading"; p.textContent = "費率載入失敗，請重新整理頁面。";

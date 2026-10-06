@@ -1969,7 +1969,12 @@ export async function onRequest(context) {
     if (path === "/api/admin/login" && method === "POST") return handleLogin(request, env);
     if (path === "/api/admin/logout" && method === "POST") return handleLogout();
 
-    if (path === "/api/rates" && method === "GET") return handlePublicRates(env);
+    if (path === "/api/rates" && method === "GET") {
+      // 費率只給登入的會員（或後台管理員）看，未登入一律 401，避免被外人直接抓走費率表
+      const ratesViewer = (await requireMember(request, env)) || (await requireAdmin(request, env));
+      if (!ratesViewer) return json({ error: "請先登入會員，才能查看費率" }, 401);
+      return handlePublicRates(env);
+    }
 
     // 優惠碼試算：結帳櫃檯(admin，已登入才看得到畫面)跟會員自助下單(member)都會呼叫到，
     // 這裡只回傳「這個碼折多少錢」，不會洩漏其他優惠碼資訊，所以不需要另外驗證登入身份。
