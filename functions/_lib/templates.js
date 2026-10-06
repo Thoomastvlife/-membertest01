@@ -1151,14 +1151,23 @@ function showTab(name, opts){
 // ---- 訂單自動更新（輪詢）----
 let ordersPollTimer = null;
 
+// 游標是否正停在 root 裡的輸入框（手機上代表鍵盤開著）。重畫表格會把輸入框換掉，鍵盤就會被收起來、打到一半的字也會消失。
+function isTypingIn(root){
+  const ae = document.activeElement;
+  return !!(root && ae && root.contains(ae) && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName));
+}
+
 function startOrdersPolling(){
   stopOrdersPolling();
   ordersPollTimer = setInterval(()=> {
     const tab = document.getElementById('tab-orders');
-    const modalOpen = !document.getElementById('correctModal').classList.contains('hidden');
+    const modalOpen = !document.getElementById('correctModal').classList.contains('hidden')
+      || !document.getElementById('completeModal').classList.contains('hidden');
     const picking = barcodePickAt && (Date.now() - barcodePickAt < 120000);
-    if (tab && !tab.classList.contains('hidden') && !modalOpen && !picking) {
-      loadOrders();
+    const typing = isTypingIn(tab);                                   // 正在輸入備註 / 搜尋 → 不更新
+    const searching = (document.getElementById('ord_search').value || '').trim() !== ''; // 搜尋結果顯示中 → 不要被整月列表蓋掉
+    if (tab && !tab.classList.contains('hidden') && !modalOpen && !picking && !typing && !searching) {
+      loadOrders({silent:true}).catch(function(){});
     }
   }, 5000);
 }
@@ -1307,12 +1316,19 @@ function copyLink(){
   el.select(); document.execCommand('copy');
 }
 
-async function loadOrders(){
-  clearOrderSearchState();
+async function loadOrders(opts){
+  const silent = !!(opts && opts.silent);   // true = 背景自動更新（不是使用者按的）
+  if (!silent) clearOrderSearchState();
   const monthInput = document.getElementById('ord_month');
   if (!monthInput.value) monthInput.value = new Date().toISOString().slice(0,7);
   const month = monthInput.value;
-  ordersCache = await api('/api/admin/orders?month='+encodeURIComponent(month));
+  const fresh = await api('/api/admin/orders?month='+encodeURIComponent(month));
+  if (silent) {
+    // 資料沒變 → 完全不重畫；請求期間使用者剛好點進輸入框 → 也先不重畫（下一輪再更新）
+    if (JSON.stringify(fresh) === JSON.stringify(ordersCache)) return;
+    if (isTypingIn(document.getElementById('tab-orders'))) return;
+  }
+  ordersCache = fresh;
   renderOrders();
 }
 
@@ -2538,7 +2554,9 @@ function toTaipeiTime(dateStr) {
 function openStorePick(){ storePickOpen = true; if (lastOrder) render(lastOrder); }
 function closeStorePick(){ storePickOpen = false; if (lastOrder) render(lastOrder); }
 
-async function load(){
+let lastOrderJson = null;
+
+async function load(silent){
   const app = document.getElementById('app');
   try{
     const res = await fetch('/api/order/'+token);
@@ -2548,6 +2566,12 @@ async function load(){
       return;
     }
     const o = await res.json();
+    if (silent === true) {
+      // 背景自動更新：客人正在輸入（手機鍵盤開著）就不重畫；訂單資料沒變也不重畫
+      const ae = document.activeElement;
+      if (ae && app.contains(ae) && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return;
+      if (JSON.stringify(o) === lastOrderJson) return;
+    }
     render(o);
   }catch(e){
     app.innerHTML = '<div class="error">連線發生問題，請重新整理</div>';
@@ -2556,7 +2580,19 @@ async function load(){
 
 const PROOF_ELIGIBLE = ['transfer', 'store_barcode'];
 
+// 重畫時保留客人已輸入但還沒送出的「轉帳末碼」
 function render(o){
+  const el = document.getElementById('proof_digits');
+  const typed = el ? el.value : null;
+  renderOrderView(o);
+  lastOrderJson = JSON.stringify(o);
+  if (typed !== null) {
+    const n = document.getElementById('proof_digits');
+    if (n && n.value !== typed) n.value = typed;
+  }
+}
+
+function renderOrderView(o){
   lastOrder = o;
   const app = document.getElementById('app');
   let html = '<h1>付款資訊</h1>';
@@ -2596,7 +2632,7 @@ function render(o){
     app.innerHTML = html; return;
   }
 
-  if (!pollTimer) pollTimer = setInterval(function(){ if (window.proofPickAt && Date.now()-window.proofPickAt<120000) return; load(); }, 5000);
+  if (!pollTimer) pollTimer = setInterval(function(){ if (window.proofPickAt && Date.now()-window.proofPickAt<120000) return; load(true); }, 5000);
 
   html += '<div class="row"><span>到期時間</span><span>'+toTaipeiTime(o.expires_at)+'</span></div>';
 
