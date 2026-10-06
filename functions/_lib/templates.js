@@ -1,4 +1,17 @@
 import { ALLOWED_EMAIL_DOMAINS } from "./helpers.js";
+import { jsonForScript, platformLabelMap, DEFAULT_PLATFORMS } from "./platforms.js";
+
+function escAttrHtml(v) {
+  return String(v == null ? "" : v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// 儲值平台下拉選單的 <option>。onlyEnabled＝只列開放給顧客的；markClosed＝後台用，關閉的標註（未開放）
+function platOptionsHtml(list, { onlyEnabled = false, markClosed = false, prefix = "" } = {}) {
+  return list
+    .filter((p) => !onlyEnabled || p.enabled)
+    .map((p) => `<option value="${escAttrHtml(p.key)}">${prefix}${escAttrHtml(p.name)}${markClosed && !p.enabled ? "（未開放）" : ""}</option>`)
+    .join("\n          ");
+}
 import { THEME_HEAD, THEME_TOGGLE_HTML, THEME_HEADER_BTN, THEME_CSS_ADMIN, THEME_CSS_PAY, THEME_CSS_PORTAL } from "./theme.js";
 
 // ===== 網頁宣告（會員頁 / 註冊頁 / 付款頁 共用）=====
@@ -9,7 +22,7 @@ const SITE_DISCLAIMER_CSS = `
   .site-disclaimer a{color:inherit;text-decoration:underline;}`;
 const SITE_DISCLAIMER_HTML = `<div class="site-disclaimer"><b>網頁宣告</b>本網站為會員自助查詢與訂單結帳頁面，內容僅供參考，實際以訂單確認內容為準。<br/>客服信箱：<a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a></div>`;
 
-export function adminHtml() {
+export function adminHtml({ platforms = DEFAULT_PLATFORMS } = {}) {
   return `<!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
@@ -171,10 +184,7 @@ ${THEME_CSS_ADMIN}
         <label>儲值平台（選填）</label>
         <select id="co_platform">
           <option value="">-- 不指定 --</option>
-          <option value="tiktok">TikTok</option>
-          <option value="kuaishou">快手</option>
-          <option value="xiaohongshu">小紅書</option>
-          <option value="douyin">陸抖</option>
+          ${platOptionsHtml(platforms, { markClosed: true })}
         </select>
         <label>付款方式（選填，不指定則由前台客人自行選擇）</label>
         <select id="co_method" onchange="document.getElementById('co_store_wrap').classList.toggle('hidden', this.value!=='store_barcode')">
@@ -369,6 +379,39 @@ ${THEME_CSS_ADMIN}
         <button class="btn" onclick="saveSettings()">儲存</button>
         <div id="set_msg" class="msg"></div>
       </div>
+
+      <div class="card">
+        <h2>付款方式開放設定</h2>
+        <small class="hint">勾選＝顧客在付款頁可以自己選這個付款方式；取消勾選＝顧客看不到、也不能選。<b>後台「建立訂單」與「更正訂單」仍然可以指定任何付款方式。</b>已經選好付款方式的訂單不受影響。</small>
+        <div style="margin-top:12px;">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:8px 0;"><input type="checkbox" id="pm_transfer" style="width:auto;margin:0;" /> 轉帳</label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:8px 0;"><input type="checkbox" id="pm_store_barcode" style="width:auto;margin:0;" /> 超商條碼（7-11 / 全家 / 萊爾富）</label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:8px 0;"><input type="checkbox" id="pm_taiwan_pay" style="width:auto;margin:0;" /> TWQR</label>
+        </div>
+        <button class="btn" onclick="saveMethodsAdmin()">儲存</button>
+        <div id="pm_msg" class="msg"></div>
+      </div>
+
+      <div class="card">
+        <h2>儲值平台設定</h2>
+        <small class="hint">「開放顧客選擇」取消勾選＝顧客下單和查價時看不到這個平台；後台建單仍可選。「預估幣數費率」決定顧客看到的預估幣數用哪一組費率（費率在「費率」分頁設定）；選「不計算」就不顯示預估幣數。內建平台不能刪除，已有訂單的平台也不能刪除（請改成不開放）。</small>
+        <table id="plat_table" style="margin-top:12px;">
+          <thead><tr><th>順序</th><th>名稱</th><th>預估幣數費率</th><th>顧客須填密碼</th><th>開放顧客選擇</th><th>訂單數</th><th>操作</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <h3 style="margin:18px 0 6px;font-size:15px;">新增平台</h3>
+        <label>平台名稱</label>
+        <input id="plat_new_name" maxlength="20" placeholder="例如：Steam、抖音極速版" autocomplete="off" />
+        <label>預估幣數費率</label>
+        <select id="plat_new_rate">
+          <option value="other">套用「其他平台」費率</option>
+          <option value="tiktok">套用「TikTok」費率</option>
+          <option value="none">不計算預估幣數</option>
+        </select>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:10px;"><input type="checkbox" id="plat_new_pw" style="width:auto;margin:0;" /> 顧客下單時必須填寫密碼</label>
+        <button class="btn" onclick="addPlatformAdmin()">新增平台</button>
+        <div id="plat_msg" class="msg"></div>
+      </div>
     </section>
 
     <section id="tab-announcement" class="tab hidden">
@@ -444,8 +487,8 @@ ${THEME_CSS_ADMIN}
         <div id="rates_msg_tiktok" class="msg"></div>
       </div>
       <div class="card">
-        <h2>快手 / 小紅書 / 陸抖 費率設定</h2>
-        <small class="hint">符合金額 ≥ min 時，套用該 rate。系統會自動由大到小排序。修改後儲存即生效，快手、小紅書、陸抖三個平台共用這組費率。</small>
+        <h2>其他平台費率設定（快手 / 小紅書 / 陸抖 / 自訂平台）</h2>
+        <small class="hint">符合金額 ≥ min 時，套用該 rate。系統會自動由大到小排序。修改後儲存即生效，快手、小紅書、陸抖，以及在「設定」裡新增並選擇「其他平台費率」的平台，共用這組費率。</small>
         <div id="rates_list_other" style="margin-top:14px;"></div>
         <button class="btn secondary" onclick="addRateRow('other')">➕ 新增一筆</button>
         <button class="btn" onclick="saveRates('other')">儲存費率</button>
@@ -631,10 +674,7 @@ ${THEME_CSS_ADMIN}
     <label>儲值平台</label>
     <select id="cor_platform">
       <option value="__keep__">-- 不變 --</option>
-      <option value="tiktok">改為：TikTok</option>
-      <option value="kuaishou">改為：快手</option>
-      <option value="xiaohongshu">改為：小紅書</option>
-      <option value="douyin">改為：陸抖</option>
+      ${platOptionsHtml(platforms, { markClosed: true, prefix: "改為：" })}
       <option value="">重設為未指定</option>
     </select>
     <label>付款方式</label>
@@ -666,7 +706,7 @@ ${THEME_CSS_ADMIN}
 <script>
 const PM_LABEL = {transfer:'轉帳', store_barcode:'超商條碼', taiwan_pay:'TWQR'};
 const CVS_LABEL = {seven:'7-11', family:'全家', hilife:'萊爾富'};
-const PLATFORM_LABEL = {tiktok:'TikTok', kuaishou:'快手', xiaohongshu:'小紅書', douyin:'陸抖'};
+const PLATFORM_LABEL = ${jsonForScript(platformLabelMap(platforms))};
 const STATUS_LABEL = {
   pending_method:['待選付款方式','b-pending'],
   awaiting_payment:['等待客人付款(轉帳)','b-await'],
@@ -1139,7 +1179,7 @@ function showTab(name, opts){
   else { stopOrdersPolling(); }
   if (name==='members') loadMembers();
   if (name==='stats') loadStats();
-  if (name==='settings') loadSettings();
+  if (name==='settings') { loadSettings(); loadPlatformsAdmin(); loadMethodsAdmin(); }
   if (name==='announcement' && !opts.skipAnnouncementLoad) loadAnnouncement();
   if (name==='staff') loadStaff();
   if (name==='rates') loadRates();
@@ -1804,6 +1844,188 @@ async function loadStats(){
   }).join('');
   tbody.innerHTML = (rows || '<tr><td colspan="3">本月尚無儲值紀錄</td></tr>') +
     \`<tr class="total-row"><td data-label="會員 / 客人">合計</td><td data-label="儲值筆數">\${totalCount}</td><td data-label="儲值金額合計">$\${total}</td></tr>\`;
+}
+
+// ---- 儲值平台 / 付款方式開放設定 ----
+let platformsAdmin = [];
+let platformUsage = {};
+const PLAT_RATE_LABEL = {tiktok:'TikTok 費率', other:'其他平台費率', none:'不計算'};
+
+function platRebuildSelect(sel, pairs){
+  if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = '';
+  pairs.forEach(function(pr){
+    const o = document.createElement('option');
+    o.value = pr[0]; o.textContent = pr[1];
+    sel.appendChild(o);
+  });
+  if (Array.prototype.some.call(sel.options, function(o){ return o.value === cur; })) sel.value = cur;
+}
+
+// 平台清單有變動 → 更新名稱對照表、後台建單與更正訂單的下拉選單（不用重新整理頁面）
+function applyPlatforms(list){
+  Object.keys(PLATFORM_LABEL).forEach(function(k){ delete PLATFORM_LABEL[k]; });
+  list.forEach(function(p){ PLATFORM_LABEL[p.key] = p.name; });
+  const tag = function(p){ return p.name + (p.enabled ? '' : '（未開放）'); };
+  platRebuildSelect(document.getElementById('co_platform'),
+    [['', '-- 不指定 --']].concat(list.map(function(p){ return [p.key, tag(p)]; })));
+  platRebuildSelect(document.getElementById('cor_platform'),
+    [['__keep__', '-- 不變 --']].concat(list.map(function(p){ return [p.key, '改為：' + tag(p)]; })).concat([['', '重設為未指定']]));
+}
+
+function platMsg(text, ok){
+  const m = document.getElementById('plat_msg');
+  m.textContent = text || '';
+  m.className = 'msg' + (text ? (ok ? ' ok' : ' err') : '');
+}
+
+function platCell(label, node){
+  const td = document.createElement('td');
+  td.setAttribute('data-label', label);
+  if (typeof node === 'string') td.textContent = node;
+  else if (node) td.appendChild(node);
+  return td;
+}
+
+function platButton(text, cls, handler, disabled){
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = cls;
+  b.textContent = text;
+  b.disabled = !!disabled;
+  b.addEventListener('click', handler);
+  return b;
+}
+
+function platCheckbox(checked, handler){
+  const c = document.createElement('input');
+  c.type = 'checkbox';
+  c.checked = !!checked;
+  c.style.width = 'auto';
+  c.style.margin = '0';
+  c.addEventListener('change', function(){ handler(c.checked); });
+  return c;
+}
+
+function renderPlatformsAdmin(){
+  const tbody = document.querySelector('#plat_table tbody');
+  tbody.innerHTML = '';
+  platformsAdmin.forEach(function(p, idx){
+    const tr = document.createElement('tr');
+
+    const moves = document.createElement('span');
+    moves.appendChild(platButton('↑', 'btn secondary small', function(){ updatePlatformAdmin(p.key, {move:'up'}); }, idx === 0));
+    moves.appendChild(platButton('↓', 'btn secondary small', function(){ updatePlatformAdmin(p.key, {move:'down'}); }, idx === platformsAdmin.length - 1));
+    tr.appendChild(platCell('順序', moves));
+
+    const nameWrap = document.createElement('span');
+    const nm = document.createElement('b');
+    nm.textContent = p.name;
+    nameWrap.appendChild(nm);
+    if (p.builtin) {
+      const tagEl = document.createElement('span');
+      tagEl.style.cssText = 'color:var(--muted);font-size:12px;margin-left:6px;';
+      tagEl.textContent = '內建';
+      nameWrap.appendChild(tagEl);
+    }
+    nameWrap.appendChild(platButton('改名', 'btn secondary small', function(){ renamePlatformAdmin(p.key); }));
+    tr.appendChild(platCell('名稱', nameWrap));
+
+    const rateSel = document.createElement('select');
+    rateSel.style.width = 'auto';
+    ['other', 'tiktok', 'none'].forEach(function(k){
+      const o = document.createElement('option');
+      o.value = k; o.textContent = PLAT_RATE_LABEL[k];
+      rateSel.appendChild(o);
+    });
+    rateSel.value = p.rate_group;
+    rateSel.addEventListener('change', function(){ updatePlatformAdmin(p.key, {rate_group: rateSel.value}); });
+    tr.appendChild(platCell('預估幣數費率', rateSel));
+
+    tr.appendChild(platCell('顧客須填密碼', platCheckbox(p.require_password, function(v){ updatePlatformAdmin(p.key, {require_password: v}); })));
+    tr.appendChild(platCell('開放顧客選擇', platCheckbox(p.enabled, function(v){ updatePlatformAdmin(p.key, {enabled: v}); })));
+    tr.appendChild(platCell('訂單數', String(platformUsage[p.key] || 0)));
+
+    const ops = p.builtin ? '內建不可刪' : platButton('刪除', 'btn danger small', function(){ deletePlatformAdmin(p.key); });
+    tr.appendChild(platCell('操作', ops));
+    tbody.appendChild(tr);
+  });
+}
+
+function takePlatformsPayload(d){
+  platformsAdmin = d.platforms || [];
+  platformUsage = d.usage || {};
+  renderPlatformsAdmin();
+  applyPlatforms(platformsAdmin);
+}
+
+async function loadPlatformsAdmin(){
+  try{ takePlatformsPayload(await api('/api/admin/platforms')); }
+  catch(e){ platMsg(e.message, false); }
+}
+
+async function updatePlatformAdmin(key, patch){
+  try{
+    takePlatformsPayload(await api('/api/admin/platforms/' + key, {method:'PATCH', body: JSON.stringify(patch)}));
+    platMsg('已更新', true);
+  }catch(e){ platMsg(e.message, false); loadPlatformsAdmin(); }
+}
+
+function renamePlatformAdmin(key){
+  const p = platformsAdmin.find(function(x){ return x.key === key; });
+  if (!p) return;
+  const name = prompt('平台名稱：', p.name);
+  if (name === null) return;
+  updatePlatformAdmin(key, {name: name});
+}
+
+async function deletePlatformAdmin(key){
+  const p = platformsAdmin.find(function(x){ return x.key === key; });
+  if (!p || !confirm('確定刪除平台「' + p.name + '」？')) return;
+  try{
+    takePlatformsPayload(await api('/api/admin/platforms/' + key, {method:'DELETE'}));
+    platMsg('已刪除', true);
+  }catch(e){ platMsg(e.message, false); }
+}
+
+async function addPlatformAdmin(){
+  const name = document.getElementById('plat_new_name').value.trim();
+  if (!name){ platMsg('請輸入平台名稱', false); return; }
+  try{
+    takePlatformsPayload(await api('/api/admin/platforms', {method:'POST', body: JSON.stringify({
+      name: name,
+      rate_group: document.getElementById('plat_new_rate').value,
+      require_password: document.getElementById('plat_new_pw').checked,
+      enabled: true,
+    })}));
+    document.getElementById('plat_new_name').value = '';
+    document.getElementById('plat_new_pw').checked = false;
+    platMsg('已新增「' + name + '」，顧客重新整理頁面後就能選到', true);
+  }catch(e){ platMsg(e.message, false); }
+}
+
+async function loadMethodsAdmin(){
+  try{
+    const d = await api('/api/admin/payment-methods');
+    ['transfer','store_barcode','taiwan_pay'].forEach(function(k){
+      document.getElementById('pm_' + k).checked = !!d.methods[k];
+    });
+  }catch(e){
+    const m = document.getElementById('pm_msg'); m.textContent = e.message; m.className = 'msg err';
+  }
+}
+
+async function saveMethodsAdmin(){
+  const m = document.getElementById('pm_msg');
+  const body = {};
+  ['transfer','store_barcode','taiwan_pay'].forEach(function(k){ body[k] = document.getElementById('pm_' + k).checked; });
+  if (!body.transfer && !body.store_barcode && !body.taiwan_pay &&
+      !confirm('三種付款方式都關閉後，顧客無法自己選付款方式，必須由後台指定。確定要全部關閉？')) return;
+  try{
+    await api('/api/admin/payment-methods', {method:'POST', body: JSON.stringify(body)});
+    m.textContent = '已儲存，顧客付款頁會在幾秒內更新'; m.className = 'msg ok';
+  }catch(e){ m.textContent = e.message; m.className = 'msg err'; }
 }
 
 async function loadSettings(){
@@ -2490,7 +2712,7 @@ ${THEME_TOGGLE_HTML}
 </html>`;
 }
 
-export function payHtml() {
+export function payHtml({ platforms = DEFAULT_PLATFORMS } = {}) {
   return `<!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
@@ -2535,7 +2757,7 @@ ${THEME_CSS_PAY}
 <script>
 const token = location.pathname.split('/').pop();
 const PM_LABEL = {transfer:'轉帳', store_barcode:'超商條碼', taiwan_pay:'TWQR'};
-const PLATFORM_LABEL = {tiktok:'TikTok', kuaishou:'快手', xiaohongshu:'小紅書', douyin:'陸抖'};
+const PLATFORM_LABEL = ${jsonForScript(platformLabelMap(platforms))};
 const CVS_STORES = {seven:'7-11', family:'全家', hilife:'萊爾富'};
 const CVS_LIMIT = 10000;
 const CVS_FEE = 15;
@@ -2638,8 +2860,10 @@ function renderOrderView(o){
 
   if (!o.payment_method) {
     const overLimit = o.amount > CVS_LIMIT;
+    const me = Array.isArray(o.methods_enabled) ? o.methods_enabled : ['transfer','store_barcode','taiwan_pay'];
+    const pm = function(k){ return me.indexOf(k) >= 0; };
     const feeNote = '<div class=\"info-box\" style=\"margin-top:12px;\">使用超商條碼需<b>自付 $'+CVS_FEE+' 超商手續費</b>，繳費時請於超商另行支付。</div>';
-    if (storePickOpen && !overLimit) {
+    if (storePickOpen && !overLimit && pm('store_barcode')) {
       html += '<div class=\"muted\" style=\"margin-top:14px;\">請選擇要繳費的超商（選擇後將無法變更）</div>';
       html += '<div class=\"methods\">'+
         '<button onclick=\"selectMethod(\\'store_barcode\\',\\'seven\\')\">7-11</button>'+
@@ -2649,19 +2873,26 @@ function renderOrderView(o){
       html += feeNote;
       html += '<div class=\"center\" style=\"margin-top:12px;\"><a href=\"#\" onclick=\"closeStorePick();return false;\" style=\"color:#6b7280;font-size:14px;\">‹ 返回選擇付款方式</a></div>';
     } else {
-      html += '<div class=\"muted\" style=\"margin-top:14px;\">請選擇付款方式（選擇後將無法變更）</div>';
+      if (me.length) html += '<div class=\"muted\" style=\"margin-top:14px;\">請選擇付款方式（選擇後將無法變更）</div>';
       html += '<div class=\"methods\">'+
-        '<button onclick=\"selectMethod(\\'transfer\\')\">轉帳</button>'+
-        (overLimit
+        (pm('transfer') ? '<button onclick=\"selectMethod(\\'transfer\\')\">轉帳</button>' : '')+
+        (pm('store_barcode') ? (overLimit
           ? '<button disabled style=\"opacity:.45;cursor:not-allowed;\">超商條碼</button>'
-          : '<button onclick=\"openStorePick()\">超商條碼</button>')+
-        '<button onclick=\"selectMethod(\\'taiwan_pay\\')\">TWQR</button>'+
+          : '<button onclick=\"openStorePick()\">超商條碼</button>') : '')+
+        (pm('taiwan_pay') ? '<button onclick=\"selectMethod(\\'taiwan_pay\\')\">TWQR</button>' : '')+
       '</div>';
-      if (overLimit) {
+      if (overLimit && pm('store_barcode')) {
         html += '<div style=\"color:#e0453c;font-size:14px;margin-top:12px;text-align:center;\">超過 $'+CVS_LIMIT.toLocaleString()+' 無法使用超商條碼，請分筆訂單</div>';
       }
     }
     app.innerHTML = html;
+    if (!me.length) {
+      const d = document.createElement('div');
+      d.className = 'info-box';
+      d.style.marginTop = '14px';
+      d.textContent = '目前未開放自行選擇付款方式，請聯繫客服，由店家為您指定付款方式。';
+      app.appendChild(d);
+    }
     return;
   }
 
@@ -2796,7 +3027,7 @@ ${THEME_TOGGLE_HTML}
 </html>`;
 }
 
-export function memberHtml() {
+export function memberHtml({ platforms = DEFAULT_PLATFORMS } = {}) {
   return `<!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
@@ -3135,10 +3366,7 @@ ${THEME_CSS_PORTAL}
         <label>儲值平台</label>
         <select id="quote_platform">
           <option value="">請選擇儲值平台</option>
-          <option value="tiktok">TikTok</option>
-          <option value="kuaishou">快手</option>
-          <option value="xiaohongshu">小紅書</option>
-          <option value="douyin">陸抖</option>
+          ${platOptionsHtml(platforms, { onlyEnabled: true })}
         </select>
         <label>輸入金額（可新增多筆）</label>
         <div class="quote-inputs" id="quoteInputs">
@@ -3161,10 +3389,7 @@ ${THEME_CSS_PORTAL}
       <label>儲值平台</label>
       <select id="new_platform" onchange="updatePasswordRequirement()">
         <option value="">請選擇儲值平台</option>
-        <option value="tiktok">TikTok</option>
-        <option value="kuaishou">快手</option>
-        <option value="xiaohongshu">小紅書</option>
-        <option value="douyin">陸抖</option>
+        ${platOptionsHtml(platforms, { onlyEnabled: true })}
       </select>
       <label>金額</label>
       <div class="chips" id="amountChips">
@@ -3255,7 +3480,7 @@ ${THEME_CSS_PORTAL}
 <script>
 const PM_LABEL = {transfer:'轉帳', store_barcode:'超商條碼', taiwan_pay:'TWQR'};
 const CVS_LABEL = {seven:'7-11', family:'全家', hilife:'萊爾富'};
-const PLATFORM_LABEL = {tiktok:'TikTok', kuaishou:'快手', xiaohongshu:'小紅書', douyin:'陸抖'};
+const PLATFORM_LABEL = ${jsonForScript(platformLabelMap(platforms))};
 const STATUS_LABEL = {
   pending_method:['待選付款方式','b-pending'],
   awaiting_payment:['等待付款(轉帳)','b-await'],
@@ -3283,12 +3508,13 @@ async function loadRates() {
 }
 
 // 依平台代碼取得對應的費率群組（tiktok 自己一組，其餘平台共用 other 這組）
+const PLATFORM_RATE_GROUP = ${jsonForScript(Object.fromEntries(platforms.map((p) => [p.key, p.rate_group])))};
 function getRateGroupForPlatform(platform) {
-  return platform === 'tiktok' ? 'tiktok' : 'other';
+  return PLATFORM_RATE_GROUP[platform] || 'other';   // 'none' = 不計算預估幣數（找不到費率就不顯示）
 }
 
-// 需要強制填寫密碼的平台：快手／小紅書／陸抖不強制要密碼，僅 TikTok 需要
-const PLATFORMS_REQUIRE_PASSWORD = new Set(['tiktok']);
+// 需要強制填寫密碼的平台（由後台「儲值平台設定」決定，預設只有 TikTok）
+const PLATFORMS_REQUIRE_PASSWORD = new Set(${jsonForScript(platforms.filter((p) => p.require_password).map((p) => p.key))});
 
 // 取得對應匯率
 function getRate(amount, platform) {

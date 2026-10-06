@@ -1,4 +1,16 @@
 import { adminHtml, payHtml, memberHtml, memberRegisterHtml } from "./_lib/templates.js";
+import {
+  getPlatforms,
+  savePlatforms,
+  generatePlatformKey,
+  platformLabelMap,
+  findPlatform,
+  rateGroupOf,
+  getMethodsConfig,
+  saveMethodsConfig,
+  enabledMethodList,
+  RATE_GROUP_CHOICES,
+} from "./_lib/platforms.js";
 import { homeHtml } from "./_lib/home.js";
 import {
   getPointsConfig,
@@ -50,9 +62,6 @@ import {
   nowIso,
   addHours,
   PAYMENT_METHODS,
-  PLATFORMS,
-  PLATFORM_LABEL,
-  PLATFORMS_REQUIRE_PASSWORD,
   PROOF_ELIGIBLE_METHODS,
   publicOrderView,
   expireIfNeeded,
@@ -605,7 +614,8 @@ async function handleCreateOrder(request, env) {
   if (!amt || amt <= 0) return json({ error: "金額不正確" }, 400);
   if (payment_method && !PAYMENT_METHODS.has(payment_method)) return json({ error: "付款方式不正確" }, 400);
   if (storeBrand && !CVS_STORES[storeBrand]) return json({ error: "超商選擇不正確" }, 400);
-  if (platform && !PLATFORMS.has(platform)) return json({ error: "儲值平台不正確" }, 400);
+  const platformList = await getPlatforms(env.DB);
+  if (platform && !findPlatform(platformList, platform)) return json({ error: "儲值平台不正確" }, 400);
 
   let memberNameSnapshot = non_member_name && non_member_name.trim() ? non_member_name.trim() : "非會員";
   let memberId = null;
@@ -630,9 +640,12 @@ async function handleCreateOrder(request, env) {
   // 預計獲得幣數：只有指定了儲值平台才試算（TikTok 用自己一組費率，快手/小紅書/陸抖 共用另一組）
   let coins = null;
   if (platform) {
-    const rateRules = await getRateRules(env, getRateGroupForPlatform(platform));
-    const coinsResult = calcCoins(rateRules, amt);
-    coins = coinsResult ? coinsResult.coins : null;
+    const group = rateGroupOf(platformList, platform);
+    if (group !== "none") {
+      const rateRules = await getRateRules(env, group);
+      const coinsResult = calcCoins(rateRules, amt);
+      coins = coinsResult ? coinsResult.coins : null;
+    }
   }
 
   const token = randomToken(24);
@@ -818,7 +831,7 @@ async function handleCorrectOrder(id, request, env) {
 
   if (body.platform !== undefined) {
     const platform = body.platform || null;
-    if (platform && !PLATFORMS.has(platform)) return json({ error: "儲值平台不正確" }, 400);
+    if (platform && !findPlatform(await getPlatforms(env.DB), platform)) return json({ error: "儲值平台不正確" }, 400);
     fields.push("platform=?");
     binds.push(platform);
   }
@@ -909,7 +922,7 @@ async function sendOrderCompleteEmail(env, order) {
   const PM = { transfer: "轉帳", store_barcode: "超商條碼", taiwan_pay: "TWQR" };
   const CVS = { seven: "7-11", family: "全家", hilife: "萊爾富" };
   const rows = [["訂單編號", orderNo], ["訂單金額", "$" + order.amount]];
-  if (order.platform) rows.push(["儲值平台", PLATFORM_LABEL[order.platform] || order.platform]);
+  if (order.platform) rows.push(["儲值平台", platformLabelMap(await getPlatforms(env.DB))[order.platform] || order.platform]);
   if (order.payment_method) {
     rows.push(["付款方式", (PM[order.payment_method] || order.payment_method) + (order.store_brand && CVS[order.store_brand] ? "（" + CVS[order.store_brand] + "）" : "")]);
   }
@@ -971,6 +984,7 @@ async function handleExport(request, env) {
   )
     .bind(month)
     .all();
+  const platformLabels = platformLabelMap(await getPlatforms(env.DB));
 
   const toTaipeiTime = (dateStr) => {
     if (!dateStr) return "";
@@ -994,7 +1008,7 @@ async function handleExport(request, env) {
     formatOrderNo(o.id),
     toTaipeiTime(o.created_at),
     o.member_name_snapshot,
-    PLATFORM_LABEL[o.platform] || "未指定",
+    platformLabels[o.platform] || "未指定",
     o.platform_account || "",
     o.platform_password || "",
     o.original_amount != null ? o.original_amount : "",
@@ -1051,6 +1065,103 @@ async function handleMonthlyStats(request, env) {
 
 // ---- Public order endpoints ----
 
+// 付款頁用的訂單資料：訂單本身 + 目前開放給顧客選的付款方式
+async function payViewJson(env, order) {
+  const cfg = await getMethodsConfig(env.DB);
+  return json({ ...publicOrderView(order), methods_enabled: enabledMethodList(cfg) });
+}
+
+// ================= 後台：儲值平台 / 付款方式開放設定 =================
+async function platformUsage(env) {
+  const { results } = await env.DB.prepare("SELECT platform, COUNT(*) AS c FROM orders WHERE platform IS NOT NULL GROUP BY platform").all();
+  const m = {};
+  for (const r of results) m[r.platform] = r.c;
+  return m;
+}
+
+async function platformsPayload(env, list) {
+  return { platforms: list, usage: await platformUsage(env) };
+}
+
+async function handleAdminListPlatforms(env) {
+  return json(await platformsPayload(env, await getPlatforms(env.DB)));
+}
+
+function readPlatformFields(body, allowKeys) {
+  const out = {};
+  if (allowKeys.includes("name") && body.name !== undefined) {
+    const name = String(body.name || "").trim().replace(/\s+/g, " ");
+    if (!name) return { error: "請輸入平台名稱" };
+    if (name.length > 20) return { error: "平台名稱最多 20 個字" };
+    out.name = name;
+  }
+  if (allowKeys.includes("enabled") && body.enabled !== undefined) out.enabled = body.enabled === true;
+  if (allowKeys.includes("require_password") && body.require_password !== undefined) out.require_password = body.require_password === true;
+  if (allowKeys.includes("rate_group") && body.rate_group !== undefined) {
+    if (!RATE_GROUP_CHOICES.includes(body.rate_group)) return { error: "預估幣數費率選擇不正確" };
+    out.rate_group = body.rate_group;
+  }
+  return { fields: out };
+}
+
+async function handleAdminAddPlatform(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const list = await getPlatforms(env.DB);
+  if (list.length >= 30) return json({ error: "平台最多 30 個" }, 400);
+  const r = readPlatformFields({ rate_group: "other", ...body }, ["name", "enabled", "require_password", "rate_group"]);
+  if (r.error) return json({ error: r.error }, 400);
+  if (!r.fields.name) return json({ error: "請輸入平台名稱" }, 400);
+  if (list.some((p) => p.name.toLowerCase() === r.fields.name.toLowerCase())) return json({ error: "已經有同名的平台" }, 400);
+  list.push({
+    key: generatePlatformKey(list),
+    name: r.fields.name,
+    enabled: r.fields.enabled !== false,
+    require_password: r.fields.require_password === true,
+    rate_group: r.fields.rate_group || "other",
+    builtin: false,
+  });
+  const saved = await savePlatforms(env.DB, list);
+  return json(await platformsPayload(env, saved));
+}
+
+async function handleAdminUpdatePlatform(key, request, env) {
+  const body = await request.json().catch(() => ({}));
+  const list = await getPlatforms(env.DB);
+  const idx = list.findIndex((p) => p.key === key);
+  if (idx < 0) return json({ error: "找不到此平台" }, 404);
+  const r = readPlatformFields(body, ["name", "enabled", "require_password", "rate_group"]);
+  if (r.error) return json({ error: r.error }, 400);
+  if (r.fields.name && list.some((p, i) => i !== idx && p.name.toLowerCase() === r.fields.name.toLowerCase())) {
+    return json({ error: "已經有同名的平台" }, 400);
+  }
+  Object.assign(list[idx], r.fields);
+  if (body.move === "up" && idx > 0) [list[idx - 1], list[idx]] = [list[idx], list[idx - 1]];
+  if (body.move === "down" && idx < list.length - 1) [list[idx + 1], list[idx]] = [list[idx], list[idx + 1]];
+  const saved = await savePlatforms(env.DB, list);
+  return json(await platformsPayload(env, saved));
+}
+
+async function handleAdminDeletePlatform(key, env) {
+  const list = await getPlatforms(env.DB);
+  const p = findPlatform(list, key);
+  if (!p) return json({ error: "找不到此平台" }, 404);
+  if (p.builtin) return json({ error: "內建平台不能刪除，可以改成「不開放」" }, 400);
+  const used = (await platformUsage(env))[key] || 0;
+  if (used > 0) return json({ error: `已有 ${used} 筆訂單使用「${p.name}」，不能刪除（刪除後舊訂單會看不到平台名稱）。請改成「不開放」。` }, 400);
+  const saved = await savePlatforms(env.DB, list.filter((x) => x.key !== key));
+  return json(await platformsPayload(env, saved));
+}
+
+async function handleAdminGetMethods(env) {
+  return json({ methods: await getMethodsConfig(env.DB) });
+}
+
+async function handleAdminSaveMethods(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const saved = await saveMethodsConfig(env.DB, body);
+  return json({ ok: true, methods: saved });
+}
+
 async function handleGetOrderPublic(token, env) {
   let order = await env.DB.prepare("SELECT * FROM orders WHERE token=?").bind(token).first();
   if (!order) return json({ error: "找不到此訂單，連結可能有誤" }, 404);
@@ -1058,13 +1169,16 @@ async function handleGetOrderPublic(token, env) {
     return json({ error: "此付款連結已失效，請洽店家重新開立" }, 410);
   }
   order = await expireIfNeeded(env.DB, order);
-  return json(publicOrderView(order));
+  return payViewJson(env, order);
 }
 
 async function handleSelectMethod(token, request, env) {
   const body = await request.json().catch(() => ({}));
   const { method } = body;
   if (!PAYMENT_METHODS.has(method)) return json({ error: "付款方式不正確" }, 400);
+  // 後台可以關閉「讓顧客自己選」的付款方式（後台建單／更正仍可指定）
+  const methodsCfg = await getMethodsConfig(env.DB);
+  if (!methodsCfg[method]) return json({ error: "此付款方式目前未開放，請選擇其他付款方式，或聯繫客服" }, 400);
   const store = method === "store_barcode" ? String(body.store || "") : null;
   if (method === "store_barcode" && !CVS_STORES[store]) return json({ error: "請先選擇超商（7-11、全家或萊爾富）" }, 400);
 
@@ -1105,7 +1219,7 @@ async function handleSelectMethod(token, request, env) {
     .run();
 
   const updated = await env.DB.prepare("SELECT * FROM orders WHERE token=?").bind(token).first();
-  return json(publicOrderView(updated));
+  return payViewJson(env, updated);
 }
 
 async function handleUploadProof(token, request, env) {
@@ -1139,7 +1253,7 @@ async function handleUploadProof(token, request, env) {
     .run();
 
   const updated = await env.DB.prepare("SELECT * FROM orders WHERE token=?").bind(token).first();
-  return json(publicOrderView(updated));
+  return payViewJson(env, updated);
 }
 
 // ---- Member self-service ----
@@ -1491,11 +1605,13 @@ async function handleMemberCreateOrder(session, request, env) {
   if (!amt || amt <= 0) return json({ error: "金額不正確" }, 400);
   if (amt < MIN_ORDER_AMOUNT) return json({ error: `訂單金額不可低於 ${MIN_ORDER_AMOUNT} 元` }, 400);
   const platform = body.platform;
-  if (!platform || !PLATFORMS.has(platform)) return json({ error: "請選擇要儲值的平台" }, 400);
+  const platformList = await getPlatforms(env.DB);
+  const platformObj = platform ? findPlatform(platformList, String(platform)) : null;
+  if (!platformObj || !platformObj.enabled) return json({ error: "請選擇要儲值的平台" }, 400);
   const platformAccount = typeof body.platform_account === "string" ? body.platform_account.trim() : "";
   const platformPassword = typeof body.platform_password === "string" ? body.platform_password : "";
   if (!platformAccount) return json({ error: "請輸入帳號/ID" }, 400);
-  if (!platformPassword && PLATFORMS_REQUIRE_PASSWORD.has(platform)) return json({ error: "請輸入密碼" }, 400);
+  if (!platformPassword && platformObj.require_password) return json({ error: "請輸入密碼" }, 400);
 
   const member = await env.DB.prepare("SELECT * FROM members WHERE id=?").bind(session.memberId).first();
   if (!member) return json({ error: "會員不存在，請重新登入" }, 404);
@@ -1543,9 +1659,12 @@ async function handleMemberCreateOrder(session, request, env) {
   // 預計獲得幣數：以優惠碼折抵前的金額（amt）+ 下單當下的費率試算。
   // TikTok 用自己的一組費率，快手/小紅書/陸抖 共用另一組。
   // 一律由伺服器端計算，不採信前端送來的數字，避免被竄改。
-  const rateRules = await getRateRules(env, getRateGroupForPlatform(platform));
-  const coinsResult = calcCoins(rateRules, amt);
-  const coins = coinsResult ? coinsResult.coins : null;
+  let coins = null;
+  if (platformObj.rate_group !== "none") {
+    const rateRules = await getRateRules(env, platformObj.rate_group);
+    const coinsResult = calcCoins(rateRules, amt);
+    coins = coinsResult ? coinsResult.coins : null;
+  }
 
   const token = randomToken(24);
   const ttlHours = parseInt(env.LINK_TTL_HOURS || "3", 10);
@@ -1960,9 +2079,9 @@ export async function onRequest(context) {
     }
 
     // ---- Public pages ----
-    if (path === "/admin" || path === "/admin/") return html(adminHtml());
-    if (path.startsWith("/pay/")) return html(payHtml());
-    if (path === "/member" || path === "/member/") return html(memberHtml());
+    if (path === "/admin" || path === "/admin/") return html(adminHtml({ platforms: await getPlatforms(env.DB) }));
+    if (path.startsWith("/pay/")) return html(payHtml({ platforms: await getPlatforms(env.DB) }));
+    if (path === "/member" || path === "/member/") return html(memberHtml({ platforms: await getPlatforms(env.DB) }));
     if (path === "/member/register" || path === "/member/register/") return html(memberRegisterHtml({ emailVerify: emailVerifyEnabled(env) }));
     if (path === "/") return html(homeHtml());
 
@@ -2085,6 +2204,14 @@ export async function onRequest(context) {
 
       const noteMatch = path.match(/^\/api\/admin\/orders\/(\d+)\/note$/);
       if (noteMatch && method === "PATCH") return handleUpdateOrderNote(noteMatch[1], request, env);
+
+      if (path === "/api/admin/platforms" && method === "GET") return handleAdminListPlatforms(env);
+      if (path === "/api/admin/platforms" && method === "POST") return handleAdminAddPlatform(request, env);
+      const platformMatch = path.match(/^\/api\/admin\/platforms\/([a-z0-9_]{1,24})$/);
+      if (platformMatch && method === "PATCH") return handleAdminUpdatePlatform(platformMatch[1], request, env);
+      if (platformMatch && method === "DELETE") return handleAdminDeletePlatform(platformMatch[1], env);
+      if (path === "/api/admin/payment-methods" && method === "GET") return handleAdminGetMethods(env);
+      if (path === "/api/admin/payment-methods" && method === "POST") return handleAdminSaveMethods(request, env);
 
       if (path === "/api/admin/points/config" && method === "GET") return handleGetPointsConfigAdmin(env);
       if (path === "/api/admin/points/config" && method === "POST") return handleSavePointsConfigAdmin(request, env);
