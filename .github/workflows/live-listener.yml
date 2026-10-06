@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tiktok_username:
-        description: 直播主的 TikTok 帳號（不含 @）
+        description: xixi51423
         required: true
 
 jobs:
