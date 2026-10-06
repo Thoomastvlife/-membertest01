@@ -2942,7 +2942,17 @@ ${THEME_CSS_PORTAL}
       <div class="prof-row"><span>帳號</span><span id="pf_account">-</span></div>
       <div class="prof-row"><span>手機</span><span id="pf_phone">-</span></div>
       <div class="prof-row"><span>電子信箱</span><span id="pf_email">-</span></div>
+      <div class="prof-row"><span>TikTok 帳號</span><span id="pf_tiktok">-</span></div>
       <div class="prof-row"><span>加入時間</span><span id="pf_created">-</span></div>
+      <div id="ttBindWrap" class="hidden" style="margin:4px 0 12px;">
+        <label for="pf_tiktok_in">綁定 TikTok 帳號</label>
+        <div style="display:flex;gap:8px;">
+          <input id="pf_tiktok_in" placeholder="例如：@xiaoming" autocomplete="off" autocapitalize="off" spellcheck="false" />
+          <button type="button" class="btn secondary" id="ttBindBtn" style="white-space:nowrap;" onclick="bindTiktok()">綁定</button>
+        </div>
+        <div class="msg" style="color:var(--muted);">綁定後，你在直播留言的「代號+數量」會自動歸到你的帳號。請填你在 TikTok 的帳號；綁定後無法自行更換，需要洽店家。</div>
+        <div id="ttMsg" class="msg"></div>
+      </div>
       <button type="button" class="btn secondary" id="pfEditBtn" onclick="openProfileEdit()">修改手機 / 信箱</button>
       <div class="msg" style="color:var(--muted);margin-top:10px;">姓名、帳號如需修改，請洽店家。</div>
 
@@ -3676,7 +3686,31 @@ function renderProfile(me){
   const verified = me.email && me.email_verified_at ? ' <span style="color:var(--ok);font-size:12px;">✓ 已驗證</span>' : '';
   document.getElementById('pf_email').innerHTML = (me.email ? ptsEsc(me.email) : '-') + verified;
   document.getElementById('pf_created').textContent = me.created_at ? toTaipeiTime(me.created_at) : '-';
+  const ttEl = document.getElementById('pf_tiktok');
+  const ttWrap = document.getElementById('ttBindWrap');
+  if (ttEl && ttWrap) {
+    if (me.tiktok_id) { ttEl.textContent = '@' + me.tiktok_id + '（已綁定）'; ttWrap.classList.add('hidden'); }
+    else { ttEl.textContent = '尚未綁定'; ttWrap.classList.remove('hidden'); }
+  }
   syncNotifyEmailBox(me);
+}
+
+async function bindTiktok(){
+  const msg = document.getElementById('ttMsg');
+  const btn = document.getElementById('ttBindBtn');
+  msg.className = 'msg'; msg.textContent = '';
+  const v = document.getElementById('pf_tiktok_in').value.trim();
+  if (!v) { msg.textContent = '請輸入 TikTok 帳號'; msg.className = 'msg err'; return; }
+  if (!confirm('確定要綁定 @' + v.replace(/^@+/, '') + ' 嗎？\\n綁定後無法自行更換，需要洽店家。')) return;
+  btn.disabled = true;
+  try{
+    const r = await api('/api/member/tiktok', {method:'POST', body: JSON.stringify({tiktok_id: v})});
+    meState.tiktok_id = r.tiktok_id;
+    renderProfile(meState);
+    const pm = document.getElementById('pfMsg');
+    pm.textContent = 'TikTok 帳號已綁定'; pm.className = 'msg ok';
+  }catch(e){ msg.textContent = e.message; msg.className = 'msg err'; }
+  finally{ btn.disabled = false; }
 }
 
 function syncNotifyEmailBox(me){

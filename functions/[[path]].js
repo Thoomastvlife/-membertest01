@@ -1164,7 +1164,7 @@ async function handleMemberLogout() {
 }
 
 async function handleMemberMe(session, env) {
-  const member = await env.DB.prepare("SELECT id, name, account, phone, email, email_verified_at, created_at, referral_code FROM members WHERE id=?").bind(session.memberId).first();
+  const member = await env.DB.prepare("SELECT id, name, account, phone, email, email_verified_at, created_at, referral_code, tiktok_id FROM members WHERE id=?").bind(session.memberId).first();
   if (!member) return json({ error: "會員不存在，請重新登入" }, 401, { "Set-Cookie": clearCookieHeader("member_session") });
   if (!member.referral_code) member.referral_code = await ensureMemberReferralCode(env, member);
   member.email_verify = emailVerifyEnabled(env);
@@ -1426,6 +1426,45 @@ async function handleMemberUpdateProfile(session, request, env) {
 
   const fresh = await env.DB.prepare("SELECT phone, email, email_verified_at FROM members WHERE id=?").bind(me.id).first();
   return json({ ok: true, ...fresh });
+}
+
+// 會員自己綁定 TikTok 帳號（直播留言「A201+1」會依這個帳號自動歸戶）。
+// 只能綁一次：綁定後鎖定，要更換請店家到後台「會員管理」處理（TikTok 沒有帳號歸屬驗證，鎖定可避免亂綁／搶單）。
+async function handleMemberBindTiktok(session, request, env) {
+  const body = await request.json().catch(() => ({}));
+  const raw = body.tiktok_id && String(body.tiktok_id).trim() ? String(body.tiktok_id).trim() : "";
+  if (!raw) return json({ error: "請輸入 TikTok 帳號" }, 400);
+  const tiktok = normalizeTiktokId(raw);
+  if (!tiktok) return json({ error: "TikTok 帳號格式不正確（只能英文、數字、底線、句點）" }, 400);
+
+  const me = await env.DB.prepare("SELECT id, tiktok_id FROM members WHERE id=?").bind(session.memberId).first();
+  if (!me) return json({ error: "會員不存在，請重新登入" }, 401);
+  if (me.tiktok_id) {
+    if (me.tiktok_id === tiktok) return json({ ok: true, tiktok_id: tiktok, matched: 0 });
+    return json({ error: "你已綁定 @" + me.tiktok_id + "，如需更換請聯絡店家" }, 400);
+  }
+  const taken = await env.DB.prepare("SELECT id FROM members WHERE tiktok_id=? AND id<>?").bind(tiktok, me.id).first();
+  if (taken) return json({ error: "此 TikTok 帳號已被其他會員綁定，如有疑問請聯絡店家" }, 400);
+
+  let changed;
+  try {
+    // tiktok_id IS NULL 條件確保「只能綁一次」，同時避免兩個請求同時綁定
+    changed = await env.DB.prepare("UPDATE members SET tiktok_id=? WHERE id=? AND tiktok_id IS NULL").bind(tiktok, me.id).run();
+  } catch (err) {
+    if (String(err.message || "").includes("UNIQUE")) return json({ error: "此 TikTok 帳號已被其他會員綁定，如有疑問請聯絡店家" }, 400);
+    throw err;
+  }
+  if (!changed.meta || !changed.meta.changes) return json({ error: "你已綁定 TikTok 帳號，如需更換請聯絡店家" }, 400);
+
+  // 進行中（尚未結標）的場次裡，這個帳號先前「未綁定」的留言，自動歸戶（等同後台的「重新比對會員」）
+  let matched = 0;
+  try {
+    const r = await env.DB.prepare(
+      "UPDATE live_comments SET status='ok', member_id=? WHERE tiktok_id=? AND status='unbound' AND round_id IN (SELECT id FROM live_rounds WHERE status='open')"
+    ).bind(me.id, tiktok).run();
+    matched = (r.meta && r.meta.changes) || 0;
+  } catch (e) { /* 歸戶失敗不影響綁定；店家可在後台按「重新比對會員」 */ }
+  return json({ ok: true, tiktok_id: tiktok, matched });
 }
 
 async function handleMemberOrders(session, request, env) {
@@ -1959,6 +1998,7 @@ export async function onRequest(context) {
       if (path === "/api/member/orders" && method === "POST") return handleMemberCreateOrder(session, request, env);
       if (path === "/api/member/announcement" && method === "GET") return handleMemberAnnouncement(env);
       if (path === "/api/member/profile" && method === "POST") return handleMemberUpdateProfile(session, request, env);
+      if (path === "/api/member/tiktok" && method === "POST") return handleMemberBindTiktok(session, request, env);
       if (path === "/api/member/profile/send-email-code" && method === "POST") return handleMemberProfileSendCode(session, request, env);
       if (path === "/api/member/points" && method === "GET") return handleMemberPoints(session, env);
       if (path === "/api/member/points/redeem" && method === "POST") return handleMemberRedeem(session, request, env);
