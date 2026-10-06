@@ -28,6 +28,9 @@ import {
   handleLiveDeleteComment,
   handleLiveRematch,
   handleLiveCreateOrders,
+  handleLiveIngest,
+  handleLiveGetIngestKey,
+  handleLiveResetIngestKey,
 } from "./_lib/live.js";
 import { getRateRules, saveRateRules, getAllRateRules, getRateGroupForPlatform, RATE_GROUPS, DEFAULT_RATE_RULES, MIN_QUOTE_AMOUNT, calcCoins } from "./_lib/rates.js";
 
@@ -1969,11 +1972,16 @@ export async function onRequest(context) {
     if (path === "/api/admin/login" && method === "POST") return handleLogin(request, env);
     if (path === "/api/admin/logout" && method === "POST") return handleLogout();
 
+    // 直播留言自動抓取：監聽程式用金鑰（X-Ingest-Key）送留言進來，不需要登入
+    if (path === "/api/live/ingest" && method === "POST") return handleLiveIngest(request, env);
+
     if (path === "/api/rates" && method === "GET") {
-      // 費率只給登入的會員（或後台管理員）看，未登入一律 401，避免被外人直接抓走費率表
-      const ratesViewer = (await requireMember(request, env)) || (await requireAdmin(request, env));
-      if (!ratesViewer) return json({ error: "請先登入會員，才能查看費率" }, 401);
-      return handlePublicRates(env);
+      // 費率只給「登入的會員」看，其他人（包含只登入後台的管理員）一律 401，且不允許被瀏覽器或 CDN 快取
+      const ratesViewer = await requireMember(request, env);
+      if (!ratesViewer) return json({ error: "請先登入會員，才能查看費率" }, 401, { "Cache-Control": "no-store" });
+      const ratesRes = await handlePublicRates(env);
+      ratesRes.headers.set("Cache-Control", "no-store");
+      return ratesRes;
     }
 
     // 優惠碼試算：結帳櫃檯(admin，已登入才看得到畫面)跟會員自助下單(member)都會呼叫到，
@@ -2093,6 +2101,8 @@ export async function onRequest(context) {
       if (redemptionMatch && method === "POST") return handleAdminProcessRedemption(redemptionMatch[1], redemptionMatch[2], request, env);
 
       // ---- 直播下單 ----
+      if (path === "/api/admin/live/ingest-key" && method === "GET") return handleLiveGetIngestKey(request, env);
+      if (path === "/api/admin/live/ingest-key" && method === "POST") return handleLiveResetIngestKey(request, env);
       if (path === "/api/admin/live/rounds" && method === "GET") return handleLiveListRounds(env);
       if (path === "/api/admin/live/rounds" && method === "POST") return handleLiveCreateRound(request, env);
       const liveRoundMatch = path.match(/^\/api\/admin\/live\/rounds\/(\d+)$/);

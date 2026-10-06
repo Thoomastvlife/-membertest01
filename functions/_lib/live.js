@@ -1,6 +1,6 @@
 // 直播下單：後台貼上 TikTok 直播留言（例如「@xiaoming A201+1」），依商品代號解析、歸戶、建立訂單。
 // 不連線 TikTok，也不需要常駐程式；留言由後台貼上或手動輸入。
-import { jsonRes as json, formatOrderNo } from "./helpers.js";
+import { jsonRes as json, formatOrderNo, randomToken } from "./helpers.js";
 
 const CODE_RE = /^[A-Z]{1,4}[0-9]{1,6}$/;
 // 計入庫存的狀態（候補、無效不計）
@@ -221,6 +221,99 @@ export async function handleLiveDeleteItem(id, env) {
   return json({ ok: true });
 }
 
+const IN_CHUNK = 90; // D1 單一查詢最多 100 個綁定參數
+
+async function queryIn(env, sqlBefore, fixedBinds, values, sqlAfter = "") {
+  const rows = [];
+  for (let i = 0; i < values.length; i += IN_CHUNK) {
+    const part = values.slice(i, i + IN_CHUNK);
+    const sql = sqlBefore + "(" + part.map(() => "?").join(",") + ")" + sqlAfter;
+    const { results } = await env.DB.prepare(sql).bind(...fixedBinds, ...part).all();
+    rows.push(...results);
+  }
+  return rows;
+}
+
+// 把解析好的留言寫進 live_comments：手動貼上與自動抓取共用同一套歸戶、庫存、候補規則。
+// parsed 的每一筆可帶 source（留言編號），有的話用「編號:第幾個商品」去重，重送不會重複寫入。
+async function insertParsed(env, roundId, parsed) {
+  const summary = { ok: 0, unbound: 0, waitlist: 0, invalid: 0, duplicate: 0 };
+
+  // 先排除已經寫過的留言（只查每則留言的第 0 個商品；同一則留言的列是一起寫入的）
+  const firstKeys = parsed.filter((p) => p.source).map((p) => p.source + ":0");
+  const seen = new Set();
+  if (firstKeys.length) {
+    const rows = await queryIn(env, "SELECT source_id FROM live_comments WHERE round_id=? AND source_id IN ", [roundId], firstKeys);
+    rows.forEach((r) => seen.add(r.source_id));
+  }
+  const todo = parsed.filter((p) => {
+    if (!p.source) return true;
+    const k = p.source + ":0";
+    if (seen.has(k)) {
+      summary.duplicate++;
+      return false;
+    }
+    seen.add(k); // 同一批裡重複送的也只算一次
+    return true;
+  });
+  if (!todo.length) return { summary, rows: 0, lines: parsed.length };
+
+  const { results: itemRows } = await env.DB.prepare(
+    `SELECT i.*, COALESCE((SELECT SUM(c.qty) FROM live_comments c
+        WHERE c.round_id = i.round_id AND c.item_code = i.code AND c.status IN (${STOCK_STATUSES})), 0) AS used
+     FROM live_items i WHERE i.round_id=?`
+  )
+    .bind(roundId)
+    .all();
+  const items = new Map(itemRows.map((i) => [i.code, i]));
+
+  const ids = [...new Set(todo.filter((p) => !p.error && p.tiktok_id).map((p) => p.tiktok_id))];
+  const memberByTiktok = new Map();
+  if (ids.length) {
+    const rows = await queryIn(env, "SELECT id, tiktok_id FROM members WHERE tiktok_id IN ", [], ids);
+    rows.forEach((m) => memberByTiktok.set(m.tiktok_id, m));
+  }
+
+  const insert = env.DB.prepare(
+    "INSERT OR IGNORE INTO live_comments (round_id, tiktok_id, raw, item_code, qty, member_id, status, error, source_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  );
+  const batch = [];
+  for (const p of todo) {
+    const src = (idx) => (p.source ? p.source + ":" + idx : null);
+    if (p.error) {
+      batch.push(insert.bind(roundId, p.tiktok_id || null, p.raw, null, null, null, "invalid", p.error, src(0)));
+      summary.invalid++;
+      continue;
+    }
+    const member = memberByTiktok.get(p.tiktok_id);
+    p.items.forEach((it, idx) => {
+      const item = items.get(it.code);
+      if (!item || !item.is_active) {
+        const why = !item ? "此場次沒有代號 " + it.code : "商品 " + it.code + " 已停用";
+        batch.push(insert.bind(roundId, p.tiktok_id, p.raw, it.code, it.qty, null, "invalid", why, src(idx)));
+        summary.invalid++;
+        return;
+      }
+      if (!(it.qty > 0)) {
+        batch.push(insert.bind(roundId, p.tiktok_id, p.raw, it.code, it.qty, null, "invalid", "數量必須大於 0", src(idx)));
+        summary.invalid++;
+        return;
+      }
+      let status = member ? "ok" : "unbound";
+      if (item.stock != null && item.used + it.qty > item.stock) {
+        status = "waitlist";
+        summary.waitlist++;
+      } else {
+        item.used += it.qty;
+        summary[member ? "ok" : "unbound"]++;
+      }
+      batch.push(insert.bind(roundId, p.tiktok_id, p.raw, it.code, it.qty, member ? member.id : null, status, null, src(idx)));
+    });
+  }
+  if (batch.length) await env.DB.batch(batch);
+  return { summary, rows: batch.length, lines: parsed.length };
+}
+
 // 貼上留言 → 解析 → 寫入 live_comments
 export async function handleLiveAddComments(roundId, request, env) {
   const round = await getRound(env, roundId);
@@ -232,60 +325,73 @@ export async function handleLiveAddComments(roundId, request, env) {
   if (text.length > 50000) return json({ error: "一次貼上的內容太多，請分批" }, 400);
 
   const parsed = parseLiveText(text, body.tiktok_id);
-  const { results: itemRows } = await env.DB.prepare(
-    `SELECT i.*, COALESCE((SELECT SUM(c.qty) FROM live_comments c
-        WHERE c.round_id = i.round_id AND c.item_code = i.code AND c.status IN (${STOCK_STATUSES})), 0) AS used
-     FROM live_items i WHERE i.round_id=?`
-  )
-    .bind(roundId)
-    .all();
-  const items = new Map(itemRows.map((i) => [i.code, i]));
-  const memberCache = new Map();
-  async function memberOf(tiktok) {
-    if (!memberCache.has(tiktok)) {
-      memberCache.set(tiktok, await env.DB.prepare("SELECT id FROM members WHERE tiktok_id=?").bind(tiktok).first());
-    }
-    return memberCache.get(tiktok);
-  }
+  const r = await insertParsed(env, roundId, parsed);
+  return json({ ok: true, lines: r.lines, rows: r.rows, summary: r.summary });
+}
 
-  const summary = { ok: 0, unbound: 0, waitlist: 0, invalid: 0 };
-  const insert = env.DB.prepare(
-    "INSERT INTO live_comments (round_id, tiktok_id, raw, item_code, qty, member_id, status, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-  );
-  const batch = [];
-  for (const p of parsed) {
-    if (p.error) {
-      batch.push(insert.bind(roundId, p.tiktok_id || null, p.raw, null, null, null, "invalid", p.error));
-      summary.invalid++;
-      continue;
-    }
-    const member = await memberOf(p.tiktok_id);
-    for (const it of p.items) {
-      const item = items.get(it.code);
-      if (!item || !item.is_active) {
-        const why = !item ? "此場次沒有代號 " + it.code : "商品 " + it.code + " 已停用";
-        batch.push(insert.bind(roundId, p.tiktok_id, p.raw, it.code, it.qty, null, "invalid", why));
-        summary.invalid++;
-        continue;
-      }
-      if (!(it.qty > 0)) {
-        batch.push(insert.bind(roundId, p.tiktok_id, p.raw, it.code, it.qty, null, "invalid", "數量必須大於 0"));
-        summary.invalid++;
-        continue;
-      }
-      let status = member ? "ok" : "unbound";
-      if (item.stock != null && item.used + it.qty > item.stock) {
-        status = "waitlist";
-        summary.waitlist++;
-      } else {
-        item.used += it.qty;
-        summary[member ? "ok" : "unbound"]++;
-      }
-      batch.push(insert.bind(roundId, p.tiktok_id, p.raw, it.code, it.qty, member ? member.id : null, status, null));
-    }
+// ---- 自動抓取：監聽程式把直播留言送進來 ----
+
+const INGEST_KEY_SETTING = "live_ingest_key";
+export const INGEST_MAX_BATCH = 40; // 每次最多處理幾則（D1 單次請求的查詢數有上限）
+
+async function getIngestKey(env) {
+  const row = await env.DB.prepare("SELECT value FROM settings WHERE key=?").bind(INGEST_KEY_SETTING).first();
+  return row && row.value ? String(row.value) : null;
+}
+
+function safeEqual(a, b) {
+  if (typeof a !== "string" || typeof b !== "string" || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+// 公開路由（不需要後台登入），改用金鑰驗證：標頭 X-Ingest-Key
+export async function handleLiveIngest(request, env) {
+  const key = await getIngestKey(env);
+  const given = request.headers.get("x-ingest-key") || "";
+  if (!key || !safeEqual(key, given)) return json({ error: "金鑰不正確" }, 401);
+
+  const body = await request.json().catch(() => ({}));
+  const list = Array.isArray(body.comments) ? body.comments : null;
+  if (!list) return json({ error: "格式錯誤：需要 comments 陣列" }, 400);
+  if (list.length > INGEST_MAX_BATCH) return json({ error: "一次最多 " + INGEST_MAX_BATCH + " 則，請分批送" }, 400);
+
+  const round = await env.DB.prepare("SELECT * FROM live_rounds WHERE status='open' ORDER BY id DESC LIMIT 1").first();
+  if (!round) return json({ error: "目前沒有開標中的場次，請先在後台建立並開啟場次" }, 409);
+
+  // 只收「看得懂的訂購留言」：一般聊天內容直接丟掉，不會出現在留言清單裡
+  const parsed = [];
+  let ignored = 0;
+  for (const c of list) {
+    const user = normalizeTiktokId(c && c.user);
+    const text = String((c && c.text) || "").slice(0, 300);
+    if (!user || !text) { ignored++; continue; }
+    const rows = parseLiveText("@" + user + " " + text);
+    const p = rows[0];
+    if (!p || p.error || !p.items.length) { ignored++; continue; }
+    const id = c.id != null ? String(c.id).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 60) : "";
+    p.raw = "@" + user + " " + text;
+    if (id) p.source = id;
+    parsed.push(p);
   }
-  if (batch.length) await env.DB.batch(batch);
-  return json({ ok: true, lines: parsed.length, rows: batch.length, summary });
+  if (!parsed.length) return json({ ok: true, round_id: round.id, accepted: 0, ignored, duplicate: 0 });
+
+  const r = await insertParsed(env, round.id, parsed);
+  return json({ ok: true, round_id: round.id, accepted: r.rows, ignored, duplicate: r.summary.duplicate, summary: r.summary });
+}
+
+export async function handleLiveGetIngestKey(request, env) {
+  const key = await getIngestKey(env);
+  return json({ key, url: new URL(request.url).origin + "/api/live/ingest" });
+}
+
+export async function handleLiveResetIngestKey(request, env) {
+  const key = randomToken(24);
+  await env.DB.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+    .bind(INGEST_KEY_SETTING, key)
+    .run();
+  return json({ ok: true, key, url: new URL(request.url).origin + "/api/live/ingest" });
 }
 
 async function getComment(env, id) {

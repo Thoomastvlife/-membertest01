@@ -1,0 +1,10 @@
+{
+  "name": "tiktok-live-listener",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "把 TikTok 直播間符合「代號+數量」的留言送到後台自動抓取接收網址",
+  "scripts": { "start": "node listener.js" },
+  "dependencies": { "tiktok-live-connector": "^2.0.0" },
+  "engines": { "node": ">=20" }
+}

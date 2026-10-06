@@ -269,6 +269,22 @@ ${THEME_CSS_ADMIN}
           </table>
         </div>
       </div>
+
+      <div class="card">
+        <div class="card-toggle" id="liveIngestToggle" onclick="liveToggleIngest()">
+          <h2>自動抓取留言（選用）</h2>
+          <span class="arrow">▼</span>
+        </div>
+        <div id="liveIngestPanel" class="hidden">
+          <small class="hint">設定好「監聽程式」後，直播間裡符合「代號+數量」的留言會自動進到最新一個開標中的場次，這個頁面每 5 秒會自動更新。一般聊天內容不會收進來。監聽程式的安裝方式請看專案裡的 listener/README.md。</small>
+          <label>接收網址</label>
+          <div class="link-box"><input id="ing_url" readonly /><button class="btn secondary" onclick="liveCopyIngest('ing_url')">複製</button></div>
+          <label>金鑰</label>
+          <div class="link-box"><input id="ing_key" readonly placeholder="尚未產生" /><button class="btn secondary" onclick="liveCopyIngest('ing_key')">複製</button></div>
+          <button class="btn secondary" onclick="liveResetKey()">產生／重設金鑰</button>
+          <div id="ing_msg" class="msg"></div>
+        </div>
+      </div>
     </section>
 
     <section id="tab-orders" class="tab hidden">
@@ -1067,6 +1083,53 @@ function liveCopyAllLinks(){
   liveCopyText(liveLastLinks.map(o=>'@'+o.tiktok_id+' $'+Number(o.amount).toLocaleString()+' '+o.link).join('\\n'), '已複製全部連結');
 }
 
+// ---- 自動抓取設定 / 留言自動更新 ----
+let livePollTimer = null;
+function liveStartPoll(){
+  liveStopPoll();
+  livePollTimer = setInterval(function(){
+    const tab = document.getElementById('tab-live');
+    const modal = document.getElementById('liveBindModal');
+    if (!tab || tab.classList.contains('hidden') || !modal.classList.contains('hidden') || document.hidden) return;
+    if (!liveRoundId || !liveData || liveData.round.status !== 'open') return;
+    loadLiveRound().catch(function(){});
+  }, 5000);
+}
+function liveStopPoll(){ if (livePollTimer){ clearInterval(livePollTimer); livePollTimer = null; } }
+
+async function liveToggleIngest(){
+  document.getElementById('liveIngestToggle').classList.toggle('open');
+  const panel = document.getElementById('liveIngestPanel');
+  panel.classList.toggle('hidden');
+  if (!panel.classList.contains('hidden')) await liveLoadIngest();
+}
+async function liveLoadIngest(){
+  try{
+    const r = await api('/api/admin/live/ingest-key');
+    document.getElementById('ing_url').value = r.url || '';
+    document.getElementById('ing_key').value = r.key || '';
+    const m = document.getElementById('ing_msg');
+    m.textContent = r.key ? '' : '還沒有金鑰，請按「產生／重設金鑰」。';
+    m.className = 'msg';
+  }catch(e){ liveMsg('ing_msg', e.message, false); }
+}
+async function liveResetKey(){
+  if (document.getElementById('ing_key').value && !confirm('重設後舊金鑰會立刻失效，監聽程式要換成新金鑰才能繼續送留言。確定重設？')) return;
+  try{
+    const r = await api('/api/admin/live/ingest-key', {method:'POST'});
+    document.getElementById('ing_url').value = r.url || '';
+    document.getElementById('ing_key').value = r.key || '';
+    liveMsg('ing_msg', '已產生新金鑰，請複製到監聽程式的設定', true);
+  }catch(e){ liveMsg('ing_msg', e.message, false); }
+}
+function liveCopyIngest(id){
+  const v = document.getElementById(id).value;
+  if (!v) return;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(v).then(function(){ liveMsg('ing_msg', '已複製', true); }).catch(function(){ prompt('複製失敗，請手動複製：', v); });
+  } else { prompt('請手動複製：', v); }
+}
+
 function showTab(name, opts){
   opts = opts || {};
   document.querySelectorAll('.tab').forEach(t=>t.classList.add('hidden'));
@@ -1082,7 +1145,7 @@ function showTab(name, opts){
   if (name==='rates') loadRates();
   if (name==='coupons') loadCoupons();
   if (name==='points') loadPointsAdmin();
-  if (name==='live') loadLive();
+  if (name==='live') { loadLive(); liveStartPoll(); } else { liveStopPoll(); }
 }
 
 // ---- 訂單自動更新（輪詢）----

@@ -206,6 +206,8 @@ CREATE TABLE IF NOT EXISTS live_comments (
   status TEXT NOT NULL,                     -- ok | guest | unbound | waitlist | invalid | ordered
   error TEXT,
   order_id INTEGER,
+  source_id TEXT,                           -- 監聽程式送來的留言編號，重送去重用
   created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_live_comments_round ON live_comments(round_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_live_comments_source ON live_comments(round_id, source_id) WHERE source_id IS NOT NULL;
