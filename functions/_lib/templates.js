@@ -1,5 +1,5 @@
 import { ALLOWED_EMAIL_DOMAINS } from "./helpers.js";
-import { jsonForScript, platformLabelMap, DEFAULT_PLATFORMS } from "./platforms.js";
+import { jsonForScript, platformLabelMap, DEFAULT_PLATFORMS, effectiveRateGroup } from "./platforms.js";
 
 function escAttrHtml(v) {
   return String(v == null ? "" : v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -394,7 +394,7 @@ ${THEME_CSS_ADMIN}
 
       <div class="card">
         <h2>儲值平台設定</h2>
-        <small class="hint">「開放顧客選擇」取消勾選＝顧客下單和查價時看不到這個平台；後台建單仍可選。「預估幣數費率」決定顧客看到的預估幣數用哪一組費率（費率在「費率」分頁設定）；選「不計算」就不顯示預估幣數。內建平台不能刪除，已有訂單的平台也不能刪除（請改成不開放）。</small>
+        <small class="hint">「開放顧客選擇」取消勾選＝顧客下單和查價時看不到這個平台；後台建單仍可選。「預估幣數費率」決定顧客看到的預估幣數用哪一組費率：共用「其他平台」或「TikTok」那組、選「獨立費率」＝這個平台自己一組（到「費率」分頁會多一張它專屬的卡，在那裡填數字）、選「不計算」就不顯示預估幣數。內建平台不能刪除，已有訂單的平台也不能刪除（請改成不開放）。</small>
         <table id="plat_table" style="margin-top:12px;">
           <thead><tr><th>順序</th><th>名稱</th><th>預估幣數費率</th><th>顧客須填密碼</th><th>開放顧客選擇</th><th>訂單數</th><th>操作</th></tr></thead>
           <tbody></tbody>
@@ -404,8 +404,9 @@ ${THEME_CSS_ADMIN}
         <input id="plat_new_name" maxlength="20" placeholder="例如：Steam、抖音極速版" autocomplete="off" />
         <label>預估幣數費率</label>
         <select id="plat_new_rate">
-          <option value="other">套用「其他平台」費率</option>
+          <option value="other">套用「其他平台」費率（和快手、小紅書、陸抖共用）</option>
           <option value="tiktok">套用「TikTok」費率</option>
+          <option value="own">獨立費率：這個平台自己一組（新增後到「費率」分頁填數字）</option>
           <option value="none">不計算預估幣數</option>
         </select>
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:10px;"><input type="checkbox" id="plat_new_pw" style="width:auto;margin:0;" /> 顧客下單時必須填寫密碼</label>
@@ -495,6 +496,7 @@ ${THEME_CSS_ADMIN}
         <button class="btn secondary" onclick="resetRates('other')">還原預設值</button>
         <div id="rates_msg_other" class="msg"></div>
       </div>
+      <div id="rates_extra"></div>
     </section>
 
     <section id="tab-coupons" class="tab hidden">
@@ -1849,7 +1851,7 @@ async function loadStats(){
 // ---- 儲值平台 / 付款方式開放設定 ----
 let platformsAdmin = [];
 let platformUsage = {};
-const PLAT_RATE_LABEL = {tiktok:'TikTok 費率', other:'其他平台費率', none:'不計算'};
+const PLAT_RATE_LABEL = {tiktok:'TikTok 費率', other:'其他平台費率', own:'獨立費率（自己一組）', none:'不計算'};
 
 function platRebuildSelect(sel, pairs){
   if (!sel) return;
@@ -1934,7 +1936,7 @@ function renderPlatformsAdmin(){
 
     const rateSel = document.createElement('select');
     rateSel.style.width = 'auto';
-    ['other', 'tiktok', 'none'].forEach(function(k){
+    ['other', 'tiktok', 'own', 'none'].forEach(function(k){
       const o = document.createElement('option');
       o.value = k; o.textContent = PLAT_RATE_LABEL[k];
       rateSel.appendChild(o);
@@ -1968,7 +1970,7 @@ async function loadPlatformsAdmin(){
 async function updatePlatformAdmin(key, patch){
   try{
     takePlatformsPayload(await api('/api/admin/platforms/' + key, {method:'PATCH', body: JSON.stringify(patch)}));
-    platMsg('已更新', true);
+    platMsg(patch.rate_group === 'own' ? '已更新。請到「費率」分頁填入這個平台的費率' : '已更新', true);
   }catch(e){ platMsg(e.message, false); loadPlatformsAdmin(); }
 }
 
@@ -2001,7 +2003,8 @@ async function addPlatformAdmin(){
     })}));
     document.getElementById('plat_new_name').value = '';
     document.getElementById('plat_new_pw').checked = false;
-    platMsg('已新增「' + name + '」，顧客重新整理頁面後就能選到', true);
+    const own = document.getElementById('plat_new_rate').value === 'own';
+    platMsg('已新增「' + name + '」，顧客重新整理頁面後就能選到' + (own ? '。請到「費率」分頁填入它的費率，沒填之前顧客看不到預估幣數' : ''), true);
   }catch(e){ platMsg(e.message, false); }
 }
 
@@ -2158,8 +2161,53 @@ function exportCsv(){
 
 let rateRowsByGroup = { tiktok: [], other: [] };
 
+// 有選「獨立費率」的平台，各自在費率分頁多一張卡（費率組 id = plat_<平台代碼>）
+function ownRateGroups(){
+  return platformsAdmin.filter(function(p){ return p.rate_group === 'own'; });
+}
+
+function renderRatesExtraCards(){
+  const box = document.getElementById('rates_extra');
+  if (!box) return;
+  box.innerHTML = '';
+  ownRateGroups().forEach(function(p){
+    const group = 'plat_' + p.key;
+    if (!rateRowsByGroup[group]) rateRowsByGroup[group] = [];
+    const card = document.createElement('div');
+    card.className = 'card';
+    const h = document.createElement('h2');
+    h.textContent = p.name + ' 費率設定（獨立）';
+    card.appendChild(h);
+    const hint = document.createElement('small');
+    hint.className = 'hint';
+    hint.textContent = '符合金額 ≥ min 時，套用該 rate。系統會自動由大到小排序。只適用於「' + p.name + '」。還沒有任何費率時，顧客看不到預估幣數。';
+    card.appendChild(hint);
+    const list = document.createElement('div');
+    list.id = 'rates_list_' + group;
+    list.style.marginTop = '14px';
+    card.appendChild(list);
+    const addBtn = document.createElement('button');
+    addBtn.className = 'btn secondary'; addBtn.type = 'button'; addBtn.textContent = '➕ 新增一筆';
+    addBtn.addEventListener('click', function(){ addRateRow(group); });
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'btn'; saveBtn.type = 'button'; saveBtn.textContent = '儲存費率';
+    saveBtn.addEventListener('click', function(){ saveRates(group); });
+    card.appendChild(addBtn);
+    card.appendChild(saveBtn);
+    const msg = document.createElement('div');
+    msg.id = 'rates_msg_' + group;
+    msg.className = 'msg';
+    card.appendChild(msg);
+    box.appendChild(card);
+  });
+}
+
 async function loadRates() {
-  await Promise.all(['tiktok', 'other'].map(loadRatesGroup));
+  // 先拿最新的平台清單，才知道哪些平台有獨立費率卡
+  try { const d = await api('/api/admin/platforms'); platformsAdmin = d.platforms || []; } catch (e) {}
+  renderRatesExtraCards();
+  const groups = ['tiktok', 'other'].concat(ownRateGroups().map(function(p){ return 'plat_' + p.key; }));
+  await Promise.all(groups.map(loadRatesGroup));
 }
 
 async function loadRatesGroup(group) {
@@ -3508,7 +3556,7 @@ async function loadRates() {
 }
 
 // 依平台代碼取得對應的費率群組（tiktok 自己一組，其餘平台共用 other 這組）
-const PLATFORM_RATE_GROUP = ${jsonForScript(Object.fromEntries(platforms.map((p) => [p.key, p.rate_group])))};
+const PLATFORM_RATE_GROUP = ${jsonForScript(Object.fromEntries(platforms.map((p) => [p.key, effectiveRateGroup(p)])))};
 function getRateGroupForPlatform(platform) {
   return PLATFORM_RATE_GROUP[platform] || 'other';   // 'none' = 不計算預估幣數（找不到費率就不顯示）
 }

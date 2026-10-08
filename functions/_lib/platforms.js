@@ -7,7 +7,7 @@
 const PLATFORMS_KEY = "platforms_config";
 const METHODS_KEY = "payment_methods_config";
 
-export const RATE_GROUP_CHOICES = ["tiktok", "other", "none"]; // none = 不計算預估幣數
+export const RATE_GROUP_CHOICES = ["tiktok", "other", "own", "none"]; // own = 這個平台自己一組費率；none = 不計算預估幣數
 
 // 內建平台：不能刪除（舊訂單、直播下單都依賴它們），但可以改名、關閉、調整順序
 export const DEFAULT_PLATFORMS = [
@@ -92,10 +92,14 @@ export function findPlatform(list, key) {
   return list.find((p) => p.key === key) || null;
 }
 
-// 該平台用哪一組費率：'tiktok' | 'other' | 'none'（none = 不計算預估幣數）
+// 平台實際使用的費率組 id：'tiktok' | 'other' | 'plat_<key>'（獨立費率）| 'none'（不計算預估幣數）
+export function effectiveRateGroup(p) {
+  return p.rate_group === "own" ? "plat_" + p.key : p.rate_group;
+}
+
 export function rateGroupOf(list, key) {
   const p = findPlatform(list, key);
-  return p ? p.rate_group : "other";
+  return p ? effectiveRateGroup(p) : "other";
 }
 
 // ---- 付款方式：是否開放顧客自行選擇 ----

@@ -44,7 +44,7 @@ import {
   handleLiveGetIngestKey,
   handleLiveResetIngestKey,
 } from "./_lib/live.js";
-import { getRateRules, saveRateRules, getAllRateRules, getRateGroupForPlatform, RATE_GROUPS, DEFAULT_RATE_RULES, MIN_QUOTE_AMOUNT, calcCoins } from "./_lib/rates.js";
+import { getRateRules, saveRateRules, getAllRateRules, getRateGroupForPlatform, RATE_GROUPS, DEFAULT_RATE_RULES, MIN_QUOTE_AMOUNT, calcCoins, isCustomRateGroup } from "./_lib/rates.js";
 
 // 會員自助下單的最低金額，跟查價系統的最低查詢金額保持一致
 const MIN_ORDER_AMOUNT = MIN_QUOTE_AMOUNT;
@@ -386,20 +386,38 @@ async function handleMemberAnnouncement(env) {
 // ---- 費率設定 ----
 
 async function handlePublicRates(env) {
-  const groups = await getAllRateRules(env);
+  const platformList = await getPlatforms(env.DB);
+  const own = platformList.filter((p) => p.rate_group === "own").map((p) => "plat_" + p.key);
+  const groups = await getAllRateRules(env, own);
   return json({ groups });
+}
+
+// 費率組是否有效：tiktok / other，或「選了獨立費率」的自訂平台（plat_<key>）。無效回傳 null
+async function resolveRateGroup(env, g) {
+  if (RATE_GROUPS.includes(g)) return g;
+  if (isCustomRateGroup(g)) {
+    const p = findPlatform(await getPlatforms(env.DB), String(g).slice(5));
+    if (p && p.rate_group === "own") return g;
+  }
+  return null;
 }
 
 async function handleGetRates(request, env) {
   const url = new URL(request.url);
-  const group = RATE_GROUPS.includes(url.searchParams.get("group")) ? url.searchParams.get("group") : "tiktok";
+  const requested = url.searchParams.get("group");
+  const group = (await resolveRateGroup(env, requested)) || "tiktok";
   const rules = await getRateRules(env, group);
   return json({ rules, group, isDefault: JSON.stringify(rules) === JSON.stringify(DEFAULT_RATE_RULES) });
 }
 
 async function handleSaveRates(request, env) {
   const body = await request.json().catch(() => ({}));
-  const group = RATE_GROUPS.includes(body.group) ? body.group : "tiktok";
+  // 沒帶 group 維持舊行為（存到 tiktok）；帶了但不存在／沒開獨立費率 → 拒絕，避免把別的平台的費率寫進 tiktok
+  let group = "tiktok";
+  if (body.group !== undefined && body.group !== null) {
+    group = await resolveRateGroup(env, body.group);
+    if (!group) return json({ error: "找不到這組費率（該平台可能沒有開啟「獨立費率」）" }, 400);
+  }
   const rules = body.rules;
   if (!Array.isArray(rules) || rules.length === 0) {
     return json({ error: "費率格式錯誤，需為陣列" }, 400);
@@ -1149,6 +1167,7 @@ async function handleAdminDeletePlatform(key, env) {
   const used = (await platformUsage(env))[key] || 0;
   if (used > 0) return json({ error: `已有 ${used} 筆訂單使用「${p.name}」，不能刪除（刪除後舊訂單會看不到平台名稱）。請改成「不開放」。` }, 400);
   const saved = await savePlatforms(env.DB, list.filter((x) => x.key !== key));
+  await env.DB.prepare("DELETE FROM settings WHERE key=?").bind("rate_rules_plat_" + key).run(); // 順便清掉它的獨立費率
   return json(await platformsPayload(env, saved));
 }
 
@@ -1660,8 +1679,9 @@ async function handleMemberCreateOrder(session, request, env) {
   // TikTok 用自己的一組費率，快手/小紅書/陸抖 共用另一組。
   // 一律由伺服器端計算，不採信前端送來的數字，避免被竄改。
   let coins = null;
-  if (platformObj.rate_group !== "none") {
-    const rateRules = await getRateRules(env, platformObj.rate_group);
+  const memberRateGroup = rateGroupOf(platformList, platformObj.key);
+  if (memberRateGroup !== "none") {
+    const rateRules = await getRateRules(env, memberRateGroup);
     const coinsResult = calcCoins(rateRules, amt);
     coins = coinsResult ? coinsResult.coins : null;
   }
