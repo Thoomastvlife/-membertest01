@@ -228,8 +228,11 @@ ${THEME_CSS_ADMIN}
       </div>
 
       <div class="card">
-        <h2>待處理事項（點一下前往處理）</h2>
-        <div class="todo-list" id="dash_todos"></div>
+        <div class="card-toggle open" id="todoToggle" onclick="toggleTodoPanel()" role="button" tabindex="0" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleTodoPanel();}">
+          <h2>待處理事項（點一下前往處理）<span id="todo_summary" class="kpi-sub" style="font-weight:400;margin-left:8px;"></span></h2>
+          <span class="arrow">▼</span>
+        </div>
+        <div class="todo-list" id="dash_todos" style="margin-top:12px;"></div>
       </div>
 
       <div class="card">
@@ -1768,6 +1771,22 @@ async function cancelOrder(id){
 const MEM_PAGE_SIZE = 20;
 let memPage = 1;
 
+// 首頁「待處理事項」收合／展開；狀態記在這台瀏覽器，重新整理後保持
+function applyTodoCollapsed(collapsed){
+  document.getElementById('todoToggle').classList.toggle('open', !collapsed);
+  document.getElementById('dash_todos').classList.toggle('hidden', collapsed);
+}
+function toggleTodoPanel(){
+  const collapsed = !document.getElementById('dash_todos').classList.contains('hidden');
+  applyTodoCollapsed(collapsed);
+  try{ localStorage.setItem('todoCollapsed', collapsed ? '1' : '0'); }catch(e){}
+}
+(function(){
+  let c = false;
+  try{ c = localStorage.getItem('todoCollapsed') === '1'; }catch(e){}
+  if (c) applyTodoCollapsed(true);
+})();
+
 function toggleMembersPanel(){
   document.getElementById('membersToggle').classList.toggle('open');
   document.getElementById('membersPanel').classList.toggle('hidden');
@@ -1998,8 +2017,6 @@ async function loadDashboard(opts){
       ['已上傳付款證明，待核對', p.need_verify, 'orders', true],
       ['已付款，待結案', p.to_complete, 'orders', false],
       ['點數兌換單待處理', p.redemptions, 'points', true],
-      ['直播：未綁定留言', p.live_unbound, 'live', true],
-      ['直播：可建單留言', p.live_ready, 'live', false],
       ['等客人轉帳', p.wait_transfer, 'orders', false],
       ['等客人用條碼付款', p.wait_barcode_pay, 'orders', false],
       ['等客人選付款方式', p.wait_method, 'orders', false]
@@ -2016,6 +2033,9 @@ async function loadDashboard(opts){
       b.addEventListener('click', function(){ showTab(t[2]); });
       box.appendChild(b);
     });
+    // 收合時標題旁顯示還有幾類待處理，不用展開也看得到有沒有事
+    const pendingKinds = todos.filter(function(t){ return t[1] > 0; }).length;
+    document.getElementById('todo_summary').textContent = pendingKinds ? '· ' + pendingKinds + ' 類有待處理' : '· 全部完成';
 
     // 近 14 天長條圖
     const max = Math.max.apply(null, d.days.map(function(x){ return x.total; }).concat([1]));
