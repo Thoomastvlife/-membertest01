@@ -93,6 +93,32 @@ ${THEME_HEAD}
   .member-picker-option.mp-nonmember{color:var(--muted);font-style:italic;}
   .member-picker-empty{padding:10px 12px;font-size:13px;color:var(--muted);}
 
+  /* ---- 首頁儀表板 ---- */
+  .dash-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-bottom:16px;}
+  .dash-grid .card{margin-bottom:0;}
+  .kpi-label{font-size:13px;color:var(--muted);}
+  .kpi-value{font-size:26px;font-weight:700;margin:4px 0 2px;}
+  .kpi-sub{font-size:12px;color:var(--muted);}
+  .kpi-up{color:var(--ok);} .kpi-down{color:var(--danger);}
+  .todo-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;}
+  .todo{display:flex;justify-content:space-between;align-items:center;gap:8px;border:1px solid var(--border);border-radius:8px;padding:10px 12px;cursor:pointer;background:transparent;color:var(--text);font-size:14px;text-align:left;}
+  .todo:hover{border-color:var(--accent);}
+  .todo .n{font-weight:700;font-size:18px;min-width:28px;text-align:right;}
+  .todo.hot{border-color:var(--danger);} .todo.hot .n{color:var(--danger);}
+  .todo.zero{opacity:.55;}
+  .dash-cols{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  .dash-cols .card{margin-bottom:0;}
+  .bars{display:flex;align-items:flex-end;gap:4px;height:150px;margin-top:10px;}
+  .bars .bar{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%;min-width:0;}
+  .bars .bar i{display:block;width:100%;background:var(--accent);border-radius:3px 3px 0 0;min-height:2px;opacity:.85;}
+  .bars .bar.today i{opacity:1;background:var(--ok);}
+  .bars .bar span{font-size:10px;color:var(--muted);margin-top:4px;white-space:nowrap;}
+  .rank-row{display:flex;justify-content:space-between;gap:8px;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px;}
+  .rank-row:last-child{border-bottom:none;}
+  .rank-bar{height:6px;background:var(--border);border-radius:3px;margin-top:4px;overflow:hidden;}
+  .rank-bar i{display:block;height:100%;background:var(--accent);}
+  @media (max-width:700px){ .dash-cols{grid-template-columns:1fr;} .kpi-value{font-size:22px;} .bars .bar span:nth-child(n){font-size:9px;} }
+
   @media (max-width:700px){
     header{padding:10px 12px;flex-wrap:nowrap;gap:8px;}
     header h1{font-size:16px;white-space:nowrap;}
@@ -150,6 +176,7 @@ ${THEME_CSS_ADMIN}
       <button class="btn secondary" onclick="doLogout()">登出</button></div>
   </header>
   <nav>
+    <button data-tab="dashboard" onclick="showTab('dashboard')">首頁</button>
     <button data-tab="checkout" onclick="showTab('checkout')">結帳櫃檯</button>
     <button data-tab="orders" onclick="showTab('orders')">訂單列表</button>
     <button data-tab="members" onclick="showTab('members')">會員管理</button>
@@ -165,7 +192,46 @@ ${THEME_CSS_ADMIN}
   </nav>
   <main>
 
-    <section id="tab-checkout" class="tab">
+    <section id="tab-dashboard" class="tab">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+        <div><strong id="dash_date" style="font-size:16px;"></strong> <span id="dash_updated" class="kpi-sub"></span></div>
+        <button class="btn secondary" style="margin-top:0;" onclick="loadDashboard()">重新整理</button>
+      </div>
+      <div id="dash_msg" class="msg err"></div>
+
+      <div class="dash-grid" style="margin-top:12px;">
+        <div class="card"><div class="kpi-label">今日儲值</div><div class="kpi-value" id="k_today">-</div><div class="kpi-sub" id="k_today_sub"></div></div>
+        <div class="card"><div class="kpi-label">本月儲值</div><div class="kpi-value" id="k_month">-</div><div class="kpi-sub" id="k_month_sub"></div></div>
+        <div class="card"><div class="kpi-label">會員總數</div><div class="kpi-value" id="k_members">-</div><div class="kpi-sub" id="k_members_sub"></div></div>
+        <div class="card" id="k_points_card"><div class="kpi-label">會員點數流通量</div><div class="kpi-value" id="k_points">-</div><div class="kpi-sub">所有會員點數餘額合計</div></div>
+      </div>
+
+      <div class="card">
+        <h2>待處理事項（點一下前往處理）</h2>
+        <div class="todo-list" id="dash_todos"></div>
+      </div>
+
+      <div class="card">
+        <h2>近 14 天儲值金額</h2>
+        <div class="bars" id="dash_bars"></div>
+      </div>
+
+      <div class="dash-cols" style="margin-bottom:16px;">
+        <div class="card"><h2>本月各平台</h2><div id="dash_platforms"></div></div>
+        <div class="card"><h2>本月儲值排行 Top 5</h2><div id="dash_top"></div></div>
+      </div>
+
+      <div class="card">
+        <h2>最新訂單</h2>
+        <table id="dash_recent">
+          <thead><tr><th>訂單編號</th><th>建立時間</th><th>會員 / 客人</th><th>平台</th><th>金額</th><th>狀態</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <button class="btn secondary" onclick="showTab('orders')">查看全部訂單</button>
+      </div>
+    </section>
+
+    <section id="tab-checkout" class="tab hidden">
       <div class="card">
         <h2>建立結帳連結</h2>
         <label>金額</label>
@@ -743,7 +809,7 @@ async function checkSession(){
     document.getElementById('whoami').textContent = me.username;
     document.getElementById('loginView').classList.add('hidden');
     document.getElementById('appView').classList.remove('hidden');
-    showTab('checkout');
+    showTab('dashboard');
     loadMembersIntoSelect();
     refreshPushButton();
   }catch(e){
@@ -1177,6 +1243,7 @@ function showTab(name, opts){
   document.querySelectorAll('.tab').forEach(t=>t.classList.add('hidden'));
   document.getElementById('tab-'+name).classList.remove('hidden');
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active', b.dataset.tab===name));
+  if (name==='dashboard') { loadDashboard(); startDashPolling(); } else { stopDashPolling(); }
   if (name==='orders') { loadOrders(); startOrdersPolling(); }
   else { stopOrdersPolling(); }
   if (name==='members') loadMembers();
@@ -1831,6 +1898,126 @@ async function deleteStaff(id){
     await api('/api/admin/staff/'+id, {method:'DELETE'});
     loadStaff();
   }catch(e){ alert(e.message); }
+}
+
+// ---- 首頁儀表板 ----
+let dashTimer = null;
+function startDashPolling(){
+  stopDashPolling();
+  dashTimer = setInterval(function(){
+    const t = document.getElementById('tab-dashboard');
+    if (t && !t.classList.contains('hidden')) loadDashboard({silent:true});
+  }, 30000);
+}
+function stopDashPolling(){ if (dashTimer) { clearInterval(dashTimer); dashTimer = null; } }
+
+function dMoney(n){ return '$' + Math.round(Number(n)||0).toLocaleString('en-US'); }
+function dDelta(cur, prev, label){
+  if (!prev) return cur ? '<span class="kpi-up">' + label + '無資料可比較</span>' : label + '無資料可比較';
+  const pct = Math.round((cur - prev) / prev * 100);
+  const cls = pct >= 0 ? 'kpi-up' : 'kpi-down';
+  return '較' + label + ' <span class="' + cls + '">' + (pct >= 0 ? '▲ ' : '▼ ') + Math.abs(pct) + '%</span>';
+}
+
+async function loadDashboard(opts){
+  opts = opts || {};
+  const msg = document.getElementById('dash_msg');
+  try{
+    const d = await api('/api/admin/dashboard');
+    msg.textContent = '';
+    document.getElementById('dash_date').textContent = d.today + '（台灣時間）';
+    document.getElementById('dash_updated').textContent = '· 更新於 ' + new Date().toLocaleTimeString('zh-TW', {hour12:false});
+
+    document.getElementById('k_today').textContent = dMoney(d.sales.today.total);
+    document.getElementById('k_today_sub').innerHTML = d.sales.today.count + ' 筆　' + dDelta(d.sales.today.total, d.sales.yesterday.total, '昨日');
+    document.getElementById('k_month').textContent = dMoney(d.sales.month.total);
+    document.getElementById('k_month_sub').innerHTML = d.sales.month.count + ' 筆　' + dDelta(d.sales.month.total, d.sales.last_month.total, '上月');
+    document.getElementById('k_members').textContent = d.members.total.toLocaleString('en-US');
+    document.getElementById('k_members_sub').textContent = '今日新增 ' + d.members.today + '　本月新增 ' + d.members.month;
+    document.getElementById('k_points').textContent = Number(d.points_outstanding).toLocaleString('en-US');
+
+    // 待處理
+    const p = d.pending;
+    const todos = [
+      ['待上傳條碼', p.need_barcode, 'orders', true],
+      ['已上傳付款證明，待核對', p.need_verify, 'orders', true],
+      ['已付款，待結案', p.to_complete, 'orders', false],
+      ['點數兌換單待處理', p.redemptions, 'points', true],
+      ['直播：未綁定留言', p.live_unbound, 'live', true],
+      ['直播：可建單留言', p.live_ready, 'live', false],
+      ['等客人轉帳', p.wait_transfer, 'orders', false],
+      ['等客人用條碼付款', p.wait_barcode_pay, 'orders', false],
+      ['等客人選付款方式', p.wait_method, 'orders', false]
+    ];
+    const box = document.getElementById('dash_todos');
+    box.innerHTML = '';
+    todos.forEach(function(t){
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'todo' + (t[1] > 0 && t[3] ? ' hot' : '') + (t[1] === 0 ? ' zero' : '');
+      const l = document.createElement('span'); l.textContent = t[0];
+      const n = document.createElement('span'); n.className = 'n'; n.textContent = t[1];
+      b.appendChild(l); b.appendChild(n);
+      b.addEventListener('click', function(){ showTab(t[2]); });
+      box.appendChild(b);
+    });
+
+    // 近 14 天長條圖
+    const max = Math.max.apply(null, d.days.map(function(x){ return x.total; }).concat([1]));
+    const bars = document.getElementById('dash_bars');
+    bars.innerHTML = '';
+    d.days.forEach(function(x){
+      const bar = document.createElement('div');
+      bar.className = 'bar' + (x.date === d.today ? ' today' : '');
+      bar.title = x.date + '：' + dMoney(x.total) + '（' + x.count + ' 筆）';
+      const i = document.createElement('i');
+      i.style.height = (x.total / max * 100) + '%';
+      const sp = document.createElement('span');
+      sp.textContent = x.date.slice(5).replace('-', '/');
+      bar.appendChild(i); bar.appendChild(sp);
+      bars.appendChild(bar);
+    });
+
+    // 平台、排行
+    function rankList(elId, rows, nameKey){
+      const el = document.getElementById(elId);
+      el.innerHTML = '';
+      if (!rows.length) { el.innerHTML = '<div class="kpi-sub">本月尚無儲值紀錄</div>'; return; }
+      const top = Math.max.apply(null, rows.map(function(r){ return r.total; }).concat([1]));
+      rows.forEach(function(r){
+        const row = document.createElement('div');
+        row.innerHTML = '<div class="rank-row"><span></span><span></span></div><div class="rank-bar"><i></i></div>';
+        row.querySelector('.rank-row span:first-child').textContent = r[nameKey];
+        row.querySelector('.rank-row span:last-child').textContent = dMoney(r.total) + '（' + r.count + ' 筆）';
+        row.querySelector('.rank-bar i').style.width = (r.total / top * 100) + '%';
+        el.appendChild(row);
+      });
+    }
+    rankList('dash_platforms', d.platforms, 'name');
+    rankList('dash_top', d.top_members, 'name');
+
+    // 最新訂單
+    const tb = document.querySelector('#dash_recent tbody');
+    if (!d.recent.length) {
+      tb.innerHTML = '<tr><td colspan="6">還沒有訂單</td></tr>';
+    } else {
+      tb.innerHTML = d.recent.map(function(o){
+        let st = STATUS_LABEL[o.status] || [o.status, 'b-pending'];
+        if (o.expired) st = STATUS_LABEL.expired;
+        let label = st[0] + (o.status === 'paid' && o.is_completed ? '（已結案）' : '');
+        return '<tr>'
+          + '<td data-label="訂單編號">' + escapeHtml(o.order_no) + '</td>'
+          + '<td data-label="建立時間">' + escapeHtml(toTaipeiTime(o.created_at)) + '</td>'
+          + '<td data-label="會員 / 客人">' + escapeHtml(o.name) + '</td>'
+          + '<td data-label="平台">' + escapeHtml(o.platform_name || '未指定') + '</td>'
+          + '<td data-label="金額">' + dMoney(o.amount) + '</td>'
+          + '<td data-label="狀態"><span class="badge ' + st[1] + '">' + escapeHtml(label) + '</span></td>'
+          + '</tr>';
+      }).join('');
+    }
+  }catch(e){
+    if (!opts.silent) msg.textContent = e.message;
+  }
 }
 
 async function loadStats(){

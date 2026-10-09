@@ -1081,6 +1081,123 @@ async function handleMonthlyStats(request, env) {
   return json(results.map((r) => ({ member_name: r.member_name, count: r.count, total: r.total })));
 }
 
+// ================= 後台首頁儀表板 =================
+// 日期一律用台灣時間（UTC+8）切日／切月；資料庫存的是 UTC。
+async function handleDashboard(env) {
+  const TZ = "'+8 hours'";
+  const db = env.DB;
+  const one = async (sql, ...binds) => (await db.prepare(sql).bind(...binds).first()) || {};
+  const all = async (sql, ...binds) => (await db.prepare(sql).bind(...binds).all()).results || [];
+
+  const today = (await one(`SELECT date('now', ${TZ}) AS d`)).d;
+  const month = today.slice(0, 7);
+  const yesterday = (await one(`SELECT date('now', ${TZ}, '-1 day') AS d`)).d;
+  const lastMonth = (await one(`SELECT strftime('%Y-%m', date('now', ${TZ}, 'start of month', '-1 day')) AS m`)).m;
+
+  const paidBy = (fmt) => `strftime('${fmt}', datetime(paid_at, ${TZ}))`;
+  const sumPaid = async (fmt, key) => {
+    const r = await one(`SELECT COUNT(*) AS c, COALESCE(SUM(amount),0) AS t FROM orders WHERE status='paid' AND ${paidBy(fmt)} = ?`, key);
+    return { count: r.c || 0, total: r.t || 0 };
+  };
+
+  const [todayPaid, yesterdayPaid, monthPaid, lastMonthPaid] = await Promise.all([
+    sumPaid("%Y-%m-%d", today),
+    sumPaid("%Y-%m-%d", yesterday),
+    sumPaid("%Y-%m", month),
+    sumPaid("%Y-%m", lastMonth),
+  ]);
+
+  // 待處理：訂單狀態是「懶惰過期」（有人打開連結才會改成 expired），所以這裡要自己用 expires_at 判斷，
+  // 已超過付款時效的不算待處理。
+  const live = "expires_at > datetime('now')";
+  const pend = await one(
+    `SELECT
+       SUM(CASE WHEN status='awaiting_barcode' AND ${live} THEN 1 ELSE 0 END) AS need_barcode,
+       SUM(CASE WHEN status='awaiting_payment' AND ${live} AND proof_uploaded_at IS NOT NULL THEN 1 ELSE 0 END) AS need_verify,
+       SUM(CASE WHEN status='awaiting_payment' AND ${live} AND proof_uploaded_at IS NULL THEN 1 ELSE 0 END) AS wait_transfer,
+       SUM(CASE WHEN status='ready_to_pay' AND ${live} THEN 1 ELSE 0 END) AS wait_barcode_pay,
+       SUM(CASE WHEN status='pending_method' AND ${live} THEN 1 ELSE 0 END) AS wait_method,
+       SUM(CASE WHEN status='paid' AND is_completed=0 THEN 1 ELSE 0 END) AS to_complete
+     FROM orders`
+  );
+  const redeemPending = (await one("SELECT COUNT(*) AS c FROM points_redemptions WHERE status='pending'")).c || 0;
+  const liveOpen = await one(
+    `SELECT COUNT(*) AS rounds,
+            (SELECT COUNT(*) FROM live_comments WHERE status='unbound' AND round_id IN (SELECT id FROM live_rounds WHERE status='open')) AS unbound,
+            (SELECT COUNT(*) FROM live_comments WHERE status IN ('ok','guest') AND round_id IN (SELECT id FROM live_rounds WHERE status='open')) AS ready
+     FROM live_rounds WHERE status='open'`
+  );
+
+  // 近 14 天每日儲值金額（沒有資料的日子補 0，圖才不會斷）
+  const dayRows = await all(
+    `SELECT ${paidBy("%Y-%m-%d")} AS d, COUNT(*) AS c, SUM(amount) AS t
+     FROM orders WHERE status='paid' AND datetime(paid_at, ${TZ}) >= date('now', ${TZ}, '-13 days')
+     GROUP BY d`
+  );
+  const dayMap = {};
+  for (const r of dayRows) dayMap[r.d] = r;
+  const days = [];
+  for (let i = 13; i >= 0; i--) {
+    const d = new Date(Date.parse(today + "T00:00:00Z") - i * 86400000).toISOString().slice(0, 10);
+    days.push({ date: d, count: dayMap[d]?.c || 0, total: dayMap[d]?.t || 0 });
+  }
+
+  const platforms = await all(
+    `SELECT COALESCE(platform,'') AS platform, COUNT(*) AS c, SUM(amount) AS t
+     FROM orders WHERE status='paid' AND ${paidBy("%Y-%m")} = ?
+     GROUP BY platform ORDER BY t DESC`,
+    month
+  );
+  const topMembers = await all(
+    `SELECT member_name_snapshot AS name, COUNT(*) AS c, SUM(amount) AS t
+     FROM orders WHERE status='paid' AND ${paidBy("%Y-%m")} = ?
+     GROUP BY COALESCE(member_id, -1), member_name_snapshot ORDER BY t DESC LIMIT 5`,
+    month
+  );
+  const recent = await all(
+    `SELECT id, member_name_snapshot AS name, amount, platform, status, is_completed, created_at, expires_at
+     FROM orders ORDER BY id DESC LIMIT 8`
+  );
+
+  const members = await one(
+    `SELECT COUNT(*) AS total,
+            SUM(CASE WHEN date(datetime(created_at, ${TZ})) = ? THEN 1 ELSE 0 END) AS today,
+            SUM(CASE WHEN strftime('%Y-%m', datetime(created_at, ${TZ})) = ? THEN 1 ELSE 0 END) AS month
+     FROM members`,
+    today, month
+  );
+  const pointsOut = (await one("SELECT COALESCE(SUM(delta),0) AS s FROM points_ledger")).s || 0;
+  const platformLabels = platformLabelMap(await getPlatforms(db));
+
+  return json({
+    today, month,
+    sales: { today: todayPaid, yesterday: yesterdayPaid, month: monthPaid, last_month: lastMonthPaid },
+    pending: {
+      need_barcode: pend.need_barcode || 0,
+      need_verify: pend.need_verify || 0,
+      wait_transfer: pend.wait_transfer || 0,
+      wait_barcode_pay: pend.wait_barcode_pay || 0,
+      wait_method: pend.wait_method || 0,
+      to_complete: pend.to_complete || 0,
+      redemptions: redeemPending,
+      live_rounds: liveOpen.rounds || 0,
+      live_unbound: liveOpen.unbound || 0,
+      live_ready: liveOpen.ready || 0,
+    },
+    days,
+    platforms: platforms.map((r) => ({ key: r.platform, name: platformLabels[r.platform] || "未指定", count: r.c, total: r.t || 0 })),
+    top_members: topMembers.map((r) => ({ name: r.name, count: r.c, total: r.t || 0 })),
+    recent: recent.map((r) => ({
+      id: r.id, order_no: formatOrderNo(r.id), name: r.name, amount: r.amount,
+      platform_name: platformLabels[r.platform] || "", status: r.status,
+      is_completed: r.is_completed, created_at: r.created_at,
+      expired: !["paid", "cancelled", "expired"].includes(r.status) && r.expires_at <= new Date().toISOString().replace("T", " ").slice(0, 19),
+    })),
+    members: { total: members.total || 0, today: members.today || 0, month: members.month || 0 },
+    points_outstanding: pointsOut,
+  });
+}
+
 // ---- Public order endpoints ----
 
 // 付款頁用的訂單資料：訂單本身 + 目前開放給顧客選的付款方式
@@ -2278,6 +2395,7 @@ export async function onRequest(context) {
 
       if (path === "/api/admin/export" && method === "GET") return handleExport(request, env);
       if (path === "/api/admin/stats/monthly" && method === "GET") return handleMonthlyStats(request, env);
+      if (path === "/api/admin/dashboard" && method === "GET") return handleDashboard(env);
 
       if (path === "/api/admin/push/public-key" && method === "GET") return handlePushPublicKey(env);
       if (path === "/api/admin/push/subscribe" && method === "POST") return handlePushSubscribe(session, request, env);
