@@ -122,6 +122,7 @@ ${THEME_HEAD}
   .kpi-sub{font-size:12px;color:var(--muted);}
   .kpi-up{color:var(--ok);} .kpi-down{color:var(--danger);}
   .todo-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;}
+  .todo-list.hidden{display:none;}
   .todo{display:flex;justify-content:space-between;align-items:center;gap:8px;border:1px solid var(--border);border-radius:8px;padding:10px 12px;cursor:pointer;background:transparent;color:var(--text);font-size:14px;text-align:left;}
   .todo:hover{border-color:var(--accent);}
   .todo .n{font-weight:700;font-size:18px;min-width:28px;text-align:right;}
