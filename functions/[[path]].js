@@ -1078,7 +1078,49 @@ async function handleMonthlyStats(request, env) {
   )
     .bind(month)
     .all();
-  return json(results.map((r) => ({ member_name: r.member_name, count: r.count, total: r.total })));
+  return json(
+    results.map((r) => ({
+      member_id: r.member_key > 0 ? r.member_key : null, // null = 非會員（現場客／未綁定）
+      member_name: r.member_name,
+      count: r.count,
+      total: r.total,
+    }))
+  );
+}
+
+// 點擊儲值統計的某一列 → 該會員／客人在該月份的已付款訂單明細。
+// 篩選條件與 handleMonthlyStats 的 GROUP BY 完全一致（member_id + 姓名快照），
+// 這樣明細的筆數、金額合計才會跟統計表那一列對得起來。
+// 刻意不回傳 platform_password、付款證明圖片等敏感／過大欄位。
+async function handleMonthlyMemberOrders(request, env) {
+  const url = new URL(request.url);
+  const month = url.searchParams.get("month") || "";
+  if (!/^\d{4}-\d{2}$/.test(month)) return json({ error: "月份格式錯誤" }, 400);
+  const name = url.searchParams.get("name") || "";
+  const memberIdRaw = url.searchParams.get("member_id");
+  const hasMember = memberIdRaw != null && memberIdRaw !== "" && memberIdRaw !== "null";
+  const memberId = hasMember ? parseInt(memberIdRaw, 10) : null;
+  if (hasMember && !(memberId > 0)) return json({ error: "會員 ID 錯誤" }, 400);
+
+  const where = hasMember ? "member_id = ?" : "member_id IS NULL";
+  const binds = hasMember ? [month, memberId, name] : [month, name];
+  const { results } = await env.DB.prepare(
+    `SELECT id, amount, original_amount, coupon_code, coupon_discount, points_used, points_discount,
+            platform, platform_account, payment_method, store_brand, coins,
+            created_at, paid_at, is_completed, admin_note
+     FROM orders
+     WHERE status='paid' AND strftime('%Y-%m', paid_at) = ? AND ${where} AND member_name_snapshot = ?
+     ORDER BY paid_at DESC, id DESC`
+  )
+    .bind(...binds)
+    .all();
+
+  return json(
+    results.map((o) => ({
+      ...o,
+      order_no: formatOrderNo(o.id),
+    }))
+  );
 }
 
 // ================= 後台首頁儀表板 =================
@@ -2395,6 +2437,7 @@ export async function onRequest(context) {
 
       if (path === "/api/admin/export" && method === "GET") return handleExport(request, env);
       if (path === "/api/admin/stats/monthly" && method === "GET") return handleMonthlyStats(request, env);
+      if (path === "/api/admin/stats/monthly/orders" && method === "GET") return handleMonthlyMemberOrders(request, env);
       if (path === "/api/admin/dashboard" && method === "GET") return handleDashboard(env);
 
       if (path === "/api/admin/push/public-key" && method === "GET") return handlePushPublicKey(env);

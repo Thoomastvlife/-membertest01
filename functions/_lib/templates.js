@@ -93,6 +93,27 @@ ${THEME_HEAD}
   .member-picker-option.mp-nonmember{color:var(--muted);font-style:italic;}
   .member-picker-empty{padding:10px 12px;font-size:13px;color:var(--muted);}
 
+  /* ---- 儲值統計：圓餅圖 / 明細 ---- */
+  .stat-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:14px 0 4px;}
+  .stat-kpi{border:1px solid var(--border);border-radius:8px;padding:10px 12px;}
+  .stat-kpi .l{font-size:12px;color:var(--muted);}
+  .stat-kpi .v{font-size:20px;font-weight:700;margin-top:2px;}
+  .stat-chart-box{position:relative;height:320px;max-width:560px;margin:12px auto 4px;}
+  .stat-hint{font-size:12px;color:var(--muted);margin:10px 0 0;}
+  #stat_table tr.stat-row{cursor:pointer;}
+  #stat_table tr.stat-row:hover td,#stat_table tr.stat-row:focus td{background:rgba(127,127,127,.12);}
+  #stat_table tr.stat-row:focus{outline:none;}
+  .stat-dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:8px;vertical-align:baseline;}
+  .stat-name{color:var(--accent);}
+  .stat-pct{color:var(--muted);}
+  .stat-modal-box{max-width:820px !important;}
+  .stat-modal-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;}
+  .stat-modal-head h2{margin:0;}
+  .stat-sub{font-size:12px;color:var(--muted);margin-top:4px;}
+  .stat-scroll{overflow-x:auto;}
+  .stat-note{display:block;font-size:11px;color:var(--muted);margin-top:2px;}
+  @media (max-width:700px){ .stat-chart-box{height:280px;} }
+
   /* ---- 首頁儀表板 ---- */
   .dash-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-bottom:16px;}
   .dash-grid .card{margin-bottom:0;}
@@ -427,10 +448,25 @@ ${THEME_CSS_ADMIN}
       <div class="card">
         <h2>會員儲值統計（依月份，統計已完成付款金額）</h2>
         <label>月份</label>
-        <input id="stat_month" type="month" />
+        <input id="stat_month" type="month" onchange="loadStats()" />
         <button class="btn secondary" onclick="loadStats()">查詢</button>
+        <div id="stat_msg" class="msg"></div>
+
+        <div id="stat_kpis" class="stat-kpis hidden">
+          <div class="stat-kpi"><div class="l">本月儲值總額</div><div class="v" id="sk_total">-</div></div>
+          <div class="stat-kpi"><div class="l">儲值筆數</div><div class="v" id="sk_count">-</div></div>
+          <div class="stat-kpi"><div class="l">儲值人數</div><div class="v" id="sk_people">-</div></div>
+          <div class="stat-kpi"><div class="l">平均每筆</div><div class="v" id="sk_avg">-</div></div>
+        </div>
+
+        <div id="stat_chart_wrap" class="hidden">
+          <div class="stat-chart-box"><canvas id="stat_chart"></canvas></div>
+          <div id="stat_chart_msg" class="msg" style="text-align:center;"></div>
+        </div>
+
+        <div id="stat_hint" class="stat-hint hidden">點擊下方會員（或圓餅圖的區塊），可查看該月份的訂單明細。</div>
         <table id="stat_table">
-          <thead><tr><th>會員 / 客人</th><th>儲值筆數</th><th>儲值金額合計</th></tr></thead>
+          <thead><tr><th>會員 / 客人</th><th>儲值筆數</th><th>儲值金額合計</th><th>占比</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -690,6 +726,25 @@ ${THEME_CSS_ADMIN}
     </section>
 
   </main>
+</div>
+
+<div id="statDetailModal" class="modal-overlay hidden" onclick="if(event.target===this)closeStatDetail()">
+  <div class="modal-box stat-modal-box">
+    <div class="stat-modal-head">
+      <div>
+        <h2 id="sd_title">儲值明細</h2>
+        <div class="stat-sub" id="sd_sub"></div>
+      </div>
+      <button class="btn secondary" style="margin-top:0;" onclick="closeStatDetail()">關閉</button>
+    </div>
+    <div id="sd_msg" class="msg"></div>
+    <div class="stat-scroll">
+      <table id="sd_table">
+        <thead><tr><th>訂單編號</th><th>付款時間</th><th>平台</th><th>付款方式</th><th>金額</th><th>狀態</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
 </div>
 
 <div id="completeModal" class="modal-overlay hidden">
@@ -2020,20 +2075,214 @@ async function loadDashboard(opts){
   }
 }
 
+// ---- 儲值統計：圓餅圖 + 會員月明細 ----
+let statsList = [];
+let statsMonth = '';
+let statsChart = null;
+let chartJsPromise = null;
+let statDetailSeq = 0;
+const STAT_TOP_N = 8;
+const STAT_COLORS = ['#5B8CFF','#4CC38A','#F5A623','#E5646B','#9B7BEA','#2EC4D6','#E58AC3','#A3C14A','#9CA3AF'];
+
+function statCssVar(name, fallback){
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+}
+
+// Chart.js 只在第一次打開儲值統計時才從 CDN 載入，不拖慢後台其他分頁
+function loadChartJs(){
+  if (window.Chart) return Promise.resolve();
+  if (chartJsPromise) return chartJsPromise;
+  chartJsPromise = new Promise(function(resolve, reject){
+    const sc = document.createElement('script');
+    sc.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js';
+    sc.onload = function(){ resolve(); };
+    sc.onerror = function(){ chartJsPromise = null; reject(new Error('圖表套件載入失敗')); };
+    document.head.appendChild(sc);
+  });
+  return chartJsPromise;
+}
+
+function statPct(part, whole){
+  return whole > 0 ? (part / whole * 100).toFixed(1) + '%' : '0%';
+}
+
 async function loadStats(){
   const monthInput = document.getElementById('stat_month');
   if (!monthInput.value) monthInput.value = new Date().toISOString().slice(0,7);
   const month = monthInput.value;
-  const list = await api('/api/admin/stats/monthly?month='+encodeURIComponent(month));
-  const tbody = document.querySelector('#stat_table tbody');
+  const msg = document.getElementById('stat_msg');
+  msg.textContent = '';
+  let list;
+  try{
+    list = await api('/api/admin/stats/monthly?month='+encodeURIComponent(month));
+  }catch(e){
+    msg.textContent = e.message; msg.className = 'msg err';
+    return;
+  }
+  msg.className = 'msg';
+  statsList = list;
+  statsMonth = month;
+
   let total = 0, totalCount = 0;
-  const rows = list.map(r=>{
-    total += r.total; totalCount += r.count;
-    return \`<tr><td data-label="會員 / 客人">\${r.member_name}</td><td data-label="儲值筆數">\${r.count}</td><td data-label="儲值金額合計">$\${r.total}</td></tr>\`;
+  list.forEach(function(r){ total += Number(r.total) || 0; totalCount += Number(r.count) || 0; });
+
+  const tbody = document.querySelector('#stat_table tbody');
+  const rows = list.map(function(r, i){
+    const color = i < STAT_TOP_N ? STAT_COLORS[i] : STAT_COLORS[STAT_COLORS.length - 1];
+    return '<tr class="stat-row" data-i="' + i + '" tabindex="0" title="點擊查看訂單明細">'
+      + '<td data-label="會員 / 客人"><span class="stat-dot" style="background:' + color + ';"></span><span class="stat-name">' + escapeHtml(r.member_name) + '</span></td>'
+      + '<td data-label="儲值筆數">' + r.count + '</td>'
+      + '<td data-label="儲值金額合計">' + dMoney(r.total) + '</td>'
+      + '<td data-label="占比"><span class="stat-pct">' + statPct(r.total, total) + '</span></td>'
+      + '</tr>';
   }).join('');
-  tbody.innerHTML = (rows || '<tr><td colspan="3">本月尚無儲值紀錄</td></tr>') +
-    \`<tr class="total-row"><td data-label="會員 / 客人">合計</td><td data-label="儲值筆數">\${totalCount}</td><td data-label="儲值金額合計">$\${total}</td></tr>\`;
+  tbody.innerHTML = (rows || '<tr><td colspan="4">本月尚無儲值紀錄</td></tr>')
+    + '<tr class="total-row"><td data-label="會員 / 客人">合計</td><td data-label="儲值筆數">' + totalCount + '</td><td data-label="儲值金額合計">' + dMoney(total) + '</td><td data-label="占比">' + (list.length ? '100%' : '-') + '</td></tr>';
+
+  const has = list.length > 0;
+  document.getElementById('stat_kpis').classList.toggle('hidden', !has);
+  document.getElementById('stat_hint').classList.toggle('hidden', !has);
+  if (has){
+    document.getElementById('sk_total').textContent = dMoney(total);
+    document.getElementById('sk_count').textContent = totalCount.toLocaleString('en-US');
+    document.getElementById('sk_people').textContent = list.length.toLocaleString('en-US');
+    document.getElementById('sk_avg').textContent = dMoney(totalCount ? total / totalCount : 0);
+  }
+  renderStatsChart();
 }
+
+function renderStatsChart(){
+  const wrap = document.getElementById('stat_chart_wrap');
+  const cmsg = document.getElementById('stat_chart_msg');
+  if (!statsList.length){
+    wrap.classList.add('hidden');
+    if (statsChart){ statsChart.destroy(); statsChart = null; }
+    return;
+  }
+  wrap.classList.remove('hidden');
+  cmsg.textContent = '';
+
+  // 前 N 名各自一塊，其餘合併成「其他」，避免會員多的時候圓餅圖碎成一堆細縫
+  const top = statsList.slice(0, STAT_TOP_N);
+  const rest = statsList.slice(STAT_TOP_N);
+  const labels = top.map(function(r){ return r.member_name; });
+  const data = top.map(function(r){ return Number(r.total) || 0; });
+  const colors = top.map(function(r, i){ return STAT_COLORS[i]; });
+  if (rest.length){
+    labels.push('其他（' + rest.length + ' 位）');
+    data.push(rest.reduce(function(a, r){ return a + (Number(r.total) || 0); }, 0));
+    colors.push(STAT_COLORS[STAT_COLORS.length - 1]);
+  }
+  const sum = data.reduce(function(a, b){ return a + b; }, 0);
+
+  loadChartJs().then(function(){
+    if (statsChart){ statsChart.destroy(); statsChart = null; }
+    const textColor = statCssVar('--text', '#1f2430');
+    Chart.defaults.font.family = '-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif';
+    statsChart = new Chart(document.getElementById('stat_chart'), {
+      type: 'pie',
+      data: { labels: labels, datasets: [{ data: data, backgroundColor: colors, borderColor: statCssVar('--card', '#fff'), borderWidth: 2, hoverOffset: 8 }] },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'bottom', labels: { color: textColor, boxWidth: 12, padding: 14 } },
+          title: { display: true, text: statsMonth + ' 各會員儲值金額占比', color: textColor, font: { size: 14 } },
+          tooltip: {
+            callbacks: {
+              label: function(ctx){
+                return ' ' + ctx.label + '：' + dMoney(ctx.parsed) + '（' + statPct(ctx.parsed, sum) + '）';
+              }
+            }
+          }
+        },
+        onClick: function(evt, els){
+          if (!els.length) return;
+          const i = els[0].index;
+          if (i < top.length) openStatDetail(i);   // 「其他」那塊沒有單一會員，不開明細
+        },
+        onHover: function(evt, els){
+          const el = evt.native && evt.native.target;
+          if (el) el.style.cursor = (els.length && els[0].index < top.length) ? 'pointer' : 'default';
+        }
+      }
+    });
+  }).catch(function(e){
+    cmsg.textContent = e.message + '（表格資料仍可正常使用）';
+    cmsg.className = 'msg err';
+  });
+}
+
+// 切換深色／淺色主題時，圓餅圖的文字與邊框顏色要跟著換
+new MutationObserver(function(){
+  const t = document.getElementById('tab-stats');
+  if (statsChart && t && !t.classList.contains('hidden')) renderStatsChart();
+}).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+function statRowOpen(e){
+  const tr = e.target.closest ? e.target.closest('tr[data-i]') : null;
+  if (!tr) return;
+  if (e.type === 'keydown'){
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+  }
+  openStatDetail(Number(tr.dataset.i));
+}
+document.querySelector('#stat_table tbody').addEventListener('click', statRowOpen);
+document.querySelector('#stat_table tbody').addEventListener('keydown', statRowOpen);
+
+async function openStatDetail(i){
+  const r = statsList[i];
+  if (!r) return;
+  const seq = ++statDetailSeq;
+  const tbody = document.querySelector('#sd_table tbody');
+  document.getElementById('sd_title').textContent = r.member_name + ' 的儲值明細';
+  document.getElementById('sd_sub').textContent = statsMonth + '　共 ' + r.count + ' 筆　合計 ' + dMoney(r.total);
+  const msg = document.getElementById('sd_msg');
+  msg.textContent = '載入中…'; msg.className = 'msg';
+  tbody.innerHTML = '';
+  document.getElementById('statDetailModal').classList.remove('hidden');
+  try{
+    const qs = 'month=' + encodeURIComponent(statsMonth)
+      + '&member_id=' + (r.member_id ? encodeURIComponent(r.member_id) : '')
+      + '&name=' + encodeURIComponent(r.member_name);
+    const list = await api('/api/admin/stats/monthly/orders?' + qs);
+    if (seq !== statDetailSeq) return;   // 使用者已經點了別的會員，丟掉舊的回應
+    msg.textContent = '';
+    let sum = 0;
+    const rows = list.map(function(o){
+      sum += Number(o.amount) || 0;
+      const pm = o.payment_method ? ((PM_LABEL[o.payment_method] || o.payment_method) + (o.store_brand ? '（' + (CVS_LABEL[o.store_brand] || o.store_brand) + '）' : '')) : '-';
+      const notes = [];
+      if (o.original_amount != null && o.coupon_discount) notes.push('原價 ' + dMoney(o.original_amount) + '，優惠碼' + (o.coupon_code ? ' ' + escapeHtml(o.coupon_code) : '') + ' 折抵 ' + dMoney(o.coupon_discount));
+      if (o.points_discount) notes.push('點數折抵 ' + dMoney(o.points_discount) + '（' + o.points_used + ' 點）');
+      if (o.admin_note) notes.push('備註：' + escapeHtml(o.admin_note));
+      const noteHtml = notes.map(function(n){ return '<span class="stat-note">' + n + '</span>'; }).join('');
+      return '<tr>'
+        + '<td data-label="訂單編號"><code>' + escapeHtml(o.order_no) + '</code></td>'
+        + '<td data-label="付款時間">' + escapeHtml(toTaipeiTime(o.paid_at)) + '</td>'
+        + '<td data-label="平台">' + escapeHtml(PLATFORM_LABEL[o.platform] || (o.platform ? o.platform : '未指定')) + '</td>'
+        + '<td data-label="付款方式">' + escapeHtml(pm) + '</td>'
+        + '<td data-label="金額">' + dMoney(o.amount) + noteHtml + '</td>'
+        + '<td data-label="狀態"><span class="badge ' + (o.is_completed ? 'b-completed' : 'b-paid') + '">' + (o.is_completed ? '已結案' : '已付款') + '</span></td>'
+        + '</tr>';
+    }).join('');
+    tbody.innerHTML = (rows || '<tr><td colspan="6">這個月沒有訂單</td></tr>')
+      + (list.length ? '<tr class="total-row"><td data-label="訂單編號">合計</td><td data-label="付款時間">' + list.length + ' 筆</td><td></td><td></td><td data-label="金額">' + dMoney(sum) + '</td><td></td></tr>' : '');
+  }catch(e){
+    if (seq !== statDetailSeq) return;
+    msg.textContent = e.message; msg.className = 'msg err';
+  }
+}
+
+function closeStatDetail(){
+  statDetailSeq++;
+  document.getElementById('statDetailModal').classList.add('hidden');
+}
+document.addEventListener('keydown', function(e){
+  if (e.key === 'Escape') closeStatDetail();
+});
 
 // ---- 儲值平台 / 付款方式開放設定 ----
 let platformsAdmin = [];
