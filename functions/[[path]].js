@@ -118,6 +118,18 @@ async function alog(env, session, request, metaInput, resultPromise) {
   return res;
 }
 
+// 操作紀錄用：把品項 ID 換成「品名（訂單編號）」，紀錄才看得懂。
+// 要在實際修改/刪除「之前」呼叫（刪除後就查不到品名了）；查不到時退回顯示 ID。
+async function itemLogLabel(env, itemId) {
+  try {
+    const it = await env.DB.prepare("SELECT name, order_id FROM order_items WHERE id=?").bind(itemId).first();
+    if (it) return `「${it.name}」（訂單 ${formatOrderNo(it.order_id)}）`;
+  } catch {
+    // 查詢失敗就用 ID，不影響原本操作
+  }
+  return `品項 #${itemId}`;
+}
+
 // 後台「操作紀錄」頁籤：列出 admin_logs，支援關鍵字搜尋跟依帳號篩選，新→舊排序、分頁
 async function handleListAdminLogs(request, env) {
   const url = new URL(request.url);
@@ -2889,26 +2901,31 @@ export async function onRequest(context) {
       if (orderItemsMatch && method === "POST") {
         const body = await request.clone().json().catch(() => ({}));
         return alog(env, session, request,
-          { action: "order.add_item", summary: `訂單 #${orderItemsMatch[1]} 新增品項「${body.name || ""}」` },
+          { action: "order.add_item", summary: `訂單 ${formatOrderNo(parseInt(orderItemsMatch[1], 10))} 新增品項「${body.name || ""}」，數量 ${body.qty ?? 1}、單價 $${body.unit_price ?? 0}` },
           handleAddOrderItem(orderItemsMatch[1], request, env));
       }
       const orderItemMatch = path.match(/^\/api\/admin\/order-items\/(\d+)$/);
       if (orderItemMatch && method === "PATCH") {
         const body = await request.clone().json().catch(() => ({}));
+        const itemLabel = await itemLogLabel(env, orderItemMatch[1]);
+        const renamed = body.name !== undefined && String(body.name).trim() ? ` → 改名為「${String(body.name).trim()}」` : "";
         return alog(env, session, request,
-          { action: "order.update_item", summary: `更新品項 #${orderItemMatch[1]}` },
+          { action: "order.update_item", summary: `更新品項 ${itemLabel}${renamed}`, detail: sanitizeForLog(body) },
           handleUpdateOrderItem(orderItemMatch[1], request, env));
       }
       if (orderItemMatch && method === "DELETE") {
+        const itemLabel = await itemLogLabel(env, orderItemMatch[1]);
         return alog(env, session, request,
-          { action: "order.delete_item", summary: `刪除品項 #${orderItemMatch[1]}` },
+          { action: "order.delete_item", summary: `刪除品項 ${itemLabel}` },
           handleDeleteOrderItem(orderItemMatch[1], env));
       }
       const orderItemDeliverMatch = path.match(/^\/api\/admin\/order-items\/(\d+)\/deliver$/);
       if (orderItemDeliverMatch && method === "POST") {
         const body = await request.clone().json().catch(() => ({}));
+        const itemLabel = await itemLogLabel(env, orderItemDeliverMatch[1]);
+        const toDelivered = body.deliver === true || body.deliver === 1 || body.deliver === "1";
         return alog(env, session, request,
-          { action: "order.item_deliver", summary: `品項 #${orderItemDeliverMatch[1]} 交貨狀態變更` },
+          { action: "order.item_deliver", summary: `品項 ${itemLabel} 交貨狀態變更為「${toDelivered ? "已交貨" : "未交貨"}」` },
           handleToggleDelivery(orderItemDeliverMatch[1], request, env));
       }
       const sendDetailMatch = path.match(/^\/api\/admin\/orders\/(\d+)\/send-detail$/);
