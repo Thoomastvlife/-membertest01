@@ -731,7 +731,19 @@ async function handleCreateOrder(request, env) {
   const { amount, member_id, non_member_name, payment_method, coupon_code, platform } = body;
   const storeBrand = payment_method === "store_barcode" && body.store_brand ? String(body.store_brand) : null;
 
-  const amt = parseFloat(amount);
+  // 品項明細（選填）：品名 / 數量 / 單價；建立訂單後寫入 order_items
+  const parsedItems = parseCheckoutItems(body.items);
+  if (parsedItems.error) return json({ error: parsedItems.error }, 400);
+  const checkoutItems = parsedItems.items;
+
+  // 金額來源：amount_mode = "items" 時由品項自動加總（以後端計算為準），否則使用手動輸入的 amount
+  let amt;
+  if (body.amount_mode === "items") {
+    if (!checkoutItems.length) return json({ error: "請至少填寫一個品項，或改用手動輸入金額" }, 400);
+    amt = Math.round(checkoutItems.reduce((s, it) => s + it.qty * it.unit_price, 0) * 100) / 100;
+  } else {
+    amt = parseFloat(amount);
+  }
   if (!amt || amt <= 0) return json({ error: "金額不正確" }, 400);
   if (payment_method && !PAYMENT_METHODS.has(payment_method)) return json({ error: "付款方式不正確" }, 400);
   if (storeBrand && !CVS_STORES[storeBrand]) return json({ error: "超商選擇不正確" }, 400);
@@ -821,6 +833,26 @@ async function handleCreateOrder(request, env) {
     await env.DB.prepare("UPDATE orders SET store_brand=? WHERE id=?").bind(storeBrand, insertResult.meta.last_row_id).run();
   }
 
+  // 自動把品項寫入 order_items（一次 batch，要嘛全部成功要嘛全部不寫）
+  let itemsCount = 0;
+  let itemsError = null;
+  if (checkoutItems.length) {
+    const orderId = insertResult.meta.last_row_id;
+    try {
+      await env.DB.batch(
+        checkoutItems.map((it, idx) =>
+          env.DB.prepare(
+            "INSERT INTO order_items (order_id, name, qty, unit_price, note, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))"
+          ).bind(orderId, it.name, it.qty, it.unit_price, it.note, idx + 1)
+        )
+      );
+      itemsCount = checkoutItems.length;
+    } catch (err) {
+      console.error("insert order_items failed", err);
+      itemsError = String((err && err.message) || err).slice(0, 120);
+    }
+  }
+
   const url = new URL(request.url);
   const link = `${url.origin}/pay/${token}`;
   return json({
@@ -831,7 +863,28 @@ async function handleCreateOrder(request, env) {
     amount: finalAmount,
     discount: couponResult ? couponResult.discount : 0,
     order_no: formatOrderNo(insertResult.meta.last_row_id),
+    items_count: itemsCount,
+    ...(itemsError ? { items_error: itemsError } : {}),
   });
+}
+
+// 驗證並整理結帳櫃檯送來的品項：回傳 { items } 或 { error }
+const CHECKOUT_ITEMS_MAX = 50;
+function parseCheckoutItems(raw) {
+  if (raw === undefined || raw === null) return { items: [] };
+  if (!Array.isArray(raw)) return { error: "品項格式不正確" };
+  if (raw.length > CHECKOUT_ITEMS_MAX) return { error: `品項最多 ${CHECKOUT_ITEMS_MAX} 筆` };
+  const items = [];
+  for (const it of raw) {
+    const name = String((it && it.name) || "").trim().slice(0, 100);
+    if (!name) return { error: "品項的品名不能為空" };
+    const qty = parseFloat(it.qty);
+    const unit_price = parseFloat(it.unit_price);
+    if (!(qty > 0) || qty > 1000000) return { error: `「${name}」的數量不正確` };
+    if (!(unit_price >= 0) || unit_price > 100000000) return { error: `「${name}」的單價不正確` };
+    items.push({ name, qty, unit_price, note: it.note ? String(it.note).slice(0, 200) : null });
+  }
+  return { items };
 }
 
 async function handleListOrders(request, env) {
@@ -1053,13 +1106,20 @@ async function handleCompleteOrder(id, request, env) {
   const wantEmail = adminWantsEmail || order.notify_email === 1;
   if (order.status !== "paid") return json({ error: "只有已完成付款的訂單才能標記為訂單完成" }, 400);
   const alreadyCompleted = !!order.is_completed;
-  await env.DB.prepare("UPDATE orders SET is_completed=1, completed_at=? WHERE id=?").bind(nowIso(), id).run();
+  const completedAt = nowIso();
+  await env.DB.prepare("UPDATE orders SET is_completed=1, completed_at=? WHERE id=?").bind(completedAt, id).run();
   await reconcileOrderById(env, id); // 訂單完成 → 發放回饋點數
 
   // 勾選了才寄信；已經是完成狀態的訂單（例如重複點擊）不重複寄
+  // 注意：信件內容要用「更新後」的訂單資料，否則會顯示成「尚未結案」
   let email = null;
   if (wantEmail) {
-    email = alreadyCompleted ? { sent: false, reason: "此訂單先前已標記完成，未重複寄信" } : await sendOrderCompleteEmail(env, order);
+    if (alreadyCompleted) {
+      email = { sent: false, reason: "此訂單先前已標記完成，未重複寄信" };
+    } else {
+      const fresh = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).first();
+      email = await sendOrderCompleteEmail(env, fresh || { ...order, is_completed: 1, completed_at: completedAt });
+    }
   }
   return json({ ok: true, email });
 }

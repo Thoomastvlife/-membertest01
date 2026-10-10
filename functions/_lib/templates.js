@@ -65,6 +65,19 @@ ${THEME_HEAD}
   .card-toggle.open .arrow{transform:rotate(180deg);}
   .link-box input{flex:1;background:#f0f2f5;}
   .hidden{display:none;}
+  .co-mode{display:flex;gap:16px;flex-wrap:wrap;margin:4px 0 6px;font-size:14px;}
+  .co-mode label{display:flex;align-items:center;gap:6px;margin:0;color:inherit;cursor:pointer;}
+  .co-mode input{width:auto;margin:0;}
+  .co-items-box{border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin:8px 0 4px;background:#fafbfc;}
+  .co-items-head,.co-item-row{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,1fr) minmax(0,1.3fr) minmax(0,1.2fr) 34px;gap:6px;align-items:center;}
+  .co-items-head{font-size:12px;color:var(--muted);margin-bottom:4px;}
+  .co-item-row{margin-bottom:6px;}
+  .co-item-row input{padding:7px 8px;}
+  .co-item-row .ci-sub{text-align:right;font-size:13px;font-variant-numeric:tabular-nums;}
+  .co-item-row button{margin:0;padding:6px 0;}
+  .co-items-foot{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:6px;font-size:14px;}
+  .co-items-foot button{margin:0;}
+  @media (max-width:560px){.co-items-head{display:none;}.co-item-row{grid-template-columns:1fr 1fr auto 34px;}.co-item-row .ci-name{grid-column:1 / -1;}.co-item-row .ci-sub{text-align:right;min-width:48px;}}
   #loginView{max-width:360px;margin:80px auto;}
   small.hint{color:var(--muted);}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 12px;}
@@ -276,7 +289,20 @@ ${THEME_CSS_ADMIN}
       <div class="card">
         <h2>建立結帳連結</h2>
         <label>金額</label>
+        <div class="co-mode">
+          <label><input type="radio" name="co_amount_mode" value="manual" checked onchange="coSyncAmount()" /> 手動輸入金額</label>
+          <label><input type="radio" name="co_amount_mode" value="items" onchange="coSyncAmount()" /> 由品項自動加總</label>
+        </div>
         <input id="co_amount" type="number" min="1" step="1" />
+        <label>品項明細（選填；建立訂單後會自動寫入訂單明細）</label>
+        <div class="co-items-box">
+          <div class="co-items-head"><span>品名</span><span>數量</span><span>單價</span><span style="text-align:right;">小計</span><span></span></div>
+          <div id="co_items"></div>
+          <div class="co-items-foot">
+            <button type="button" class="btn secondary small" onclick="coAddItem()">＋ 新增品項</button>
+            <span>品項合計：<b id="co_items_total">$0</b></span>
+          </div>
+        </div>
         <label>會員</label>
         <div class="member-picker" id="co_member_picker">
           <input type="text" id="co_member_search" class="member-picker-input" placeholder="輸入姓名／帳號／電話搜尋，留空表示非會員" autocomplete="off" />
@@ -1594,7 +1620,93 @@ async function previewCoupon(prefix){
   }catch(e){ msg.textContent = e.message; msg.className='msg err'; }
 }
 
+// ---- 結帳櫃檯：品項明細 ----
+function coRound2(n){ return Math.round((Number(n)||0) * 100) / 100; }
+function coFmt(n){ return '$' + coRound2(n).toLocaleString('zh-TW'); }
+
+function coAddItem(name, qty, price){
+  const box = document.getElementById('co_items');
+  const row = document.createElement('div');
+  row.className = 'co-item-row';
+  row.innerHTML = '<input class="ci-name" placeholder="品名" maxlength="100" />'
+    + '<input class="ci-qty" type="number" min="0" step="any" placeholder="數量" />'
+    + '<input class="ci-price" type="number" min="0" step="any" placeholder="單價" />'
+    + '<span class="ci-sub">$0</span>'
+    + '<button type="button" class="btn secondary small" title="移除這個品項">&times;</button>';
+  row.querySelector('.ci-name').value = name || '';
+  row.querySelector('.ci-qty').value = qty === undefined ? 1 : qty;
+  row.querySelector('.ci-price').value = price === undefined ? '' : price;
+  row.addEventListener('input', coSyncAmount);
+  row.querySelector('button').addEventListener('click', function(){ row.remove(); coSyncAmount(); });
+  box.appendChild(row);
+  coSyncAmount();
+  if (!name) row.querySelector('.ci-name').focus();
+}
+
+// 讀取目前所有品項列；全空白的列略過，只填了數字沒填品名的列視為錯誤
+function coCollectItems(){
+  const items = [];
+  const rows = document.querySelectorAll('#co_items .co-item-row');
+  for (const row of rows){
+    const name = row.querySelector('.ci-name').value.trim();
+    const qtyRaw = row.querySelector('.ci-qty').value;
+    const priceRaw = row.querySelector('.ci-price').value;
+    if (!name && !priceRaw) continue;
+    if (!name) return { error: '有品項沒填品名' };
+    const qty = parseFloat(qtyRaw);
+    const unit_price = parseFloat(priceRaw);
+    if (!(qty > 0)) return { error: '「' + name + '」的數量必須大於 0' };
+    if (!(unit_price >= 0)) return { error: '「' + name + '」請填寫單價' };
+    items.push({ name, qty, unit_price });
+  }
+  return { items };
+}
+
+function coItemsTotal(){
+  let sum = 0;
+  document.querySelectorAll('#co_items .co-item-row').forEach(function(row){
+    const q = parseFloat(row.querySelector('.ci-qty').value) || 0;
+    const p = parseFloat(row.querySelector('.ci-price').value) || 0;
+    const sub = q * p;
+    row.querySelector('.ci-sub').textContent = coFmt(sub);
+    if (row.querySelector('.ci-name').value.trim() || p) sum += sub;
+  });
+  return coRound2(sum);
+}
+
+function coSyncAmount(){
+  const total = coItemsTotal();
+  document.getElementById('co_items_total').textContent = coFmt(total);
+  const mode = document.querySelector('input[name="co_amount_mode"]:checked').value;
+  const amountEl = document.getElementById('co_amount');
+  if (mode === 'items'){
+    amountEl.readOnly = true;
+    amountEl.value = total > 0 ? total : '';
+    amountEl.placeholder = '填寫下方品項後自動加總';
+  } else {
+    amountEl.readOnly = false;
+    amountEl.placeholder = '';
+  }
+  const cm = document.getElementById('co_coupon_msg');
+  if (cm) cm.textContent = '';
+}
+
+function coResetItems(){
+  document.getElementById('co_items').innerHTML = '';
+  coSyncAmount();
+}
+
 async function createOrder(){
+  const amountMode = document.querySelector('input[name="co_amount_mode"]:checked').value;
+  const collected = coCollectItems();
+  const msg = document.getElementById('co_msg');
+  msg.textContent=''; msg.className='msg';
+  if (collected.error){ msg.textContent = collected.error; msg.className='msg err'; return; }
+  const items = collected.items;
+  if (amountMode === 'items'){
+    if (!items.length){ msg.textContent='請至少填寫一個品項，或改用「手動輸入金額」'; msg.className='msg err'; return; }
+    document.getElementById('co_amount').value = coItemsTotal();
+  }
   const amount = parseFloat(document.getElementById('co_amount').value);
   const member_id = document.getElementById('co_member').value || null;
   const non_member_name = document.getElementById('co_nonmember_name').value.trim();
@@ -1602,18 +1714,20 @@ async function createOrder(){
   const payment_method = document.getElementById('co_method').value || null;
   const store_brand = payment_method === 'store_barcode' ? (document.getElementById('co_store').value || null) : null;
   const coupon_code = document.getElementById('co_coupon').value.trim() || null;
-  const msg = document.getElementById('co_msg');
-  msg.textContent=''; msg.className='msg';
   if (!amount || amount<=0){ msg.textContent='請輸入正確金額'; msg.className='msg err'; return; }
   try{
-    const r = await api('/api/admin/orders', {method:'POST', body: JSON.stringify({amount, member_id, non_member_name, platform, payment_method, store_brand, coupon_code})});
+    const r = await api('/api/admin/orders', {method:'POST', body: JSON.stringify({amount, amount_mode: amountMode, items, member_id, non_member_name, platform, payment_method, store_brand, coupon_code})});
     document.getElementById('co_result').classList.remove('hidden');
     document.getElementById('co_link').value = r.link;
     document.getElementById('co_coupon').value = '';
     document.getElementById('co_coupon_msg').textContent = '';
+    coResetItems();
+    if (amountMode === 'manual') document.getElementById('co_amount').value = '';
     const discountNote = r.discount ? \`，已折抵 $\${r.discount}，實付 $\${r.amount}\` : '';
-    msg.textContent = \`訂單編號 \${r.order_no}，連結已建立\${discountNote}，3 小時內有效\`;
+    const itemsNote = r.items_count ? \`，已新增 \${r.items_count} 個品項明細\` : '';
+    msg.textContent = \`訂單編號 \${r.order_no}，連結已建立\${discountNote}\${itemsNote}，3 小時內有效\`;
     msg.className='msg ok';
+    if (r.items_error){ msg.textContent += \`（注意：品項明細寫入失敗：\${r.items_error}）\`; msg.className='msg err'; }
   }catch(e){ msg.textContent = e.message; msg.className='msg err'; }
 }
 
