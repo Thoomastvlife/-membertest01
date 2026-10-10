@@ -183,7 +183,13 @@ ${THEME_HEAD}
     table td .btn.small{margin:2px 0 2px 6px;}
   }
 ${THEME_CSS_ADMIN}
+  .order-items-row td{padding:0 !important;border-bottom:2px solid var(--accent);}
+  @media (max-width:700px){.order-items-row td{display:block !important;}}
+  .stat-row-clickable{cursor:pointer;}
+  .stat-row-clickable:hover td{background:var(--bg);}
+  .stat-row-clickable.selected td{background:#eef3ff;}
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 </head>
 <body>
 
@@ -863,6 +869,20 @@ ${THEME_CSS_ADMIN}
       <button class="btn secondary" onclick="closeComplete()">取消</button>
     </div>
     <div id="cpl_msg" class="msg"></div>
+  </div>
+</div>
+
+<div id="sendDetailModal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <h2>寄送訂單明細 <span id="sde_order_no" style="font-size:14px;color:var(--muted);"></span></h2>
+    <p style="margin:0 0 12px;font-size:14px;color:var(--muted);">將訂單資訊及品項明細（含付款/交貨狀態）寄送給客戶</p>
+    <label>收件信箱（留空則使用會員信箱）</label>
+    <input id="sde_email" type="email" placeholder="例如 customer@gmail.com（選填）" />
+    <div style="display:flex;gap:8px;margin-top:14px;">
+      <button class="btn" id="sde_ok" onclick="submitSendDetail()">寄送</button>
+      <button class="btn secondary" onclick="closeSendDetailModal()">取消</button>
+    </div>
+    <div id="sde_msg" class="msg"></div>
   </div>
 </div>
 
@@ -1775,6 +1795,7 @@ function renderOrders(){
       actions += \`<button class="btn secondary small" onclick="uncompleteOrder(\${o.id})">取消結案</button>\`;
     }
     actions += \`<button class="btn danger small need-orders_delete" onclick="deleteOrder(\${o.id}, \${o.status==='paid'})">刪除</button>\`;
+    actions += \`<button class="btn secondary small" onclick="toggleOrderItems(\${o.id}, this)" data-open="0">📋 明細</button>\`;
 
     let proofInfo = '';
     if (o.proof_last_digits) proofInfo += \`末碼 \${o.proof_last_digits}<br/>\`;
@@ -1806,8 +1827,178 @@ function renderOrders(){
       <td data-label="核對資訊">\${proofInfo}</td>
       <td data-label="備註"><input class="ord-note-input" value="\${escapeHtml(o.admin_note||'')}" placeholder="內部備註" style="width:130px;font-size:12px;padding:5px 7px;" onblur="saveOrderNote(\${o.id}, this)" onkeydown="if(event.key==='Enter'){this.blur();}" /></td>
       <td data-label="操作">\${actions}</td>
+    </tr>
+    <tr id="order-items-row-\${o.id}" class="hidden order-items-row" style="background:var(--bg);">
+      <td colspan="14" style="padding:0;">
+        <div id="order-items-\${o.id}" style="padding:14px 18px;"></div>
+      </td>
     </tr>\`;
   }).join('') || ('<tr><td colspan="14">' + (orderSearchActive ? '沒有符合條件的訂單' : (hideCompleted && ordersCache.length ? '沒有未結案的訂單（已勾選隱藏已結案訂單）' : '本月尚無訂單')) + '</td></tr>');
+}
+
+// ---- 訂單明細品項 ----
+async function toggleOrderItems(orderId, btn){
+  const row = document.getElementById('order-items-row-' + orderId);
+  if (!row) return;
+  const isOpen = btn.getAttribute('data-open') === '1';
+  if (isOpen) {
+    row.classList.add('hidden');
+    btn.setAttribute('data-open', '0');
+    btn.textContent = '📋 明細';
+  } else {
+    row.classList.remove('hidden');
+    btn.setAttribute('data-open', '1');
+    btn.textContent = '📋 收起';
+    await loadOrderItems(orderId);
+  }
+}
+
+async function loadOrderItems(orderId){
+  const container = document.getElementById('order-items-' + orderId);
+  if (!container) return;
+  container.innerHTML = '<span style="color:var(--muted);font-size:13px;">載入中…</span>';
+  try {
+    const items = await api('/api/admin/orders/' + orderId + '/items');
+    renderOrderItems(orderId, items);
+  } catch(e) {
+    container.innerHTML = '<span style="color:var(--danger);font-size:13px;">載入失敗：' + escapeHtml(e.message) + '</span>';
+  }
+}
+
+function renderOrderItems(orderId, items){
+  const container = document.getElementById('order-items-' + orderId);
+  if (!container) return;
+  const o = ordersCache.find(function(x){ return x.id === orderId; });
+  const orderNo = o ? o.order_no : ('#' + orderId);
+  const total = items.reduce(function(s, it){ return s + it.qty * it.unit_price; }, 0);
+  const itemRows = items.length ? items.map(function(it){
+    const sub = (it.qty * it.unit_price).toLocaleString();
+    const dlBtn = it.is_delivered
+      ? \`<button class="btn secondary small" style="font-size:11px;padding:3px 8px;" onclick="toggleDelivery(\${it.id}, \${orderId}, false)">✓ 已交貨</button>\`
+      : \`<button class="btn small" style="font-size:11px;padding:3px 8px;background:#f59e0b;" onclick="toggleDelivery(\${it.id}, \${orderId}, true)">◎ 未交貨</button>\`;
+    return \`<tr>
+      <td style="padding:6px 8px;font-size:13px;">\${escapeHtml(it.name)}\${it.note ? '<br/><span style="color:var(--muted);font-size:11px;">' + escapeHtml(it.note) + '</span>' : ''}</td>
+      <td style="padding:6px 8px;font-size:13px;text-align:right;">\${it.qty}</td>
+      <td style="padding:6px 8px;font-size:13px;text-align:right;">$\${it.unit_price.toLocaleString()}</td>
+      <td style="padding:6px 8px;font-size:13px;text-align:right;font-weight:600;">$\${sub}</td>
+      <td style="padding:6px 8px;font-size:13px;">\${dlBtn}</td>
+      <td style="padding:6px 8px;font-size:13px;"><button class="btn danger small" style="font-size:11px;padding:3px 8px;" onclick="deleteOrderItem(\${it.id}, \${orderId})">刪除</button></td>
+    </tr>\`;
+  }).join('') : \`<tr><td colspan="6" style="color:var(--muted);font-size:13px;padding:8px;">尚無品項明細</td></tr>\`;
+
+  container.innerHTML = \`
+    <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:var(--text);">📋 訂單 \${orderNo} 明細</div>
+    <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:10px;">
+      <thead>
+        <tr style="background:var(--bg);">
+          <th style="padding:6px 8px;text-align:left;font-weight:600;color:var(--muted);">品名</th>
+          <th style="padding:6px 8px;text-align:right;font-weight:600;color:var(--muted);">數量</th>
+          <th style="padding:6px 8px;text-align:right;font-weight:600;color:var(--muted);">單價</th>
+          <th style="padding:6px 8px;text-align:right;font-weight:600;color:var(--muted);">小計</th>
+          <th style="padding:6px 8px;font-weight:600;color:var(--muted);">交貨</th>
+          <th style="padding:6px 8px;"></th>
+        </tr>
+      </thead>
+      <tbody>\${itemRows}</tbody>
+      \${items.length ? \`<tfoot><tr style="background:var(--bg);"><td colspan="3" style="padding:6px 8px;font-weight:700;font-size:13px;">合計</td><td style="padding:6px 8px;font-weight:700;font-size:13px;text-align:right;">$\${total.toLocaleString()}</td><td colspan="2"></td></tr></tfoot>\` : ''}
+    </table>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:8px;">
+      <div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:3px;">品名 *</div>
+        <input id="oi_name_\${orderId}" placeholder="品名" style="width:150px;font-size:13px;padding:5px 8px;" />
+      </div>
+      <div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:3px;">數量</div>
+        <input id="oi_qty_\${orderId}" type="number" min="0.01" step="any" value="1" style="width:70px;font-size:13px;padding:5px 8px;" />
+      </div>
+      <div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:3px;">單價</div>
+        <input id="oi_price_\${orderId}" type="number" min="0" step="any" value="0" style="width:90px;font-size:13px;padding:5px 8px;" />
+      </div>
+      <div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:3px;">備註（選填）</div>
+        <input id="oi_note_\${orderId}" placeholder="選填" style="width:120px;font-size:13px;padding:5px 8px;" />
+      </div>
+      <button class="btn small" style="margin-top:0;padding:6px 12px;font-size:13px;" onclick="addOrderItem(\${orderId})">＋ 新增品項</button>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px;">
+      <button class="btn secondary small" style="font-size:12px;" onclick="sendOrderDetailModal(\${orderId})">✉ 寄送明細給客戶</button>
+      <span id="oi_msg_\${orderId}" class="msg" style="font-size:12px;"></span>
+    </div>
+  \`;
+}
+
+async function addOrderItem(orderId){
+  const nameEl = document.getElementById('oi_name_' + orderId);
+  const qtyEl = document.getElementById('oi_qty_' + orderId);
+  const priceEl = document.getElementById('oi_price_' + orderId);
+  const noteEl = document.getElementById('oi_note_' + orderId);
+  const msg = document.getElementById('oi_msg_' + orderId);
+  const name = nameEl.value.trim();
+  if (!name) { msg.textContent = '請填寫品名'; msg.className = 'msg err'; return; }
+  try {
+    await api('/api/admin/orders/' + orderId + '/items', {
+      method: 'POST',
+      body: JSON.stringify({ name, qty: parseFloat(qtyEl.value)||1, unit_price: parseFloat(priceEl.value)||0, note: noteEl.value.trim() || null })
+    });
+    nameEl.value = ''; qtyEl.value = '1'; priceEl.value = '0'; noteEl.value = '';
+    msg.textContent = '已新增'; msg.className = 'msg ok';
+    setTimeout(function(){ if(msg) msg.textContent=''; }, 2000);
+    await loadOrderItems(orderId);
+  } catch(e) { msg.textContent = e.message; msg.className = 'msg err'; }
+}
+
+async function deleteOrderItem(itemId, orderId){
+  if (!confirm('確定要刪除此品項？')) return;
+  try {
+    await api('/api/admin/order-items/' + itemId, { method: 'DELETE' });
+    await loadOrderItems(orderId);
+  } catch(e) { alert('刪除失敗：' + e.message); }
+}
+
+async function toggleDelivery(itemId, orderId, deliver){
+  try {
+    await api('/api/admin/order-items/' + itemId + '/deliver', {
+      method: 'POST', body: JSON.stringify({ deliver })
+    });
+    await loadOrderItems(orderId);
+  } catch(e) { alert('操作失敗：' + e.message); }
+}
+
+let _sendDetailOrderId = null;
+function sendOrderDetailModal(orderId){
+  _sendDetailOrderId = orderId;
+  const o = ordersCache.find(function(x){ return x.id === orderId; });
+  const m = o && o.member_id ? membersCache.find(function(m){ return m.id === o.member_id; }) : null;
+  const defaultEmail = m && m.email ? m.email : '';
+  document.getElementById('sde_email').value = defaultEmail;
+  document.getElementById('sde_order_no').textContent = o ? o.order_no : ('#' + orderId);
+  document.getElementById('sde_msg').textContent = '';
+  document.getElementById('sde_msg').className = 'msg';
+  document.getElementById('sendDetailModal').classList.remove('hidden');
+}
+function closeSendDetailModal(){
+  document.getElementById('sendDetailModal').classList.add('hidden');
+  _sendDetailOrderId = null;
+}
+async function submitSendDetail(){
+  const email = document.getElementById('sde_email').value.trim();
+  const msg = document.getElementById('sde_msg');
+  const btn = document.getElementById('sde_ok');
+  btn.disabled = true;
+  msg.textContent = '寄送中…'; msg.className = 'msg';
+  try {
+    const r = await api('/api/admin/orders/' + _sendDetailOrderId + '/send-detail', {
+      method: 'POST', body: JSON.stringify({ email: email || undefined })
+    });
+    if (r.sent) {
+      msg.textContent = '✅ 已寄送到 ' + r.to; msg.className = 'msg ok';
+      setTimeout(function(){ closeSendDetailModal(); }, 1800);
+    } else {
+      msg.textContent = '❌ ' + (r.reason || '寄送失敗'); msg.className = 'msg err';
+      btn.disabled = false;
+    }
+  } catch(e) { msg.textContent = e.message; msg.className = 'msg err'; btn.disabled = false; }
 }
 
 async function saveOrderNote(id, inputEl){

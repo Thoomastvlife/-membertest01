@@ -1035,47 +1035,13 @@ function maskEmail(e) {
 }
 
 // 訂單完成通知信：回傳 { sent, reason?, to? }；任何失敗都只回報原因，不會讓「訂單完成」本身失敗
+// sendOrderCompleteEmail 現在直接呼叫 sendOrderDetailEmail（宣告在下方）
+// 利用 JS 的函式提升機制（兩者都是 async function 宣告，會自動 hoist）
 async function sendOrderCompleteEmail(env, order) {
+  // 委託給完整明細信，確認收件地址存在
   const ownAddr = order.notify_email_addr && String(order.notify_email_addr).trim() ? String(order.notify_email_addr).trim() : null;
   if (!order.member_id && !ownAddr) return { sent: false, reason: "此訂單不是會員訂單，沒有信箱可寄" };
-  const m = order.member_id
-    ? await env.DB.prepare("SELECT name, email FROM members WHERE id=?").bind(order.member_id).first()
-    : { name: order.member_name_snapshot, email: null };
-  const toAddr = ownAddr || (m && m.email ? String(m.email).trim() : "");
-  if (!toAddr) return { sent: false, reason: "此會員沒有填寫信箱，未寄送" };
-  const orderSender = env.EMAIL_FROM_ORDER || env.EMAIL_FROM;
-  if (!env.RESEND_API_KEY || !orderSender) return { sent: false, reason: "尚未設定寄信服務（RESEND_API_KEY / EMAIL_FROM_ORDER 或 EMAIL_FROM），未寄送" };
-
-  const orderNo = formatOrderNo(order.id);
-  const PM = { transfer: "轉帳", store_barcode: "超商條碼", taiwan_pay: "TWQR" };
-  const CVS = { seven: "7-11", family: "全家", hilife: "萊爾富" };
-  const rows = [["訂單編號", orderNo], ["訂單金額", "$" + order.amount]];
-  if (order.platform) rows.push(["儲值平台", platformLabelMap(await getPlatforms(env.DB))[order.platform] || order.platform]);
-  if (order.payment_method) {
-    rows.push(["付款方式", (PM[order.payment_method] || order.payment_method) + (order.store_brand && CVS[order.store_brand] ? "（" + CVS[order.store_brand] + "）" : "")]);
-  }
-  rows.push(["完成時間", new Date().toLocaleString("zh-TW", { timeZone: "Asia/Taipei", hour12: false })]);
-
-  const name = (m && m.name) || order.member_name_snapshot || "會員";
-  const tableHtml = rows
-    .map((r) => `<tr><td style="padding:6px 12px 6px 0;color:#767B8C;white-space:nowrap;">${escHtmlMail(r[0])}</td><td style="padding:6px 0;font-weight:600;">${escHtmlMail(r[1])}</td></tr>`)
-    .join("");
-  try {
-    await sendEmail(env, {
-      to: toAddr,
-      from: orderSender,
-      subject: `【訂單完成】${orderNo} 已完成`,
-      text: `${name} 您好，您的訂單 ${orderNo} 已完成，謝謝您的惠顧。\n` + rows.map((r) => `${r[0]}：${r[1]}`).join("\n"),
-      html: `<div style="font-family:-apple-system,'PingFang TC','Microsoft JhengHei',sans-serif;max-width:440px;margin:auto;padding:20px;">
-        <p style="font-size:16px;">${escHtmlMail(name)} 您好，</p>
-        <p>您的訂單已完成，謝謝您的惠顧！</p>
-        <table style="border-collapse:collapse;margin:12px 0;font-size:14px;">${tableHtml}</table>
-        <p style="color:#767B8C;font-size:13px;">這是系統自動發送的通知信，如有任何問題請直接聯絡店家。</p></div>`,
-    });
-    return { sent: true, to: maskEmail(toAddr) };
-  } catch (e) {
-    return { sent: false, reason: "寄信失敗：" + String(e.message || e).slice(0, 120) };
-  }
+  return sendOrderDetailEmail(env, order, {});
 }
 
 async function handleCompleteOrder(id, request, env) {
@@ -1102,6 +1068,180 @@ async function handleUncompleteOrder(id, env) {
   await env.DB.prepare("UPDATE orders SET is_completed=0, completed_at=NULL WHERE id=?").bind(id).run();
   await reconcileOrderById(env, id); // 取消結案 → 扣回回饋點數
   return json({ ok: true });
+}
+
+// ================= 訂單明細項目（order_items）=================
+
+async function getOrderItems(env, orderId) {
+  const { results } = await env.DB.prepare(
+    "SELECT * FROM order_items WHERE order_id=? ORDER BY sort_order ASC, id ASC"
+  ).bind(orderId).all();
+  return results || [];
+}
+
+// GET /api/admin/orders/:id/items
+async function handleListOrderItems(id, env) {
+  const order = await env.DB.prepare("SELECT id FROM orders WHERE id=?").bind(id).first();
+  if (!order) return json({ error: "找不到訂單" }, 404);
+  return json(await getOrderItems(env, id));
+}
+
+// POST /api/admin/orders/:id/items — 新增品項
+async function handleAddOrderItem(id, request, env) {
+  const order = await env.DB.prepare("SELECT id FROM orders WHERE id=?").bind(id).first();
+  if (!order) return json({ error: "找不到訂單" }, 404);
+  const body = await request.json().catch(() => ({}));
+  const name = String(body.name || "").trim();
+  if (!name) return json({ error: "品名不能為空" }, 400);
+  const qty = parseFloat(body.qty) || 1;
+  const unit_price = parseFloat(body.unit_price) || 0;
+  const note = body.note ? String(body.note).slice(0, 200) : null;
+  const { meta } = await env.DB.prepare(
+    "INSERT INTO order_items (order_id, name, qty, unit_price, note, sort_order, created_at) VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order),0)+1 FROM order_items WHERE order_id=?), datetime('now'))"
+  ).bind(id, name, qty, unit_price, note, id).run();
+  const item = await env.DB.prepare("SELECT * FROM order_items WHERE id=?").bind(meta.last_row_id).first();
+  return json(item);
+}
+
+// PATCH /api/admin/order-items/:itemId — 更新品項（品名/數量/單價/備註）
+async function handleUpdateOrderItem(itemId, request, env) {
+  const item = await env.DB.prepare("SELECT * FROM order_items WHERE id=?").bind(itemId).first();
+  if (!item) return json({ error: "找不到品項" }, 404);
+  const body = await request.json().catch(() => ({}));
+  const fields = [], binds = [];
+  if (body.name !== undefined) { fields.push("name=?"); binds.push(String(body.name).trim() || item.name); }
+  if (body.qty !== undefined) { fields.push("qty=?"); binds.push(parseFloat(body.qty) || 1); }
+  if (body.unit_price !== undefined) { fields.push("unit_price=?"); binds.push(parseFloat(body.unit_price) || 0); }
+  if (body.note !== undefined) { fields.push("note=?"); binds.push(body.note ? String(body.note).slice(0, 200) : null); }
+  if (!fields.length) return json({ ok: true });
+  await env.DB.prepare(`UPDATE order_items SET ${fields.join(",")} WHERE id=?`).bind(...binds, itemId).run();
+  return json(await env.DB.prepare("SELECT * FROM order_items WHERE id=?").bind(itemId).first());
+}
+
+// POST /api/admin/order-items/:itemId/deliver — 標記已交貨 / 取消交貨
+async function handleToggleDelivery(itemId, request, env) {
+  const item = await env.DB.prepare("SELECT * FROM order_items WHERE id=?").bind(itemId).first();
+  if (!item) return json({ error: "找不到品項" }, 404);
+  const body = await request.json().catch(() => ({}));
+  const deliver = body.deliver === true || body.deliver === 1 || body.deliver === "1";
+  await env.DB.prepare("UPDATE order_items SET is_delivered=?, delivered_at=? WHERE id=?")
+    .bind(deliver ? 1 : 0, deliver ? nowIso() : null, itemId).run();
+  return json({ ok: true, is_delivered: deliver ? 1 : 0 });
+}
+
+// DELETE /api/admin/order-items/:itemId
+async function handleDeleteOrderItem(itemId, env) {
+  const item = await env.DB.prepare("SELECT id FROM order_items WHERE id=?").bind(itemId).first();
+  if (!item) return json({ error: "找不到品項" }, 404);
+  await env.DB.prepare("DELETE FROM order_items WHERE id=?").bind(itemId).run();
+  return json({ ok: true });
+}
+
+// POST /api/admin/orders/:id/send-detail — 手動寄送訂單明細信給客戶
+async function handleSendOrderDetail(id, request, env) {
+  const order = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).first();
+  if (!order) return json({ error: "找不到訂單" }, 404);
+  const body = await request.json().catch(() => ({}));
+  const toOverride = body.email ? String(body.email).trim() : null;
+  const result = await sendOrderDetailEmail(env, order, { toOverride, forceItems: true });
+  return json(result);
+}
+
+// ---- 訂單明細信（含品項列表）----
+async function sendOrderDetailEmail(env, order, opts = {}) {
+  const { toOverride, forceItems } = opts;
+  const ownAddr = order.notify_email_addr && String(order.notify_email_addr).trim() ? String(order.notify_email_addr).trim() : null;
+  const m = order.member_id
+    ? await env.DB.prepare("SELECT name, email FROM members WHERE id=?").bind(order.member_id).first()
+    : { name: order.member_name_snapshot, email: null };
+  const toAddr = toOverride || ownAddr || (m && m.email ? String(m.email).trim() : "");
+  if (!toAddr) return { sent: false, reason: "沒有收件信箱可寄（此訂單沒有會員信箱，也未指定寄送地址）" };
+  const orderSender = env.EMAIL_FROM_ORDER || env.EMAIL_FROM;
+  if (!env.RESEND_API_KEY || !orderSender) return { sent: false, reason: "尚未設定寄信服務（RESEND_API_KEY / EMAIL_FROM_ORDER），未寄送" };
+
+  const items = await getOrderItems(env, order.id);
+  const orderNo = formatOrderNo(order.id);
+  const PM = { transfer: "轉帳", store_barcode: "超商條碼", taiwan_pay: "TWQR" };
+  const CVS = { seven: "7-11", family: "全家", hilife: "萊爾富" };
+  const name = (m && m.name) || order.member_name_snapshot || "會員";
+
+  // 付款狀態
+  const paidLabel = order.status === "paid" ? "✅ 已付款" : (["expired", "cancelled"].includes(order.status) ? "❌ 已取消/過期" : "⏳ 待付款");
+  const paidAt = order.paid_at ? new Date(order.paid_at + "Z").toLocaleString("zh-TW", { timeZone: "Asia/Taipei", hour12: false }) : null;
+  const completedLabel = order.is_completed ? "✅ 已結案" : "尚未結案";
+  const payMethod = order.payment_method ? (PM[order.payment_method] || order.payment_method) + (order.store_brand && CVS[order.store_brand] ? "（" + CVS[order.store_brand] + "）" : "") : "未指定";
+  const platformLabel = order.platform ? ((platformLabelMap(await getPlatforms(env.DB))[order.platform]) || order.platform) : "未指定";
+
+  // ---- 計算品項小計 ----
+  const itemsTotal = items.reduce((s, it) => s + it.qty * it.unit_price, 0);
+  const hasItems = items.length > 0;
+
+  // ---- HTML ----
+  const escM = (s) => String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  const infoRows = [
+    ["訂單編號", orderNo],
+    ["儲值平台", platformLabel],
+    ["付款方式", payMethod],
+    ["訂單金額", "$" + order.amount.toLocaleString()],
+    ["付款狀態", paidLabel + (paidAt ? "（" + paidAt + "）" : "")],
+    ["結案狀態", completedLabel],
+  ].map(r => `<tr><td style="padding:5px 14px 5px 0;color:#767B8C;white-space:nowrap;font-size:14px;">${escM(r[0])}</td><td style="padding:5px 0;font-weight:600;font-size:14px;">${escM(r[1])}</td></tr>`).join("");
+
+  let itemsHtml = "";
+  let itemsText = "";
+  if (hasItems) {
+    const headerBg = "#f4f5f7";
+    const deliveredBg = "#f0fdf4";
+    const undeliveredBg = "#fff";
+    const rows = items.map((it, i) => {
+      const sub = (it.qty * it.unit_price).toLocaleString();
+      const dl = it.is_delivered ? '<span style="color:#1f9d55;font-weight:600;">✓ 已交貨</span>' : '<span style="color:#f59e0b;font-weight:600;">◎ 未交貨</span>';
+      const bg = it.is_delivered ? deliveredBg : undeliveredBg;
+      return `<tr style="background:${bg};">
+        <td style="padding:7px 10px;border-bottom:1px solid #eee;font-size:13px;">${escM(it.name)}${it.note ? '<br/><span style="color:#9ca3af;font-size:12px;">' + escM(it.note) + '</span>' : ''}</td>
+        <td style="padding:7px 10px;border-bottom:1px solid #eee;font-size:13px;text-align:right;">${it.qty}</td>
+        <td style="padding:7px 10px;border-bottom:1px solid #eee;font-size:13px;text-align:right;">$${it.unit_price.toLocaleString()}</td>
+        <td style="padding:7px 10px;border-bottom:1px solid #eee;font-size:13px;text-align:right;font-weight:600;">$${sub}</td>
+        <td style="padding:7px 10px;border-bottom:1px solid #eee;font-size:13px;">${dl}</td>
+      </tr>`;
+    }).join("");
+    itemsHtml = `<h3 style="font-size:15px;margin:20px 0 8px;color:#1f2430;">訂單明細</h3>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid #e2e4e8;border-radius:6px;overflow:hidden;">
+        <thead><tr style="background:${headerBg};">
+          <th style="padding:7px 10px;text-align:left;font-size:13px;color:#6b7280;font-weight:600;">品名</th>
+          <th style="padding:7px 10px;text-align:right;font-size:13px;color:#6b7280;font-weight:600;">數量</th>
+          <th style="padding:7px 10px;text-align:right;font-size:13px;color:#6b7280;font-weight:600;">單價</th>
+          <th style="padding:7px 10px;text-align:right;font-size:13px;color:#6b7280;font-weight:600;">小計</th>
+          <th style="padding:7px 10px;text-align:left;font-size:13px;color:#6b7280;font-weight:600;">交貨</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+        <tfoot><tr style="background:#f8f9fb;">
+          <td colspan="3" style="padding:7px 10px;font-weight:700;font-size:14px;">合計</td>
+          <td style="padding:7px 10px;font-weight:700;font-size:14px;text-align:right;">$${itemsTotal.toLocaleString()}</td>
+          <td></td>
+        </tr></tfoot>
+      </table>`;
+    itemsText = "\n\n【訂單明細】\n" + items.map((it, i) =>
+      `  ${i+1}. ${it.name}　×${it.qty}　$${it.unit_price}　小計 $${(it.qty*it.unit_price).toFixed(0)}　${it.is_delivered ? "已交貨" : "未交貨"}` + (it.note ? `（${it.note}）` : "")
+    ).join("\n") + `\n合計：$${itemsTotal.toLocaleString()}`;
+  }
+
+  const subject = hasItems ? `【訂單明細】${orderNo}` : `【訂單資訊】${orderNo}`;
+  const htmlBody = `<div style="font-family:-apple-system,'PingFang TC','Microsoft JhengHei',sans-serif;max-width:500px;margin:auto;padding:20px;">
+    <p style="font-size:16px;margin-bottom:4px;">${escM(name)} 您好，</p>
+    <p style="color:#6b7280;font-size:14px;margin-top:0;">以下是您的訂單資訊${hasItems ? "及明細" : ""}：</p>
+    <table style="border-collapse:collapse;margin:12px 0;">${infoRows}</table>
+    ${itemsHtml}
+    <p style="color:#9ca3af;font-size:12px;margin-top:20px;">這是系統寄送的訂單通知，如有疑問請直接聯絡店家。</p>
+  </div>`;
+  const textBody = `${name} 您好，以下是您的訂單資訊：\n\n訂單編號：${orderNo}\n儲值平台：${platformLabel}\n付款方式：${payMethod}\n訂單金額：$${order.amount.toLocaleString()}\n付款狀態：${paidLabel}${paidAt ? "（" + paidAt + "）" : ""}\n結案狀態：${completedLabel}${itemsText}`;
+
+  try {
+    await sendEmail(env, { to: toAddr, from: orderSender, subject, html: htmlBody, text: textBody });
+    return { sent: true, to: maskEmail(toAddr) };
+  } catch (e) {
+    return { sent: false, reason: "寄信失敗：" + String(e.message || e).slice(0, 120) };
+  }
 }
 
 async function handleExport(request, env) {
@@ -2672,6 +2812,42 @@ export async function onRequest(context) {
           { action: "order.update_note", summary: `編輯訂單 #${noteMatch[1]} 的內部備註`, detail: sanitizeForLog(body) },
           handleUpdateOrderNote(noteMatch[1], request, env)
         );
+      }
+
+      // ---- 訂單明細品項 ----
+      const orderItemsMatch = path.match(/^\/api\/admin\/orders\/(\d+)\/items$/);
+      if (orderItemsMatch && method === "GET") return handleListOrderItems(orderItemsMatch[1], env);
+      if (orderItemsMatch && method === "POST") {
+        const body = await request.clone().json().catch(() => ({}));
+        return alog(env, session, request,
+          { action: "order.add_item", summary: `訂單 #${orderItemsMatch[1]} 新增品項「${body.name || ""}」` },
+          handleAddOrderItem(orderItemsMatch[1], request, env));
+      }
+      const orderItemMatch = path.match(/^\/api\/admin\/order-items\/(\d+)$/);
+      if (orderItemMatch && method === "PATCH") {
+        const body = await request.clone().json().catch(() => ({}));
+        return alog(env, session, request,
+          { action: "order.update_item", summary: `更新品項 #${orderItemMatch[1]}` },
+          handleUpdateOrderItem(orderItemMatch[1], request, env));
+      }
+      if (orderItemMatch && method === "DELETE") {
+        return alog(env, session, request,
+          { action: "order.delete_item", summary: `刪除品項 #${orderItemMatch[1]}` },
+          handleDeleteOrderItem(orderItemMatch[1], env));
+      }
+      const orderItemDeliverMatch = path.match(/^\/api\/admin\/order-items\/(\d+)\/deliver$/);
+      if (orderItemDeliverMatch && method === "POST") {
+        const body = await request.clone().json().catch(() => ({}));
+        return alog(env, session, request,
+          { action: "order.item_deliver", summary: `品項 #${orderItemDeliverMatch[1]} 交貨狀態變更` },
+          handleToggleDelivery(orderItemDeliverMatch[1], request, env));
+      }
+      const sendDetailMatch = path.match(/^\/api\/admin\/orders\/(\d+)\/send-detail$/);
+      if (sendDetailMatch && method === "POST") {
+        const body = await request.clone().json().catch(() => ({}));
+        return alog(env, session, request,
+          { action: "order.send_detail", summary: `手動寄送訂單 #${sendDetailMatch[1]} 明細信` },
+          handleSendOrderDetail(sendDetailMatch[1], request, env));
       }
 
       if (path === "/api/admin/platforms" && method === "GET") return handleAdminListPlatforms(env);
