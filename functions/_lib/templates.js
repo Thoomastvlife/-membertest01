@@ -891,6 +891,7 @@ ${THEME_CSS_ADMIN}
       <span>同時寄信通知會員訂單已完成</span>
     </label>
     <small class="hint" id="cpl_email_note" style="display:block;margin-top:6px;">會寄到會員資料中的信箱；非會員或沒有信箱的訂單不會寄出。</small>
+    <small class="hint" style="display:block;margin-top:6px;">按下確定後，這張訂單的所有品項明細會自動標記為「已交貨」。</small>
     <div style="display:flex;gap:8px;margin-top:14px;">
       <button class="btn" id="cpl_ok" onclick="submitComplete()">確定完成</button>
       <button class="btn secondary" onclick="closeComplete()">取消</button>

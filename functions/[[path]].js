@@ -1110,6 +1110,15 @@ async function handleCompleteOrder(id, request, env) {
   await env.DB.prepare("UPDATE orders SET is_completed=1, completed_at=? WHERE id=?").bind(completedAt, id).run();
   await reconcileOrderById(env, id); // 訂單完成 → 發放回饋點數
 
+  // 訂單完成 → 所有品項自動標記為「已交貨」（已經是已交貨的品項保留原本的交貨時間）。
+  // 要在寄信之前做，這樣通知信裡的明細才會顯示「已交貨」。品項表有問題也不影響訂單完成本身。
+  try {
+    await env.DB.prepare("UPDATE order_items SET is_delivered=1, delivered_at=? WHERE order_id=? AND is_delivered=0")
+      .bind(completedAt, id).run();
+  } catch (err) {
+    console.error("auto deliver order_items failed", err);
+  }
+
   // 勾選了才寄信；已經是完成狀態的訂單（例如重複點擊）不重複寄
   // 注意：信件內容要用「更新後」的訂單資料，否則會顯示成「尚未結案」
   let email = null;
