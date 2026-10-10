@@ -130,18 +130,120 @@ async function itemLogLabel(env, itemId) {
   return `品項 #${itemId}`;
 }
 
+// ---- 操作紀錄：把 ID 換成看得懂的名稱 ----
+// 在「執行操作之前」一次查好（刪除後就查不到了）；查不到的退回顯示 ID。回傳的物件取不到的欄位會是空字串。
+async function resolveLogLabels(env, path, method) {
+  const L = {};
+  if (method === "GET") return L;
+  const one = async (sql, id) => {
+    try { return await env.DB.prepare(sql).bind(id).first(); } catch { return null; }
+  };
+  let m;
+  if ((m = path.match(/^\/api\/admin\/orders\/(\d+)(?:\/|$)/))) {
+    const r = await one("SELECT id, member_name_snapshot, amount FROM orders WHERE id=?", m[1]);
+    L.order = r ? `訂單 ${formatOrderNo(r.id)}（${r.member_name_snapshot}，$${r.amount}）` : `訂單 ${formatOrderNo(parseInt(m[1], 10))}`;
+  }
+  if ((m = path.match(/^\/api\/admin\/members\/(\d+)(?:\/|$)/))) {
+    const r = await one("SELECT name, account FROM members WHERE id=?", m[1]);
+    L.member = r ? `會員「${r.name}${r.account ? "（" + r.account + "）" : ""}」` : `會員 #${m[1]}`;
+  }
+  if ((m = path.match(/^\/api\/admin\/staff\/(\d+)(?:\/|$)/))) {
+    const r = await one("SELECT username FROM admins WHERE id=?", m[1]);
+    L.staff = r ? `員工帳號「${r.username}」` : `員工帳號 #${m[1]}`;
+  }
+  if ((m = path.match(/^\/api\/admin\/coupons\/(\d+)$/))) {
+    const r = await one("SELECT code FROM coupons WHERE id=?", m[1]);
+    L.coupon = r ? `優惠碼「${r.code}」` : `優惠碼 #${m[1]}`;
+  }
+  if ((m = path.match(/^\/api\/admin\/points\/items\/(\d+)$/))) {
+    const r = await one("SELECT name FROM points_items WHERE id=?", m[1]);
+    L.pointItem = r ? `點數商城商品「${r.name}」` : `點數商城商品 #${m[1]}`;
+  }
+  if ((m = path.match(/^\/api\/admin\/points\/redemptions\/(\d+)\//))) {
+    const r = await one(
+      "SELECT r.item_name, r.cost, mm.name AS member_name FROM points_redemptions r LEFT JOIN members mm ON mm.id=r.member_id WHERE r.id=?", m[1]);
+    L.redemption = r ? `兌換單（${r.member_name || "已刪除會員"} 兌換「${r.item_name}」${r.cost} 點）` : `兌換單 #${m[1]}`;
+  }
+  if ((m = path.match(/^\/api\/admin\/live\/rounds\/(\d+)(?:\/|$)/))) {
+    const r = await one("SELECT name FROM live_rounds WHERE id=?", m[1]);
+    L.round = r ? `直播場次「${r.name}」` : `直播場次 #${m[1]}`;
+  }
+  if ((m = path.match(/^\/api\/admin\/live\/items\/(\d+)$/))) {
+    const r = await one("SELECT i.code, i.name, rr.name AS round_name FROM live_items i LEFT JOIN live_rounds rr ON rr.id=i.round_id WHERE i.id=?", m[1]);
+    L.liveItem = r ? `直播商品「${r.code} ${r.name}」（場次「${r.round_name || "?"}」）` : `直播商品 #${m[1]}`;
+  }
+  if ((m = path.match(/^\/api\/admin\/live\/comments\/(\d+)(?:\/|$)/))) {
+    const r = await one("SELECT c.tiktok_id, c.raw, rr.name AS round_name FROM live_comments c LEFT JOIN live_rounds rr ON rr.id=c.round_id WHERE c.id=?", m[1]);
+    const raw = r && r.raw ? String(r.raw).slice(0, 30) : "";
+    L.liveComment = r ? `直播留言（場次「${r.round_name || "?"}」${r.tiktok_id ? " @" + r.tiktok_id : ""}${raw ? "：" + raw : ""}）` : `直播留言 #${m[1]}`;
+  }
+  return new Proxy(L, { get: (target, key) => (key in target ? target[key] : "") });
+}
+
+// 操作者標記：後台員工用 session 本身；會員自助操作、客人（付款頁）、未登入嘗試用固定格式，方便在紀錄裡分辨
+const memberActor = (session) => ({ adminId: null, username: `會員 ${(session && session.account) || "?"}` });
+const GUEST_ACTOR = { adminId: null, username: "(客人)" };
+const ANON_ACTOR = { adminId: null, username: "(未登入)" };
+
+// 登入失敗紀錄：同一 IP 10 分鐘內最多記 20 筆，避免被機器人狂試把紀錄表灌爆
+async function logAuthFailure(env, request, action, summary) {
+  try {
+    const ip = request.headers.get("CF-Connecting-IP");
+    if (ip) {
+      const row = await env.DB.prepare(
+        "SELECT COUNT(*) AS c FROM admin_logs WHERE ip=? AND action IN ('auth.admin_login_fail','auth.member_login_fail') AND created_at >= datetime('now','-10 minutes')"
+      ).bind(ip).first();
+      if (row && row.c >= 20) return;
+    }
+  } catch {
+    // 查詢失敗就照常寫入
+  }
+  await logAdminAction(env, ANON_ACTOR, request, { action, summary });
+}
+
 // 後台「操作紀錄」頁籤：列出 admin_logs，支援關鍵字搜尋跟依帳號篩選，新→舊排序、分頁
 async function handleListAdminLogs(request, env) {
   const url = new URL(request.url);
   const { page, size, offset } = parsePage(url, 50, 200);
   const q = (url.searchParams.get("q") || "").trim();
   const adminIdParam = url.searchParams.get("admin_id");
+  const category = url.searchParams.get("category");
+  const dateFrom = url.searchParams.get("date_from");
+  const dateTo = url.searchParams.get("date_to");
 
   const where = [];
   const binds = [];
   if (adminIdParam && /^\d+$/.test(adminIdParam)) {
     where.push("admin_id=?");
     binds.push(parseInt(adminIdParam, 10));
+  } else if (adminIdParam === "member") {
+    where.push("admin_username LIKE '會員 %'");
+  } else if (adminIdParam === "guest") {
+    where.push("admin_username IN ('(客人)','(未登入)')");
+  }
+  // 類別：依 action 前綴分組
+  const LOG_CATEGORIES = {
+    auth: ["auth.%"],
+    order: ["order.%", "guest.%", "self.order%"],
+    member: ["member.%", "self.profile", "self.tiktok"],
+    points: ["points.%", "self.redeem"],
+    live: ["live.%"],
+    settings: ["settings.%", "announcement.%", "rates.%", "coupon.%", "platform.%", "payment_methods.%"],
+    staff: ["staff.%"],
+    data: ["data.%"],
+  };
+  if (category && LOG_CATEGORIES[category]) {
+    where.push("(" + LOG_CATEGORIES[category].map(() => "action LIKE ?").join(" OR ") + ")");
+    binds.push(...LOG_CATEGORIES[category]);
+  }
+  // 日期（台灣時間）：資料庫存的是 UTC，所以要減 8 小時
+  if (dateFrom && /^\d{4}-\d{2}-\d{2}$/.test(dateFrom)) {
+    where.push("created_at >= datetime(?, '-8 hours')");
+    binds.push(dateFrom + " 00:00:00");
+  }
+  if (dateTo && /^\d{4}-\d{2}-\d{2}$/.test(dateTo)) {
+    where.push("created_at <= datetime(?, '-8 hours')");
+    binds.push(dateTo + " 23:59:59");
   }
   if (q) {
     where.push("(summary LIKE ? OR admin_username LIKE ? OR action LIKE ? OR detail LIKE ?)");
@@ -875,6 +977,7 @@ async function handleCreateOrder(request, env) {
     amount: finalAmount,
     discount: couponResult ? couponResult.discount : 0,
     order_no: formatOrderNo(insertResult.meta.last_row_id),
+    member_name: memberNameSnapshot,
     items_count: itemsCount,
     ...(itemsError ? { items_error: itemsError } : {}),
   });
@@ -2451,7 +2554,7 @@ async function handleAdminDeletePointItem(id, env) {
 async function handleAdminListRedemptions(request, env) {
   const url = new URL(request.url);
   const status = url.searchParams.get("status");
-  const { page, size, offset } = parsePage(url, 10);
+  const { page, size, offset } = parsePage(url, 50);
   let where = "";
   const binds = [];
   if (status && ["pending", "fulfilled", "rejected"].includes(status)) {
@@ -2597,9 +2700,33 @@ export async function onRequest(context) {
 
     // ---- Public API ----
     if (path === "/api/setup-status" && method === "GET") return handleSetupStatus(env);
-    if (path === "/api/setup-admin" && method === "POST") return handleSetupAdmin(request, env);
-    if (path === "/api/admin/login" && method === "POST") return handleLogin(request, env);
-    if (path === "/api/admin/logout" && method === "POST") return handleLogout();
+    if (path === "/api/setup-admin" && method === "POST") {
+      const body = await request.clone().json().catch(() => ({}));
+      const uname = String(body.username || "").trim().slice(0, 60);
+      const res = await handleSetupAdmin(request, env);
+      if (res.status < 400) {
+        await logAdminAction(env, { adminId: null, username: uname || "(未知帳號)" }, request, { action: "auth.admin_setup", summary: `建立第一個管理員帳號「${uname}」` });
+      }
+      return res;
+    }
+    if (path === "/api/admin/login" && method === "POST") {
+      const body = await request.clone().json().catch(() => ({}));
+      const uname = String(body.username || "").trim().slice(0, 60);
+      const res = await handleLogin(request, env);
+      if (res.status < 400) {
+        let a = null;
+        try { a = await env.DB.prepare("SELECT id, username FROM admins WHERE username=?").bind(uname).first(); } catch { /* 查不到就用輸入的帳號 */ }
+        await logAdminAction(env, { adminId: a ? a.id : null, username: a ? a.username : uname }, request, { action: "auth.admin_login", summary: "登入後台" });
+      } else {
+        await logAuthFailure(env, request, "auth.admin_login_fail", `後台登入失敗（嘗試帳號「${uname}」）`);
+      }
+      return res;
+    }
+    if (path === "/api/admin/logout" && method === "POST") {
+      const who = await requireAdmin(request, env);
+      if (who) await logAdminAction(env, who, request, { action: "auth.admin_logout", summary: "登出後台" });
+      return handleLogout();
+    }
 
     // 直播留言自動抓取：監聽程式用金鑰（X-Ingest-Key）送留言進來，不需要登入
     if (path === "/api/live/ingest" && method === "POST") return handleLiveIngest(request, env);
@@ -2617,19 +2744,63 @@ export async function onRequest(context) {
     // 這裡只回傳「這個碼折多少錢」，不會洩漏其他優惠碼資訊，所以不需要另外驗證登入身份。
     if (path === "/api/coupons/preview" && method === "POST") return handleCouponPreview(request, env);
 
-    if (path === "/api/member/login" && method === "POST") return handleMemberLogin(request, env);
+    if (path === "/api/member/login" && method === "POST") {
+      const body = await request.clone().json().catch(() => ({}));
+      const account = String(body.account || "").trim().slice(0, 60);
+      const res = await handleMemberLogin(request, env);
+      if (res.status < 400) {
+        let m = null;
+        try { m = await env.DB.prepare("SELECT name FROM members WHERE account=?").bind(account).first(); } catch { /* 查不到就只顯示帳號 */ }
+        await logAdminAction(env, { adminId: null, username: `會員 ${account}` }, request, {
+          action: "auth.member_login", summary: `會員「${m && m.name ? m.name + "（" + account + "）" : account}」登入`,
+        });
+      } else {
+        await logAuthFailure(env, request, "auth.member_login_fail", `會員登入失敗（嘗試帳號「${account}」）`);
+      }
+      return res;
+    }
     if (path === "/api/member/send-email-code" && method === "POST") return handleSendEmailCode(request, env);
-    if (path === "/api/member/register" && method === "POST") return handleMemberRegister(request, env);
-    if (path === "/api/member/logout" && method === "POST") return handleMemberLogout();
+    if (path === "/api/member/register" && method === "POST") {
+      const body = await request.clone().json().catch(() => ({}));
+      return alog(
+        env, { adminId: null, username: `會員 ${String(body.account || "").trim()}` }, request,
+        {
+          action: "auth.member_register",
+          summary: `會員註冊成功：「${String(body.name || "").trim()}（${String(body.account || "").trim()}）」，推薦碼 ${String(body.referral_code || "").trim().toUpperCase()}`,
+        },
+        handleMemberRegister(request, env)
+      );
+    }
+    if (path === "/api/member/logout" && method === "POST") {
+      const who = await requireMember(request, env);
+      if (who) await logAdminAction(env, memberActor(who), request, { action: "auth.member_logout", summary: `會員「${who.account}」登出` });
+      return handleMemberLogout();
+    }
 
     const orderTokenMatch = path.match(/^\/api\/order\/([a-f0-9]+)$/);
     if (orderTokenMatch && method === "GET") return handleGetOrderPublic(orderTokenMatch[1], env);
 
     const selectMethodMatch = path.match(/^\/api\/order\/([a-f0-9]+)\/select-method$/);
-    if (selectMethodMatch && method === "POST") return handleSelectMethod(selectMethodMatch[1], request, env);
+    if (selectMethodMatch && method === "POST") {
+      const body = await request.clone().json().catch(() => ({}));
+      const ord = await env.DB.prepare("SELECT id, member_name_snapshot, amount FROM orders WHERE token=?").bind(selectMethodMatch[1]).first().catch(() => null);
+      const PM_NAME = { transfer: "轉帳", store_barcode: "超商條碼", taiwan_pay: "TWQR" };
+      return alog(
+        env, GUEST_ACTOR, request,
+        { action: "guest.select_method", summary: `客人在付款頁選擇付款方式「${PM_NAME[body.method] || body.method || ""}」：${ord ? `訂單 ${formatOrderNo(ord.id)}（${ord.member_name_snapshot}，$${ord.amount}）` : "未知訂單"}` },
+        handleSelectMethod(selectMethodMatch[1], request, env)
+      );
+    }
 
     const proofMatch = path.match(/^\/api\/order\/([a-f0-9]+)\/proof$/);
-    if (proofMatch && method === "POST") return handleUploadProof(proofMatch[1], request, env);
+    if (proofMatch && method === "POST") {
+      const ord = await env.DB.prepare("SELECT id, member_name_snapshot, amount FROM orders WHERE token=?").bind(proofMatch[1]).first().catch(() => null);
+      return alog(
+        env, GUEST_ACTOR, request,
+        { action: "guest.upload_proof", summary: `客人上傳付款證明：${ord ? `訂單 ${formatOrderNo(ord.id)}（${ord.member_name_snapshot}，$${ord.amount}）` : "未知訂單"}` },
+        handleUploadProof(proofMatch[1], request, env)
+      );
+    }
 
     // ---- Member API ----
     if (path.startsWith("/api/member/")) {
@@ -2637,13 +2808,47 @@ export async function onRequest(context) {
       if (!session) return json({ error: "未登入或登入已過期" }, 401);
       if (path === "/api/member/me" && method === "GET") return handleMemberMe(session, env);
       if (path === "/api/member/orders" && method === "GET") return handleMemberOrders(session, request, env);
-      if (path === "/api/member/orders" && method === "POST") return handleMemberCreateOrder(session, request, env);
+      if (path === "/api/member/orders" && method === "POST") {
+        const body = await request.clone().json().catch(() => ({}));
+        return alog(
+          env, memberActor(session), request,
+          (r) => ({
+            action: "self.order_create",
+            summary: `會員「${session.account}」自助下單 ${(r && r.order_no) || ""}，金額 $${r && r.amount != null ? r.amount : body.amount}${r && r.points_used ? `（使用點數 ${r.points_used}）` : ""}${r && r.discount ? `（優惠碼折抵 $${r.discount}）` : ""}`,
+            detail: sanitizeForLog({ platform: body.platform, amount: body.amount, coupon_code: body.coupon_code, use_points: body.use_points }),
+          }),
+          handleMemberCreateOrder(session, request, env)
+        );
+      }
       if (path === "/api/member/announcement" && method === "GET") return handleMemberAnnouncement(env);
-      if (path === "/api/member/profile" && method === "POST") return handleMemberUpdateProfile(session, request, env);
-      if (path === "/api/member/tiktok" && method === "POST") return handleMemberBindTiktok(session, request, env);
+      if (path === "/api/member/profile" && method === "POST") {
+        const body = await request.clone().json().catch(() => ({}));
+        const changed = [body.phone !== undefined ? "手機" : null, body.email !== undefined ? "電子信箱" : null].filter(Boolean).join("、");
+        return alog(
+          env, memberActor(session), request,
+          { action: "self.profile", summary: `會員「${session.account}」修改個人資料（${changed || "—"}）` },
+          handleMemberUpdateProfile(session, request, env)
+        );
+      }
+      if (path === "/api/member/tiktok" && method === "POST") {
+        const body = await request.clone().json().catch(() => ({}));
+        return alog(
+          env, memberActor(session), request,
+          { action: "self.tiktok", summary: `會員「${session.account}」綁定 TikTok 帳號 @${String(body.tiktok_id || "").trim().replace(/^@/, "")}` },
+          handleMemberBindTiktok(session, request, env)
+        );
+      }
       if (path === "/api/member/profile/send-email-code" && method === "POST") return handleMemberProfileSendCode(session, request, env);
       if (path === "/api/member/points" && method === "GET") return handleMemberPoints(session, env);
-      if (path === "/api/member/points/redeem" && method === "POST") return handleMemberRedeem(session, request, env);
+      if (path === "/api/member/points/redeem" && method === "POST") {
+        const body = await request.clone().json().catch(() => ({}));
+        const it = await env.DB.prepare("SELECT name, cost FROM points_items WHERE id=?").bind(parseInt(body.item_id, 10) || 0).first().catch(() => null);
+        return alog(
+          env, memberActor(session), request,
+          { action: "self.redeem", summary: `會員「${session.account}」兌換點數商品「${it ? it.name : "#" + body.item_id}」${it ? `（${it.cost} 點）` : ""}` },
+          handleMemberRedeem(session, request, env)
+        );
+      }
       return json({ error: "Not found" }, 404);
     }
 
@@ -2662,6 +2867,9 @@ export async function onRequest(context) {
 
       if (path === "/api/admin/me" && method === "GET") return handleMe(session, access);
 
+      // 操作紀錄用的名稱（訂單編號、會員姓名、商品名…），在動手之前先查好
+      const L = await resolveLogLabels(env, path, method);
+
       if (path === "/api/admin/logs" && method === "GET") return handleListAdminLogs(request, env);
 
       if (path === "/api/admin/staff" && method === "GET") return handleListStaff(env, access);
@@ -2671,7 +2879,7 @@ export async function onRequest(context) {
           env, session, request,
           (resBody) => ({
             action: "staff.create",
-            summary: `新增員工帳號「${body.username || ""}」${resBody && resBody.id ? ` #${resBody.id}` : ""}`,
+            summary: `新增員工帳號「${body.username || ""}」`,
             detail: { permissions: (resBody && resBody.permissions) || [] },
           }),
           handleAddStaff(request, env)
@@ -2686,7 +2894,7 @@ export async function onRequest(context) {
           env, session, request,
           (resBody) => ({
             action: "staff.permissions",
-            summary: `設定員工「${(resBody && resBody.username) || "#" + staffPermMatch[1]}」的權限：` + (((resBody && resBody.permissions) || []).map(labelOf).join("、") || "（無）"),
+            summary: `設定${(resBody && resBody.username) ? `員工帳號「${resBody.username}」` : L.staff}的權限：` + (((resBody && resBody.permissions) || []).map(labelOf).join("、") || "（無）"),
             detail: { permissions: (resBody && resBody.permissions) || normalizePermissions(body.permissions) },
           }),
           handleSetStaffPermissions(staffPermMatch[1], request, env)
@@ -2697,7 +2905,7 @@ export async function onRequest(context) {
       if (staffPasswordMatch && method === "POST") {
         return alog(
           env, session, request,
-          { action: "staff.reset_password", summary: `重設員工帳號 #${staffPasswordMatch[1]} 的密碼` },
+          { action: "staff.reset_password", summary: `重設${L.staff}的登入密碼` },
           handleResetStaffPassword(staffPasswordMatch[1], request, env)
         );
       }
@@ -2706,7 +2914,7 @@ export async function onRequest(context) {
       if (staffDeleteMatch && method === "DELETE") {
         return alog(
           env, session, request,
-          { action: "staff.delete", summary: `刪除員工帳號 #${staffDeleteMatch[1]}` },
+          { action: "staff.delete", summary: `刪除${L.staff}` },
           handleDeleteStaff(staffDeleteMatch[1], session, env)
         );
       }
@@ -2718,7 +2926,7 @@ export async function onRequest(context) {
           env, session, request,
           (resBody) => ({
             action: "member.create",
-            summary: `新增會員「${body.name || ""}」${resBody && resBody.id ? ` #${resBody.id}` : ""}`,
+            summary: `新增會員「${body.name || ""}${body.account ? "（" + body.account + "）" : ""}」`,
             detail: sanitizeForLog(body),
           }),
           handleAddMember(request, env)
@@ -2729,7 +2937,7 @@ export async function onRequest(context) {
       if (memberDeleteMatch && method === "DELETE") {
         return alog(
           env, session, request,
-          { action: "member.delete", summary: `刪除會員 #${memberDeleteMatch[1]}` },
+          { action: "member.delete", summary: `刪除${L.member}` },
           handleDeleteMember(memberDeleteMatch[1], env)
         );
       }
@@ -2738,7 +2946,7 @@ export async function onRequest(context) {
       if (memberPasswordMatch && method === "POST") {
         return alog(
           env, session, request,
-          { action: "member.set_password", summary: `重設會員 #${memberPasswordMatch[1]} 的登入密碼` },
+          { action: "member.set_password", summary: `重設${L.member}的登入密碼` },
           handleSetMemberPassword(memberPasswordMatch[1], request, env)
         );
       }
@@ -2747,7 +2955,7 @@ export async function onRequest(context) {
         const body = await request.clone().json().catch(() => ({}));
         return alog(
           env, session, request,
-          { action: "member.update", summary: `編輯會員 #${memberDeleteMatch[1]} 資料`, detail: sanitizeForLog(body) },
+          { action: "member.update", summary: `編輯${L.member}資料`, detail: sanitizeForLog(body) },
           handleUpdateMember(memberDeleteMatch[1], request, env)
         );
       }
@@ -2797,14 +3005,14 @@ export async function onRequest(context) {
         const body = await request.clone().json().catch(() => ({}));
         return alog(
           env, session, request,
-          { action: "coupon.update", summary: `編輯優惠碼 #${couponMatch[1]}`, detail: sanitizeForLog(body) },
+          { action: "coupon.update", summary: `編輯${L.coupon}`, detail: sanitizeForLog(body) },
           handleUpdateCoupon(couponMatch[1], request, env)
         );
       }
       if (couponMatch && method === "DELETE") {
         return alog(
           env, session, request,
-          { action: "coupon.delete", summary: `刪除優惠碼 #${couponMatch[1]}` },
+          { action: "coupon.delete", summary: `刪除${L.coupon}` },
           handleDeleteCoupon(couponMatch[1], env)
         );
       }
@@ -2815,7 +3023,7 @@ export async function onRequest(context) {
           env, session, request,
           (resBody) => ({
             action: "order.create",
-            summary: `結帳櫃檯建立訂單${resBody && resBody.order_no ? `（${resBody.order_no}）` : ""}，金額 $${body.amount ?? ""}`,
+            summary: `結帳櫃檯建立訂單${resBody && resBody.order_no ? `（${resBody.order_no}）` : ""}，客戶「${(resBody && resBody.member_name) || "非會員"}」，金額 $${resBody && resBody.amount != null ? resBody.amount : (body.amount ?? "")}${resBody && resBody.discount ? `（優惠碼折抵 $${resBody.discount}）` : ""}${resBody && resBody.items_count ? `，品項 ${resBody.items_count} 項` : ""}`,
             detail: sanitizeForLog(body),
           }),
           handleCreateOrder(request, env)
@@ -2827,7 +3035,7 @@ export async function onRequest(context) {
       if (barcodeMatch && method === "POST") {
         return alog(
           env, session, request,
-          { action: "order.upload_barcode", summary: `上傳訂單 #${barcodeMatch[1]} 的條碼圖片` },
+          { action: "order.upload_barcode", summary: `上傳${L.order}的條碼圖片` },
           handleUploadBarcode(barcodeMatch[1], request, env)
         );
       }
@@ -2836,7 +3044,7 @@ export async function onRequest(context) {
       if (markPaidMatch && method === "POST") {
         return alog(
           env, session, request,
-          { action: "order.mark_paid", summary: `將訂單 #${markPaidMatch[1]} 標記為已完成付款` },
+          { action: "order.mark_paid", summary: `將${L.order}標記為已完成付款` },
           handleMarkPaid(markPaidMatch[1], env)
         );
       }
@@ -2845,7 +3053,7 @@ export async function onRequest(context) {
       if (cancelMatch && method === "POST") {
         return alog(
           env, session, request,
-          { action: "order.cancel", summary: `取消訂單 #${cancelMatch[1]}` },
+          { action: "order.cancel", summary: `取消${L.order}` },
           handleCancelOrder(cancelMatch[1], env)
         );
       }
@@ -2855,14 +3063,14 @@ export async function onRequest(context) {
         const body = await request.clone().json().catch(() => ({}));
         return alog(
           env, session, request,
-          { action: "order.correct", summary: `更正訂單 #${correctMatch[1]}`, detail: sanitizeForLog(body) },
+          { action: "order.correct", summary: `更正${L.order}`, detail: sanitizeForLog(body) },
           handleCorrectOrder(correctMatch[1], request, env)
         );
       }
       if (correctMatch && method === "DELETE") {
         return alog(
           env, session, request,
-          { action: "order.delete", summary: `刪除訂單 #${correctMatch[1]}（無法復原）` },
+          { action: "order.delete", summary: `刪除${L.order}（無法復原）` },
           handleDeleteOrder(correctMatch[1], env)
         );
       }
@@ -2871,7 +3079,7 @@ export async function onRequest(context) {
       if (completeMatch && method === "POST") {
         return alog(
           env, session, request,
-          { action: "order.complete", summary: `將訂單 #${completeMatch[1]} 標記為訂單完成（結案）` },
+          { action: "order.complete", summary: `將${L.order}標記為訂單完成（結案）` },
           handleCompleteOrder(completeMatch[1], request, env)
         );
       }
@@ -2880,7 +3088,7 @@ export async function onRequest(context) {
       if (uncompleteMatch && method === "POST") {
         return alog(
           env, session, request,
-          { action: "order.uncomplete", summary: `取消訂單 #${uncompleteMatch[1]} 的結案標記` },
+          { action: "order.uncomplete", summary: `取消${L.order}的結案標記` },
           handleUncompleteOrder(uncompleteMatch[1], env)
         );
       }
@@ -2890,7 +3098,7 @@ export async function onRequest(context) {
         const body = await request.clone().json().catch(() => ({}));
         return alog(
           env, session, request,
-          { action: "order.update_note", summary: `編輯訂單 #${noteMatch[1]} 的內部備註`, detail: sanitizeForLog(body) },
+          { action: "order.update_note", summary: `編輯${L.order}的內部備註`, detail: sanitizeForLog(body) },
           handleUpdateOrderNote(noteMatch[1], request, env)
         );
       }
@@ -2901,7 +3109,7 @@ export async function onRequest(context) {
       if (orderItemsMatch && method === "POST") {
         const body = await request.clone().json().catch(() => ({}));
         return alog(env, session, request,
-          { action: "order.add_item", summary: `訂單 ${formatOrderNo(parseInt(orderItemsMatch[1], 10))} 新增品項「${body.name || ""}」，數量 ${body.qty ?? 1}、單價 $${body.unit_price ?? 0}` },
+          { action: "order.add_item", summary: `${L.order} 新增品項「${body.name || ""}」，數量 ${body.qty ?? 1}、單價 $${body.unit_price ?? 0}` },
           handleAddOrderItem(orderItemsMatch[1], request, env));
       }
       const orderItemMatch = path.match(/^\/api\/admin\/order-items\/(\d+)$/);
@@ -2910,13 +3118,13 @@ export async function onRequest(context) {
         const itemLabel = await itemLogLabel(env, orderItemMatch[1]);
         const renamed = body.name !== undefined && String(body.name).trim() ? ` → 改名為「${String(body.name).trim()}」` : "";
         return alog(env, session, request,
-          { action: "order.update_item", summary: `更新品項 ${itemLabel}${renamed}`, detail: sanitizeForLog(body) },
+          { action: "order.update_item", summary: `更新品項${itemLabel}${renamed}`, detail: sanitizeForLog(body) },
           handleUpdateOrderItem(orderItemMatch[1], request, env));
       }
       if (orderItemMatch && method === "DELETE") {
         const itemLabel = await itemLogLabel(env, orderItemMatch[1]);
         return alog(env, session, request,
-          { action: "order.delete_item", summary: `刪除品項 ${itemLabel}` },
+          { action: "order.delete_item", summary: `刪除品項${itemLabel}` },
           handleDeleteOrderItem(orderItemMatch[1], env));
       }
       const orderItemDeliverMatch = path.match(/^\/api\/admin\/order-items\/(\d+)\/deliver$/);
@@ -2925,14 +3133,14 @@ export async function onRequest(context) {
         const itemLabel = await itemLogLabel(env, orderItemDeliverMatch[1]);
         const toDelivered = body.deliver === true || body.deliver === 1 || body.deliver === "1";
         return alog(env, session, request,
-          { action: "order.item_deliver", summary: `品項 ${itemLabel} 交貨狀態變更為「${toDelivered ? "已交貨" : "未交貨"}」` },
+          { action: "order.item_deliver", summary: `品項${itemLabel}交貨狀態變更為「${toDelivered ? "已交貨" : "未交貨"}」` },
           handleToggleDelivery(orderItemDeliverMatch[1], request, env));
       }
       const sendDetailMatch = path.match(/^\/api\/admin\/orders\/(\d+)\/send-detail$/);
       if (sendDetailMatch && method === "POST") {
         const body = await request.clone().json().catch(() => ({}));
         return alog(env, session, request,
-          { action: "order.send_detail", summary: `手動寄送訂單 #${sendDetailMatch[1]} 明細信` },
+          { action: "order.send_detail", summary: `手動寄送${L.order}明細信` },
           handleSendOrderDetail(sendDetailMatch[1], request, env));
       }
 
@@ -2984,11 +3192,13 @@ export async function onRequest(context) {
       if (path === "/api/admin/points/ledger" && method === "GET") return handleAdminPointsLedger(request, env);
       if (path === "/api/admin/points/adjust" && method === "POST") {
         const body = await request.clone().json().catch(() => ({}));
+        const adjM = await env.DB.prepare("SELECT name, account FROM members WHERE id=?").bind(parseInt(body.member_id, 10) || 0).first().catch(() => null);
+        const adjLabel = adjM ? `會員「${adjM.name}${adjM.account ? "（" + adjM.account + "）" : ""}」` : `會員 #${body.member_id ?? "?"}`;
         return alog(
           env, session, request,
           {
             action: "points.adjust",
-            summary: `手動調整會員 #${body.member_id ?? "?"} 點數 ${body.delta > 0 ? "+" : ""}${body.delta ?? ""}`,
+            summary: `手動調整${adjLabel}點數 ${body.delta > 0 ? "+" : ""}${body.delta ?? ""}${body.note ? `（${String(body.note).slice(0, 40)}）` : ""}`,
             detail: sanitizeForLog(body),
           },
           handleAdminPointsAdjust(request, env)
@@ -3008,14 +3218,14 @@ export async function onRequest(context) {
         const body = await request.clone().json().catch(() => ({}));
         return alog(
           env, session, request,
-          { action: "points.item_update", summary: `編輯點數商城商品 #${pointItemMatch[1]}`, detail: sanitizeForLog(body) },
+          { action: "points.item_update", summary: `編輯${L.pointItem}`, detail: sanitizeForLog(body) },
           handleAdminUpdatePointItem(pointItemMatch[1], request, env)
         );
       }
       if (pointItemMatch && method === "DELETE") {
         return alog(
           env, session, request,
-          { action: "points.item_delete", summary: `刪除點數商城商品 #${pointItemMatch[1]}` },
+          { action: "points.item_delete", summary: `刪除${L.pointItem}` },
           handleAdminDeletePointItem(pointItemMatch[1], env)
         );
       }
@@ -3025,7 +3235,7 @@ export async function onRequest(context) {
         const actionLabel = redemptionMatch[2] === "fulfill" ? "完成出貨" : "拒絕並退點";
         return alog(
           env, session, request,
-          { action: "points.redemption_" + redemptionMatch[2], summary: `將兌換單 #${redemptionMatch[1]} 標記為「${actionLabel}」` },
+          { action: "points.redemption_" + redemptionMatch[2], summary: `將${L.redemption}標記為「${actionLabel}」` },
           handleAdminProcessRedemption(redemptionMatch[1], redemptionMatch[2], request, env)
         );
       }
@@ -3046,7 +3256,7 @@ export async function onRequest(context) {
           env, session, request,
           (resBody) => ({
             action: "live.round_create",
-            summary: `建立直播場次「${body.name || ""}」${resBody && resBody.id ? ` #${resBody.id}` : ""}`,
+            summary: `建立直播場次「${body.name || ""}」`,
           }),
           handleLiveCreateRound(request, env)
         );
@@ -3057,14 +3267,14 @@ export async function onRequest(context) {
         const body = await request.clone().json().catch(() => ({}));
         return alog(
           env, session, request,
-          { action: "live.round_update", summary: `編輯直播場次 #${liveRoundMatch[1]}`, detail: sanitizeForLog(body) },
+          { action: "live.round_update", summary: `編輯${L.round}`, detail: sanitizeForLog(body) },
           handleLiveUpdateRound(liveRoundMatch[1], request, env)
         );
       }
       if (liveRoundMatch && method === "DELETE") {
         return alog(
           env, session, request,
-          { action: "live.round_delete", summary: `刪除直播場次 #${liveRoundMatch[1]}` },
+          { action: "live.round_delete", summary: `刪除${L.round}` },
           handleLiveDeleteRound(liveRoundMatch[1], env)
         );
       }
@@ -3075,28 +3285,28 @@ export async function onRequest(context) {
           const body = await request.clone().json().catch(() => ({}));
           return alog(
             env, session, request,
-            { action: "live.item_add", summary: `直播場次 #${rid} 新增商品「${body.code || ""} ${body.name || ""}」`, detail: sanitizeForLog(body) },
+            { action: "live.item_add", summary: `${L.round} 新增商品「${body.code || ""} ${body.name || ""}」`, detail: sanitizeForLog(body) },
             handleLiveAddItem(rid, request, env)
           );
         }
         if (liveRoundSub[2] === "comments") {
           return alog(
             env, session, request,
-            { action: "live.comments_add", summary: `直播場次 #${rid} 貼入留言` },
+            { action: "live.comments_add", summary: `${L.round} 貼入留言` },
             handleLiveAddComments(rid, request, env)
           );
         }
         if (liveRoundSub[2] === "rematch") {
           return alog(
             env, session, request,
-            { action: "live.rematch", summary: `直播場次 #${rid} 重新比對留言` },
+            { action: "live.rematch", summary: `${L.round} 重新比對留言` },
             handleLiveRematch(rid, env)
           );
         }
         if (liveRoundSub[2] === "create-orders") {
           return alog(
             env, session, request,
-            { action: "live.create_orders", summary: `直播場次 #${rid} 批次建立訂單` },
+            { action: "live.create_orders", summary: `${L.round} 批次建立訂單` },
             handleLiveCreateOrders(rid, request, env, handleCreateOrder)
           );
         }
@@ -3106,14 +3316,14 @@ export async function onRequest(context) {
         const body = await request.clone().json().catch(() => ({}));
         return alog(
           env, session, request,
-          { action: "live.item_update", summary: `編輯直播商品 #${liveItemMatch[1]}`, detail: sanitizeForLog(body) },
+          { action: "live.item_update", summary: `編輯${L.liveItem}`, detail: sanitizeForLog(body) },
           handleLiveUpdateItem(liveItemMatch[1], request, env)
         );
       }
       if (liveItemMatch && method === "DELETE") {
         return alog(
           env, session, request,
-          { action: "live.item_delete", summary: `刪除直播商品 #${liveItemMatch[1]}` },
+          { action: "live.item_delete", summary: `刪除${L.liveItem}` },
           handleLiveDeleteItem(liveItemMatch[1], env)
         );
       }
@@ -3121,7 +3331,7 @@ export async function onRequest(context) {
       if (liveCommentMatch && method === "DELETE") {
         return alog(
           env, session, request,
-          { action: "live.comment_delete", summary: `刪除直播留言 #${liveCommentMatch[1]}` },
+          { action: "live.comment_delete", summary: `刪除${L.liveComment}` },
           handleLiveDeleteComment(liveCommentMatch[1], env)
         );
       }
@@ -3132,27 +3342,34 @@ export async function onRequest(context) {
           const body = await request.clone().json().catch(() => ({}));
           return alog(
             env, session, request,
-            { action: "live.comment_bind", summary: `直播留言 #${liveCommentAct[1]}：${actLabel}`, detail: sanitizeForLog(body) },
+            { action: "live.comment_bind", summary: `${L.liveComment}：${actLabel}`, detail: sanitizeForLog(body) },
             handleLiveBindComment(liveCommentAct[1], request, env)
           );
         }
         if (liveCommentAct[2] === "guest") {
           return alog(
             env, session, request,
-            { action: "live.comment_guest", summary: `直播留言 #${liveCommentAct[1]}：${actLabel}` },
+            { action: "live.comment_guest", summary: `${L.liveComment}：${actLabel}` },
             handleLiveGuestComment(liveCommentAct[1], env)
           );
         }
         if (liveCommentAct[2] === "promote") {
           return alog(
             env, session, request,
-            { action: "live.comment_promote", summary: `直播留言 #${liveCommentAct[1]}：${actLabel}` },
+            { action: "live.comment_promote", summary: `${L.liveComment}：${actLabel}` },
             handleLivePromoteComment(liveCommentAct[1], env)
           );
         }
       }
 
-      if (path === "/api/admin/export" && method === "GET") return handleExport(request, env);
+      if (path === "/api/admin/export" && method === "GET") {
+        const exportMonth = new URL(request.url).searchParams.get("month") || new Date().toISOString().slice(0, 7);
+        return alog(
+          env, session, request,
+          { action: "data.export", summary: `匯出 ${exportMonth} 月份訂單資料` },
+          handleExport(request, env)
+        );
+      }
       if (path === "/api/admin/stats/monthly" && method === "GET") return handleMonthlyStats(request, env);
       if (path === "/api/admin/stats/monthly/orders" && method === "GET") return handleMonthlyMemberOrders(request, env);
       if (path === "/api/admin/dashboard" && method === "GET") return handleDashboard(env);

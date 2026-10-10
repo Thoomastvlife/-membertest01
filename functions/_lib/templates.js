@@ -824,11 +824,31 @@ ${THEME_CSS_ADMIN}
     <section id="tab-logs" class="tab hidden">
       <div class="card">
         <h2>操作紀錄</h2>
-        <small class="hint">記錄每一次成功的後台操作（誰、什麼時候、做了什麼），密碼與圖片等敏感內容不會記錄。只看得到登入後做的操作，無法回溯安裝這個功能之前的歷史。</small>
+        <small class="hint">記錄後台操作、登入／登出（含登入失敗）、會員自助操作與客人在付款頁的動作（誰、什麼時候、做了什麼），密碼與圖片等敏感內容不會記錄。每頁 50 筆；只看得到功能啟用之後的紀錄，無法回溯之前的歷史。</small>
         <div class="grid2" style="margin-top:10px;">
           <div><label>關鍵字（操作內容、帳號）</label><input id="logs_q" placeholder="例如：會員姓名、訂單編號…" oninput="logsSearchDebounced()" /></div>
           <div><label>操作人員</label>
-            <select id="logs_admin_id" onchange="loadLogs(1)"><option value="">全部</option></select>
+            <select id="logs_admin_id" onchange="loadLogs(1)"><option value="">全部</option><option value="member">會員（自助操作）</option><option value="guest">客人／未登入</option></select>
+          </div>
+          <div><label>類別</label>
+            <select id="logs_category" onchange="loadLogs(1)">
+              <option value="">全部</option>
+              <option value="auth">登入／登出／註冊</option>
+              <option value="order">訂單（含客人付款頁、會員下單）</option>
+              <option value="member">會員資料</option>
+              <option value="points">點數／兌換</option>
+              <option value="live">直播下單</option>
+              <option value="settings">設定（費率、優惠碼、平台、公告…）</option>
+              <option value="staff">員工帳號</option>
+              <option value="data">資料匯出</option>
+            </select>
+          </div>
+          <div><label>日期區間</label>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <input type="date" id="logs_date_from" onchange="loadLogs(1)" />
+              <span>～</span>
+              <input type="date" id="logs_date_to" onchange="loadLogs(1)" />
+            </div>
           </div>
         </div>
         <table id="logs_table">
@@ -2303,7 +2323,7 @@ async function cancelOrder(id){
   loadOrders();
 }
 
-const MEM_PAGE_SIZE = 20;
+const MEM_PAGE_SIZE = 50;
 let memPage = 1;
 
 // 首頁「待處理事項」收合／展開；狀態記在這台瀏覽器，重新整理後保持
@@ -3473,7 +3493,7 @@ async function savePointsConfigAdmin(){
 }
 
 let ptRedPage = 1;
-const PT_RED_SIZE = 10;
+const PT_RED_SIZE = 50;
 
 async function loadRedemptionsAdmin(page){
   if (page) ptRedPage = page;
@@ -3548,9 +3568,15 @@ async function loadLogs(page){
   m.textContent=''; m.className='msg';
   const q = document.getElementById('logs_q').value.trim();
   const adminId = document.getElementById('logs_admin_id').value;
+  const category = document.getElementById('logs_category').value;
+  const dateFrom = document.getElementById('logs_date_from').value;
+  const dateTo = document.getElementById('logs_date_to').value;
   const qs = new URLSearchParams({ page: logsPage, size: LOGS_SIZE });
   if (q) qs.set('q', q);
   if (adminId) qs.set('admin_id', adminId);
+  if (category) qs.set('category', category);
+  if (dateFrom) qs.set('date_from', dateFrom);
+  if (dateTo) qs.set('date_to', dateTo);
   try{
     const d = await api('/api/admin/logs?'+qs.toString());
     logsPage = d.page;
@@ -3663,7 +3689,7 @@ async function deletePointItem(id){
 }
 
 let ptMembers = [];
-const PT_MEM_SIZE = 10;
+const PT_MEM_SIZE = 50;
 let ptMemPage = 1;
 let ptDetailId = null;
 
