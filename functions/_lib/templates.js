@@ -72,6 +72,14 @@ ${THEME_HEAD}
   .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:50;padding:16px;}
   .modal-overlay.hidden{display:none;}
   .modal-box{background:#fff;border-radius:10px;padding:20px;max-width:380px;width:100%;max-height:90vh;overflow:auto;}
+  .modal-box.wide{max-width:560px;}
+  .perm-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:6px 0;}
+  .perm-item{display:flex;gap:8px;align-items:flex-start;margin:0;padding:8px 10px;border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:14px;color:inherit;}
+  .perm-item input{width:auto;margin:3px 0 0;flex:none;}
+  .perm-item b{display:block;font-weight:600;}
+  .perm-item small{display:block;color:var(--muted);font-size:12px;margin-top:2px;line-height:1.4;}
+  .perm-actions{display:flex;gap:8px;margin:6px 0 10px;}
+  body.no-orders_delete .need-orders_delete, body.no-members_delete .need-members_delete{display:none !important;}
   .modal-box h2{margin-top:0;font-size:16px;}
   img.proof-thumb{max-width:56px;max-height:40px;border-radius:4px;border:1px solid var(--border);cursor:pointer;display:block;}
   .filter-row{display:flex;align-items:center;gap:6px;margin-top:10px;font-size:13px;color:var(--muted);}
@@ -160,6 +168,7 @@ ${THEME_HEAD}
     .grid2{grid-template-columns:1fr;gap:0;}
     input,select,textarea{font-size:16px;}
     .modal-box{padding:14px;border-radius:8px;max-width:100%;}
+    .perm-grid{grid-template-columns:1fr;}
 
     table thead{display:none;}
     table, table tbody, table tr, table td{display:block;width:100%;}
@@ -596,18 +605,32 @@ ${THEME_CSS_ADMIN}
     <section id="tab-staff" class="tab hidden">
       <div class="card">
         <h2>新增員工帳號</h2>
-        <small class="hint">員工帳號登入後跟目前帳號權限相同，可以操作整個後台。</small>
+        <small class="hint">只有管理員帳號可以新增員工、設定權限。員工登入後，只能使用你勾選的功能。</small>
         <label>帳號</label><input id="staff_username" autocomplete="off" />
         <label>密碼（至少 6 碼）</label><input id="staff_password" type="password" autocomplete="new-password" />
+        <label>可使用的功能</label>
+        <div id="staff_new_perms" class="perm-grid"></div>
+        <div class="perm-actions">
+          <button class="btn secondary small" type="button" onclick="permSetAll('staff_new_perms', true)">全選</button>
+          <button class="btn secondary small" type="button" onclick="permSetAll('staff_new_perms', false)">全不選</button>
+        </div>
         <button class="btn" onclick="submitStaff()">新增</button>
         <div id="staff_msg" class="msg"></div>
       </div>
       <div class="card">
         <h2>帳號列表</h2>
+        <small class="hint">「尚未設定」的員工目前可以使用全部功能（員工帳號管理除外），建議按「設定權限」確認一次。</small>
         <table id="staff_table">
-          <thead><tr><th>ID</th><th>帳號</th><th>建立時間</th><th>操作</th></tr></thead>
+          <thead><tr><th>ID</th><th>帳號</th><th>角色</th><th>可使用的功能</th><th>建立時間</th><th>操作</th></tr></thead>
           <tbody></tbody>
         </table>
+      </div>
+    </section>
+
+    <section id="tab-noaccess" class="tab hidden">
+      <div class="card">
+        <h2>目前沒有可使用的功能</h2>
+        <small class="hint">這個帳號還沒有被授權任何功能，請聯絡管理員幫你開啟。</small>
       </div>
     </section>
 
@@ -823,6 +846,20 @@ ${THEME_CSS_ADMIN}
   </div>
 </div>
 
+<div id="staffPermModal" class="modal-overlay hidden">
+  <div class="modal-box wide">
+    <h2 id="spm_title">設定權限</h2>
+    <div id="spm_perms" class="perm-grid"></div>
+    <div class="perm-actions">
+      <button class="btn secondary small" type="button" onclick="permSetAll('spm_perms', true)">全選</button>
+      <button class="btn secondary small" type="button" onclick="permSetAll('spm_perms', false)">全不選</button>
+    </div>
+    <div id="spm_msg" class="msg"></div>
+    <button class="btn" onclick="saveStaffPerms()">儲存</button>
+    <button class="btn secondary" onclick="closeStaffPerms()">取消</button>
+  </div>
+</div>
+
 <div id="liveBindModal" class="modal-overlay hidden">
   <div class="modal-box">
     <h2>歸給會員</h2>
@@ -920,11 +957,13 @@ async function checkSession(){
   try{
     const me = await api('/api/admin/me');
     currentAdminId = me.id;
+    adminMe = me;
     document.getElementById('whoami').textContent = me.username;
     document.getElementById('loginView').classList.add('hidden');
     document.getElementById('appView').classList.remove('hidden');
-    showTab('dashboard');
-    loadMembersIntoSelect();
+    applyAccess();
+    showTab(firstAllowedTab());
+    if (canUse('orders') || canUse('members') || canUse('live') || canUse('points')) loadMembersIntoSelect();
     refreshPushButton();
   }catch(e){
     try{
@@ -1354,6 +1393,7 @@ function liveCopyIngest(id){
 
 function showTab(name, opts){
   opts = opts || {};
+  if (!canUseTab(name)) name = firstAllowedTab();
   document.querySelectorAll('.tab').forEach(t=>t.classList.add('hidden'));
   document.getElementById('tab-'+name).classList.remove('hidden');
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active', b.dataset.tab===name));
@@ -1714,7 +1754,7 @@ function renderOrders(){
     if (o.is_completed) {
       actions += \`<button class="btn secondary small" onclick="uncompleteOrder(\${o.id})">取消結案</button>\`;
     }
-    actions += \`<button class="btn danger small" onclick="deleteOrder(\${o.id}, \${o.status==='paid'})">刪除</button>\`;
+    actions += \`<button class="btn danger small need-orders_delete" onclick="deleteOrder(\${o.id}, \${o.status==='paid'})">刪除</button>\`;
 
     let proofInfo = '';
     if (o.proof_last_digits) proofInfo += \`末碼 \${o.proof_last_digits}<br/>\`;
@@ -1986,7 +2026,7 @@ function renderMembersTable(){
     <td data-label="操作">
       <button class="btn secondary small" onclick="editMember(\${m.id})">編輯</button>
       <button class="btn secondary small" onclick="resetPassword(\${m.id})">設定密碼</button>
-      <button class="btn danger small" onclick="deleteMember(\${m.id})">刪除</button>
+      <button class="btn danger small need-members_delete" onclick="deleteMember(\${m.id})">刪除</button>
     </td>
   </tr>\`).join('') || '<tr><td colspan="10">'+(membersCache.length ? '找不到符合的會員' : '尚無會員')+'</td></tr>';
 
@@ -2096,19 +2136,86 @@ async function deleteMember(id){
   loadMembers();
 }
 
+// ---- 員工權限 ----
+const TAB_NEED = {dashboard:'dashboard', checkout:'orders', orders:'orders', members:'members', stats:'stats', settings:'settings', announcement:'settings', export:'stats', staff:'OWNER', rates:'rates', coupons:'coupons', points:'points', live:'live', logs:'logs'};
+const DEFAULT_NEW_PERMS = ['dashboard', 'orders'];
+let adminMe = null, staffCache = [], spmId = null;
+
+function canUse(key){
+  if (!key || !adminMe) return true;
+  if (adminMe.is_owner) return true;
+  if (key === 'OWNER') return false;
+  return adminMe.permissions.indexOf(key) >= 0;
+}
+function canUseTab(name){ return canUse(TAB_NEED[name]); }
+
+function firstAllowedTab(){
+  const btns = document.querySelectorAll('nav button[data-tab]');
+  for (let i = 0; i < btns.length; i++) { if (canUseTab(btns[i].dataset.tab)) return btns[i].dataset.tab; }
+  return 'noaccess';
+}
+
+function applyAccess(){
+  document.querySelectorAll('nav button[data-tab]').forEach(function(b){ b.classList.toggle('hidden', !canUseTab(b.dataset.tab)); });
+  document.body.classList.toggle('no-orders_delete', !canUse('orders_delete'));
+  document.body.classList.toggle('no-members_delete', !canUse('members_delete'));
+}
+
+function permCatalog(){ return (adminMe && adminMe.catalog) || []; }
+
+function renderPermBoxes(containerId, selected){
+  const sel = selected || [];
+  document.getElementById(containerId).innerHTML = permCatalog().map(function(p){
+    return '<label class="perm-item"><input type="checkbox" value="'+p.key+'"'+(p.requires?' data-requires="'+p.requires+'"':'')+(sel.indexOf(p.key)>=0?' checked':'')+' onchange="permBoxChange(this)" />'+
+      '<span><b>'+escapeHtml(p.label)+'</b><small>'+escapeHtml(p.desc||'')+'</small></span></label>';
+  }).join('');
+}
+function readPermBoxes(containerId){
+  return Array.prototype.map.call(document.querySelectorAll('#'+containerId+' input:checked'), function(i){ return i.value; });
+}
+function permSetAll(containerId, on){
+  document.querySelectorAll('#'+containerId+' input[type=checkbox]').forEach(function(i){ i.checked = on; });
+}
+function permBoxChange(el){
+  const grid = el.closest('.perm-grid');
+  if (el.checked && el.dataset.requires) {
+    const base = grid.querySelector('input[value="'+el.dataset.requires+'"]');
+    if (base) base.checked = true;
+  }
+  if (!el.checked) {
+    grid.querySelectorAll('input[data-requires="'+el.value+'"]').forEach(function(d){ d.checked = false; });
+  }
+}
+function permLabelOf(key){
+  const p = permCatalog().find(function(x){ return x.key === key; });
+  return p ? p.label : key;
+}
+
 async function loadStaff(){
   const list = await api('/api/admin/staff');
+  staffCache = list;
+  if (!document.getElementById('staff_new_perms').children.length) renderPermBoxes('staff_new_perms', DEFAULT_NEW_PERMS);
   const tbody = document.querySelector('#staff_table tbody');
-  tbody.innerHTML = list.map(s=>{
+  tbody.innerHTML = list.map(function(s){
     const isSelf = s.id === currentAdminId;
-    return \`<tr>
-      <td data-label="ID">\${s.id}</td><td data-label="帳號">\${s.username}\${isSelf?'（目前登入）':''}</td><td data-label="建立時間">\${toTaipeiTime(s.created_at)}</td>
-      <td data-label="操作">
-        <button class="btn secondary small" onclick="resetStaffPassword(\${s.id})">重設密碼</button>
-        <button class="btn danger small" \${isSelf?'disabled':''} onclick="deleteStaff(\${s.id})">刪除</button>
-      </td>
-    </tr>\`;
-  }).join('') || '<tr><td colspan="4">尚無帳號</td></tr>';
+    const isOwner = s.role === 'owner';
+    let permText;
+    if (isOwner) permText = '全部功能';
+    else if (s.permissions === null) permText = '<span style="color:var(--danger);">尚未設定（目前全部功能）</span>';
+    else if (!s.permissions.length) permText = '<span style="color:var(--danger);">沒有任何功能</span>';
+    else permText = escapeHtml(s.permissions.map(permLabelOf).join('、')) + '（共 ' + s.permissions.length + ' 項）';
+    return '<tr>'+
+      '<td data-label="ID">'+s.id+'</td>'+
+      '<td data-label="帳號">'+escapeHtml(s.username)+(isSelf?'（目前登入）':'')+'</td>'+
+      '<td data-label="角色">'+(isOwner?'管理員':'員工')+'</td>'+
+      '<td data-label="可使用的功能">'+permText+'</td>'+
+      '<td data-label="建立時間">'+toTaipeiTime(s.created_at)+'</td>'+
+      '<td data-label="操作">'+
+        (isOwner ? '' : '<button class="btn secondary small" onclick="openStaffPerms('+s.id+')">設定權限</button>')+
+        '<button class="btn secondary small" onclick="resetStaffPassword('+s.id+')">重設密碼</button>'+
+        '<button class="btn danger small" '+((isSelf||isOwner)?'disabled':'')+' onclick="deleteStaff('+s.id+')">刪除</button>'+
+      '</td></tr>';
+  }).join('') || '<tr><td colspan="6">尚無帳號</td></tr>';
 }
 
 async function submitStaff(){
@@ -2116,13 +2223,43 @@ async function submitStaff(){
   const password = document.getElementById('staff_password').value;
   const msg = document.getElementById('staff_msg');
   if (!username){ msg.textContent='請輸入帳號'; msg.className='msg err'; return; }
+  const permissions = readPermBoxes('staff_new_perms');
+  if (!permissions.length && !confirm('沒有勾選任何功能，這個員工登入後什麼都不能用。確定要新增嗎？')) return;
   try{
-    await api('/api/admin/staff', {method:'POST', body: JSON.stringify({username,password})});
+    await api('/api/admin/staff', {method:'POST', body: JSON.stringify({username, password, permissions})});
     document.getElementById('staff_username').value='';
     document.getElementById('staff_password').value='';
+    renderPermBoxes('staff_new_perms', DEFAULT_NEW_PERMS);
     msg.textContent='已新增'; msg.className='msg ok';
     loadStaff();
   }catch(e){ msg.textContent=e.message; msg.className='msg err'; }
+}
+
+function openStaffPerms(id){
+  const s = staffCache.find(function(x){ return x.id === id; });
+  if (!s) return;
+  spmId = id;
+  document.getElementById('spm_title').textContent = '設定「' + s.username + '」的權限';
+  const all = permCatalog().map(function(p){ return p.key; });
+  renderPermBoxes('spm_perms', s.permissions === null ? all : s.permissions);
+  document.getElementById('spm_msg').textContent = '';
+  document.getElementById('spm_msg').className = 'msg';
+  document.getElementById('staffPermModal').classList.remove('hidden');
+}
+function closeStaffPerms(){
+  document.getElementById('staffPermModal').classList.add('hidden');
+  spmId = null;
+}
+async function saveStaffPerms(){
+  if (!spmId) return;
+  const permissions = readPermBoxes('spm_perms');
+  if (!permissions.length && !confirm('沒有勾選任何功能，這個員工登入後什麼都不能用。確定儲存嗎？')) return;
+  const msg = document.getElementById('spm_msg');
+  try{
+    await api('/api/admin/staff/'+spmId+'/permissions', {method:'PATCH', body: JSON.stringify({permissions})});
+    closeStaffPerms();
+    loadStaff();
+  }catch(e){ msg.textContent = e.message; msg.className = 'msg err'; }
 }
 
 async function resetStaffPassword(id){

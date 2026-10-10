@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS admins (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   username TEXT UNIQUE NOT NULL,
   password_hash TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'staff',   -- owner（管理員，可新增員工並設定權限）| staff（員工，只能用被勾選的功能）
+  permissions TEXT,                      -- 員工可用的功能（JSON 陣列）；NULL = 還沒設定過
   created_at TEXT DEFAULT (datetime('now'))
 );
 

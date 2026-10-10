@@ -45,6 +45,7 @@ import {
   handleLiveGetIngestKey,
   handleLiveResetIngestKey,
 } from "./_lib/live.js";
+import { PERMISSIONS, DEFAULT_STAFF_PERMISSIONS, normalizePermissions, requiredAdminPermission, getAdminAccess, canAccess, accessSummary } from "./_lib/access.js";
 import { getRateRules, saveRateRules, getAllRateRules, getRateGroupForPlatform, RATE_GROUPS, DEFAULT_RATE_RULES, MIN_QUOTE_AMOUNT, calcCoins, isCustomRateGroup } from "./_lib/rates.js";
 
 // 會員自助下單的最低金額，跟查價系統的最低查詢金額保持一致
@@ -166,7 +167,12 @@ async function handleSetupAdmin(request, env) {
     return json({ error: "請提供帳號，密碼至少 6 碼" }, 400);
   }
   const hash = await hashPassword(password);
-  await env.DB.prepare("INSERT INTO admins (username, password_hash) VALUES (?, ?)").bind(username, hash).run();
+  try {
+    await env.DB.prepare("INSERT INTO admins (username, password_hash, role) VALUES (?, ?, 'owner')").bind(username, hash).run();
+  } catch (e) {
+    if (!/no such column/i.test(String(e && e.message))) throw e;
+    await env.DB.prepare("INSERT INTO admins (username, password_hash) VALUES (?, ?)").bind(username, hash).run(); // 舊資料庫
+  }
   return json({ ok: true });
 }
 
@@ -189,17 +195,33 @@ async function handleLogout() {
   return json({ ok: true }, 200, { "Set-Cookie": clearCookieHeader("admin_session") });
 }
 
-async function handleMe(session) {
-  return json({ id: session.adminId, username: session.username });
+async function handleMe(session, access) {
+  return json({ id: session.adminId, username: access.username || session.username, ...accessSummary(access) });
 }
 
 // ---- Staff / admin accounts ----
 
-async function handleListStaff(env) {
-  const { results } = await env.DB.prepare(
-    "SELECT id, username, created_at FROM admins ORDER BY created_at ASC"
-  ).all();
-  return json(results);
+async function handleListStaff(env, access) {
+  // 沒有「帳號管理」身分的人（例如只有操作紀錄權限）只能拿到帳號名稱，給篩選下拉選單用
+  if (!access.owner) {
+    const { results } = await env.DB.prepare("SELECT id, username FROM admins ORDER BY created_at ASC").all();
+    return json(results);
+  }
+  let rows;
+  if (access.legacy) {
+    const r = await env.DB.prepare("SELECT id, username, created_at FROM admins ORDER BY created_at ASC").all();
+    rows = r.results.map((x) => ({ ...x, role: "owner", permissions: null }));
+  } else {
+    const r = await env.DB.prepare("SELECT id, username, role, permissions, created_at FROM admins ORDER BY created_at ASC").all();
+    rows = r.results.map((x) => {
+      let perms = null;
+      if (x.role !== "owner" && x.permissions != null && x.permissions !== "") {
+        try { perms = normalizePermissions(JSON.parse(x.permissions)); } catch { perms = []; }
+      }
+      return { id: x.id, username: x.username, role: x.role === "owner" ? "owner" : "staff", permissions: perms, created_at: x.created_at };
+    });
+  }
+  return json(rows);
 }
 
 async function handleAddStaff(request, env) {
@@ -207,18 +229,33 @@ async function handleAddStaff(request, env) {
   const { username, password } = body;
   if (!username || !username.trim()) return json({ error: "請輸入帳號" }, 400);
   if (!password || password.length < 6) return json({ error: "密碼至少需要 6 碼" }, 400);
+  const perms = Array.isArray(body.permissions) ? normalizePermissions(body.permissions) : DEFAULT_STAFF_PERMISSIONS;
   const hash = await hashPassword(password);
   try {
-    const r = await env.DB.prepare("INSERT INTO admins (username, password_hash) VALUES (?, ?)")
-      .bind(username.trim(), hash)
+    const r = await env.DB.prepare("INSERT INTO admins (username, password_hash, role, permissions) VALUES (?, ?, 'staff', ?)")
+      .bind(username.trim(), hash, JSON.stringify(perms))
       .run();
-    return json({ ok: true, id: r.meta.last_row_id });
+    return json({ ok: true, id: r.meta.last_row_id, permissions: perms });
   } catch (err) {
-    if (String(err.message || "").includes("UNIQUE")) {
+    const msg = String(err.message || "");
+    if (/no such column/i.test(msg)) return json({ error: "資料庫尚未升級，請先執行 migrate_v22.sql 再新增員工" }, 400);
+    if (msg.includes("UNIQUE")) {
       return json({ error: "此帳號已被使用，請換一個" }, 400);
     }
     throw err;
   }
+}
+
+// 只有管理員可以設定員工權限（由 API 入口統一擋，這裡再確認目標是員工）
+async function handleSetStaffPermissions(id, request, env) {
+  const body = await request.json().catch(() => ({}));
+  if (!Array.isArray(body.permissions)) return json({ error: "權限格式錯誤" }, 400);
+  const target = await env.DB.prepare("SELECT id, username, role FROM admins WHERE id=?").bind(id).first();
+  if (!target) return json({ error: "找不到這個帳號" }, 404);
+  if (target.role === "owner") return json({ error: "管理員帳號擁有全部權限，不需要也不能設定" }, 400);
+  const perms = normalizePermissions(body.permissions);
+  await env.DB.prepare("UPDATE admins SET permissions=? WHERE id=?").bind(JSON.stringify(perms), id).run();
+  return json({ ok: true, permissions: perms, username: target.username });
 }
 
 async function handleResetStaffPassword(id, request, env) {
@@ -236,6 +273,12 @@ async function handleDeleteStaff(id, session, env) {
   }
   const row = await env.DB.prepare("SELECT COUNT(*) as c FROM admins").first();
   if (row.c <= 1) return json({ error: "至少要保留一組管理員帳號，無法全部刪除" }, 400);
+  try {
+    const target = await env.DB.prepare("SELECT role FROM admins WHERE id=?").bind(id).first();
+    if (target && target.role === "owner") return json({ error: "管理員帳號不能刪除" }, 400);
+  } catch (e) {
+    if (!/no such column/i.test(String(e && e.message))) throw e;
+  }
   await env.DB.prepare("DELETE FROM admins WHERE id=?").bind(id).run();
   return json({ ok: true });
 }
@@ -2388,11 +2431,19 @@ export async function onRequest(context) {
       const session = await requireAdmin(request, env);
       if (!session) return json({ error: "未登入或登入已過期" }, 401);
 
-      if (path === "/api/admin/me" && method === "GET") return handleMe(session);
+      // 角色與權限：每次都從資料庫讀，管理員改了權限或刪了帳號，下一個請求就立刻生效
+      const access = await getAdminAccess(env, session);
+      if (!access) return json({ error: "此帳號已被移除，請重新登入" }, 401, { "Set-Cookie": clearCookieHeader("admin_session") });
+      const needPerm = requiredAdminPermission(path, method);
+      if (!canAccess(access, needPerm)) {
+        return json({ error: needPerm === "OWNER" ? "只有管理員可以使用這個功能" : "你沒有這項功能的權限，請聯絡管理員" }, 403);
+      }
+
+      if (path === "/api/admin/me" && method === "GET") return handleMe(session, access);
 
       if (path === "/api/admin/logs" && method === "GET") return handleListAdminLogs(request, env);
 
-      if (path === "/api/admin/staff" && method === "GET") return handleListStaff(env);
+      if (path === "/api/admin/staff" && method === "GET") return handleListStaff(env, access);
       if (path === "/api/admin/staff" && method === "POST") {
         const body = await request.clone().json().catch(() => ({}));
         return alog(
@@ -2400,8 +2451,24 @@ export async function onRequest(context) {
           (resBody) => ({
             action: "staff.create",
             summary: `新增員工帳號「${body.username || ""}」${resBody && resBody.id ? ` #${resBody.id}` : ""}`,
+            detail: { permissions: (resBody && resBody.permissions) || [] },
           }),
           handleAddStaff(request, env)
+        );
+      }
+
+      const staffPermMatch = path.match(/^\/api\/admin\/staff\/(\d+)\/permissions$/);
+      if (staffPermMatch && method === "PATCH") {
+        const body = await request.clone().json().catch(() => ({}));
+        const labelOf = (k) => (PERMISSIONS.find((p) => p.key === k) || { label: k }).label;
+        return alog(
+          env, session, request,
+          (resBody) => ({
+            action: "staff.permissions",
+            summary: `設定員工「${(resBody && resBody.username) || "#" + staffPermMatch[1]}」的權限：` + (((resBody && resBody.permissions) || []).map(labelOf).join("、") || "（無）"),
+            detail: { permissions: (resBody && resBody.permissions) || normalizePermissions(body.permissions) },
+          }),
+          handleSetStaffPermissions(staffPermMatch[1], request, env)
         );
       }
 
