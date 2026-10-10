@@ -211,6 +211,7 @@ ${THEME_CSS_ADMIN}
     <button data-tab="coupons" onclick="showTab('coupons')">優惠碼</button>
     <button data-tab="points" onclick="showTab('points')">點數系統</button>
     <button data-tab="live" onclick="showTab('live')">直播下單</button>
+    <button data-tab="logs" onclick="showTab('logs')">操作紀錄</button>
   </nav>
   <main>
 
@@ -729,7 +730,34 @@ ${THEME_CSS_ADMIN}
       </div>
     </section>
 
+    <section id="tab-logs" class="tab hidden">
+      <div class="card">
+        <h2>操作紀錄</h2>
+        <small class="hint">記錄每一次成功的後台操作（誰、什麼時候、做了什麼），密碼與圖片等敏感內容不會記錄。只看得到登入後做的操作，無法回溯安裝這個功能之前的歷史。</small>
+        <div class="grid2" style="margin-top:10px;">
+          <div><label>關鍵字（操作內容、帳號）</label><input id="logs_q" placeholder="例如：會員姓名、訂單編號…" oninput="logsSearchDebounced()" /></div>
+          <div><label>操作人員</label>
+            <select id="logs_admin_id" onchange="loadLogs(1)"><option value="">全部</option></select>
+          </div>
+        </div>
+        <table id="logs_table">
+          <thead><tr><th>時間</th><th>操作人員</th><th>內容</th><th>詳細</th><th>IP</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div id="logs_pager" class="pager"></div>
+        <div id="logs_msg" class="msg"></div>
+      </div>
+    </section>
+
   </main>
+</div>
+
+<div id="logDetailModal" class="modal-overlay hidden" onclick="if(event.target===this)closeLogDetail()">
+  <div class="modal-box">
+    <h2>操作詳細內容</h2>
+    <pre id="ld_content" style="white-space:pre-wrap;word-break:break-all;font-size:13px;background:var(--bg-alt,rgba(127,127,127,.08));border-radius:8px;padding:10px;max-height:60vh;overflow:auto;"></pre>
+    <button class="btn secondary" onclick="closeLogDetail()">關閉</button>
+  </div>
 </div>
 
 <div id="statDetailModal" class="modal-overlay hidden" onclick="if(event.target===this)closeStatDetail()">
@@ -1314,6 +1342,7 @@ function showTab(name, opts){
   if (name==='coupons') loadCoupons();
   if (name==='points') loadPointsAdmin();
   if (name==='live') { loadLive(); liveStartPoll(); } else { liveStopPoll(); }
+  if (name==='logs') loadLogs(1);
 }
 
 // ---- 訂單自動更新（輪詢）----
@@ -2829,6 +2858,78 @@ async function processRedemption(id, action){
     await api('/api/admin/points/redemptions/'+id+'/'+action, {method:'POST', body: JSON.stringify({admin_note: note})});
     loadRedemptionsAdmin(); loadPointItemsAdmin(); loadPointMembersAdmin();
   }catch(e){ m.textContent=e.message; m.className='msg err'; }
+}
+
+// ---- 操作紀錄 ----
+let logsPage = 1;
+const LOGS_SIZE = 50;
+let logsAdminOptionsLoaded = false;
+let logsSearchTimer = null;
+
+function logsSearchDebounced(){
+  clearTimeout(logsSearchTimer);
+  logsSearchTimer = setTimeout(function(){ loadLogs(1); }, 350);
+}
+
+async function ensureLogsAdminOptions(){
+  if (logsAdminOptionsLoaded) return;
+  try{
+    const list = await api('/api/admin/staff');
+    const sel = document.getElementById('logs_admin_id');
+    list.forEach(function(s){
+      const opt = document.createElement('option');
+      opt.value = s.id; opt.textContent = s.username;
+      sel.appendChild(opt);
+    });
+    logsAdminOptionsLoaded = true;
+  }catch(e){ /* 下拉選單載入失敗不影響主要列表功能，忽略即可 */ }
+}
+
+async function loadLogs(page){
+  if (page) logsPage = page;
+  await ensureLogsAdminOptions();
+  const m = document.getElementById('logs_msg');
+  m.textContent=''; m.className='msg';
+  const q = document.getElementById('logs_q').value.trim();
+  const adminId = document.getElementById('logs_admin_id').value;
+  const qs = new URLSearchParams({ page: logsPage, size: LOGS_SIZE });
+  if (q) qs.set('q', q);
+  if (adminId) qs.set('admin_id', adminId);
+  try{
+    const d = await api('/api/admin/logs?'+qs.toString());
+    logsPage = d.page;
+    document.querySelector('#logs_table tbody').innerHTML = d.rows.map(function(r){
+      const detailBtn = r.detail ? '<button class="btn secondary small" onclick="viewLogDetail('+r.id+')">查看</button>' : '-';
+      return '<tr>'
+        + '<td data-label="時間">'+toTaipeiTime(r.created_at)+'</td>'
+        + '<td data-label="操作人員">'+escapeHtml(r.admin_username)+'</td>'
+        + '<td data-label="內容">'+escapeHtml(r.summary)+'</td>'
+        + '<td data-label="詳細">'+detailBtn+'</td>'
+        + '<td data-label="IP">'+escapeHtml(r.ip||'-')+'</td>'
+        + '</tr>';
+    }).join('') || '<tr><td colspan="5">尚無操作紀錄</td></tr>';
+    const pg = document.getElementById('logs_pager');
+    if (d.total > LOGS_SIZE) {
+      pg.innerHTML = '<button class="btn secondary small" '+(d.page<=1?'disabled':'')+' onclick="loadLogs('+(d.page-1)+')">‹ 上一頁</button>' +
+        '<span>第 '+d.page+' / '+d.pages+' 頁（共 '+d.total+' 筆）</span>' +
+        '<button class="btn secondary small" '+(d.page>=d.pages?'disabled':'')+' onclick="loadLogs('+(d.page+1)+')">下一頁 ›</button>';
+    } else {
+      pg.innerHTML = d.total ? '<span>共 '+d.total+' 筆</span>' : '';
+    }
+    window._logsRows = d.rows; // 給查看詳細用，避免再打一次 API
+  }catch(e){ m.textContent=e.message; m.className='msg err'; }
+}
+
+function viewLogDetail(id){
+  const row = (window._logsRows||[]).find(function(r){ return r.id === id; });
+  if (!row) return;
+  let text = row.detail || '';
+  try{ text = JSON.stringify(JSON.parse(row.detail), null, 2); }catch(e){ /* 不是 JSON 就原樣顯示 */ }
+  document.getElementById('ld_content').textContent = text;
+  document.getElementById('logDetailModal').classList.remove('hidden');
+}
+function closeLogDetail(){
+  document.getElementById('logDetailModal').classList.add('hidden');
 }
 
 async function loadPointItemsAdmin(){

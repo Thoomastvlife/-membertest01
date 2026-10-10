@@ -211,3 +211,19 @@ CREATE TABLE IF NOT EXISTS live_comments (
 );
 CREATE INDEX IF NOT EXISTS idx_live_comments_round ON live_comments(round_id, id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_live_comments_source ON live_comments(round_id, source_id) WHERE source_id IS NOT NULL;
+
+-- ===== v21：後台操作紀錄 =====
+-- 記錄每一次「成功」的後台操作（登入中的管理員/員工帳號做了什麼事），供事後稽核、抓問題用。
+-- 密碼、付款證明圖片、條碼圖片等敏感內容不會寫入，detail 只存已過濾過的操作內容快照。
+CREATE TABLE IF NOT EXISTS admin_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  admin_id INTEGER,                 -- 操作當下的帳號 id；帳號事後被刪除也不會影響舊紀錄（不設外鍵、不連動刪除）
+  admin_username TEXT NOT NULL,     -- 操作當下的帳號名稱快照，即使帳號後來被刪除或改名，紀錄仍看得出是誰做的
+  action TEXT NOT NULL,             -- 操作類型代碼，例如 order.correct、member.delete
+  summary TEXT NOT NULL,            -- 給人看的一句話描述，後台「操作紀錄」頁籤直接顯示這欄
+  detail TEXT,                      -- JSON 字串，操作當下送出的內容（已過濾密碼等敏感欄位），可為 NULL
+  ip TEXT,                          -- 操作來源 IP（取自 CF-Connecting-IP），可能為 NULL
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_admin_logs_created_at ON admin_logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_admin_logs_admin ON admin_logs(admin_id, created_at);

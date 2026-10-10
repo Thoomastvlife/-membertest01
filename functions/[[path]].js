@@ -83,11 +83,70 @@ import {
   sendEmail,
   CVS_STORES,
   CVS_LIMIT,
+  logAdminAction,
+  sanitizeForLog,
 } from "./_lib/helpers.js";
 
 // 付款連結建立後，最多可以被開啟／操作幾小時，超過就整條連結失效（跟訂單本身 3 小時付款時效是兩回事）。
 function linkHardExpireHours(env) {
   return parseInt(env.LINK_HARD_EXPIRE_HOURS || "24", 10);
+}
+
+// ---- 後台操作紀錄（包裝用的小工具）----
+// 包住一個「後台 API handler 的 Promise」：只有在它成功（回應 status < 400）時才寫一筆操作紀錄，
+// 失敗的嘗試（例如驗證沒過、找不到資料）不會留紀錄。
+// metaInput 可以直接給 { action, summary, detail }；
+// 如果操作成功後才知道一些資訊（例如新建立的訂單編號、會員 id），
+// 可以改給一個函式 (resBody) => ({ action, summary, detail })，resBody 是 handler 回傳的 JSON 內容。
+async function alog(env, session, request, metaInput, resultPromise) {
+  const res = await resultPromise;
+  if (res && res.status < 400) {
+    let meta = metaInput;
+    if (typeof metaInput === "function") {
+      let resBody = null;
+      try {
+        resBody = await res.clone().json();
+      } catch {
+        // 回應不是 JSON（理論上後台 API 都是 json()，不會發生），忽略即可
+      }
+      meta = metaInput(resBody);
+    }
+    if (meta) await logAdminAction(env, session, request, meta);
+  }
+  return res;
+}
+
+// 後台「操作紀錄」頁籤：列出 admin_logs，支援關鍵字搜尋跟依帳號篩選，新→舊排序、分頁
+async function handleListAdminLogs(request, env) {
+  const url = new URL(request.url);
+  const { page, size, offset } = parsePage(url, 50, 200);
+  const q = (url.searchParams.get("q") || "").trim();
+  const adminIdParam = url.searchParams.get("admin_id");
+
+  const where = [];
+  const binds = [];
+  if (adminIdParam && /^\d+$/.test(adminIdParam)) {
+    where.push("admin_id=?");
+    binds.push(parseInt(adminIdParam, 10));
+  }
+  if (q) {
+    where.push("(summary LIKE ? OR admin_username LIKE ? OR action LIKE ? OR detail LIKE ?)");
+    const kw = `%${q}%`;
+    binds.push(kw, kw, kw, kw);
+  }
+  const whereSql = where.length ? " WHERE " + where.join(" AND ") : "";
+
+  const totalRow = await env.DB.prepare("SELECT COUNT(*) AS c FROM admin_logs" + whereSql).bind(...binds).first();
+  const total = totalRow ? totalRow.c : 0;
+  const pages = Math.max(1, Math.ceil(total / size));
+
+  const { results } = await env.DB.prepare(
+    "SELECT * FROM admin_logs" + whereSql + " ORDER BY id DESC LIMIT ? OFFSET ?"
+  )
+    .bind(...binds, size, offset)
+    .all();
+
+  return json({ rows: results, total, page: Math.min(page, pages), pages, size });
 }
 
 // ---- Setup / auth ----
@@ -2323,116 +2382,437 @@ export async function onRequest(context) {
 
       if (path === "/api/admin/me" && method === "GET") return handleMe(session);
 
+      if (path === "/api/admin/logs" && method === "GET") return handleListAdminLogs(request, env);
+
       if (path === "/api/admin/staff" && method === "GET") return handleListStaff(env);
-      if (path === "/api/admin/staff" && method === "POST") return handleAddStaff(request, env);
+      if (path === "/api/admin/staff" && method === "POST") {
+        const body = await request.clone().json().catch(() => ({}));
+        return alog(
+          env, session, request,
+          (resBody) => ({
+            action: "staff.create",
+            summary: `新增員工帳號「${body.username || ""}」${resBody && resBody.id ? ` #${resBody.id}` : ""}`,
+          }),
+          handleAddStaff(request, env)
+        );
+      }
 
       const staffPasswordMatch = path.match(/^\/api\/admin\/staff\/(\d+)\/password$/);
-      if (staffPasswordMatch && method === "POST") return handleResetStaffPassword(staffPasswordMatch[1], request, env);
+      if (staffPasswordMatch && method === "POST") {
+        return alog(
+          env, session, request,
+          { action: "staff.reset_password", summary: `重設員工帳號 #${staffPasswordMatch[1]} 的密碼` },
+          handleResetStaffPassword(staffPasswordMatch[1], request, env)
+        );
+      }
 
       const staffDeleteMatch = path.match(/^\/api\/admin\/staff\/(\d+)$/);
-      if (staffDeleteMatch && method === "DELETE") return handleDeleteStaff(staffDeleteMatch[1], session, env);
+      if (staffDeleteMatch && method === "DELETE") {
+        return alog(
+          env, session, request,
+          { action: "staff.delete", summary: `刪除員工帳號 #${staffDeleteMatch[1]}` },
+          handleDeleteStaff(staffDeleteMatch[1], session, env)
+        );
+      }
 
       if (path === "/api/admin/members" && method === "GET") return handleListMembers(env);
-      if (path === "/api/admin/members" && method === "POST") return handleAddMember(request, env);
+      if (path === "/api/admin/members" && method === "POST") {
+        const body = await request.clone().json().catch(() => ({}));
+        return alog(
+          env, session, request,
+          (resBody) => ({
+            action: "member.create",
+            summary: `新增會員「${body.name || ""}」${resBody && resBody.id ? ` #${resBody.id}` : ""}`,
+            detail: sanitizeForLog(body),
+          }),
+          handleAddMember(request, env)
+        );
+      }
 
       const memberDeleteMatch = path.match(/^\/api\/admin\/members\/(\d+)$/);
-      if (memberDeleteMatch && method === "DELETE") return handleDeleteMember(memberDeleteMatch[1], env);
+      if (memberDeleteMatch && method === "DELETE") {
+        return alog(
+          env, session, request,
+          { action: "member.delete", summary: `刪除會員 #${memberDeleteMatch[1]}` },
+          handleDeleteMember(memberDeleteMatch[1], env)
+        );
+      }
 
       const memberPasswordMatch = path.match(/^\/api\/admin\/members\/(\d+)\/password$/);
-      if (memberPasswordMatch && method === "POST") return handleSetMemberPassword(memberPasswordMatch[1], request, env);
+      if (memberPasswordMatch && method === "POST") {
+        return alog(
+          env, session, request,
+          { action: "member.set_password", summary: `重設會員 #${memberPasswordMatch[1]} 的登入密碼` },
+          handleSetMemberPassword(memberPasswordMatch[1], request, env)
+        );
+      }
 
-      if (memberDeleteMatch && method === "PATCH") return handleUpdateMember(memberDeleteMatch[1], request, env);
+      if (memberDeleteMatch && method === "PATCH") {
+        const body = await request.clone().json().catch(() => ({}));
+        return alog(
+          env, session, request,
+          { action: "member.update", summary: `編輯會員 #${memberDeleteMatch[1]} 資料`, detail: sanitizeForLog(body) },
+          handleUpdateMember(memberDeleteMatch[1], request, env)
+        );
+      }
 
       if (path === "/api/admin/settings" && method === "GET") return handleGetSettings(env);
-      if (path === "/api/admin/settings" && method === "POST") return handleSaveSettings(request, env);
+      if (path === "/api/admin/settings" && method === "POST") {
+        const body = await request.clone().json().catch(() => ({}));
+        return alog(
+          env, session, request,
+          { action: "settings.save", summary: "更新付款設定", detail: sanitizeForLog(body) },
+          handleSaveSettings(request, env)
+        );
+      }
 
       if (path === "/api/admin/announcement" && method === "GET") return handleGetAnnouncement(env);
-      if (path === "/api/admin/announcement" && method === "POST") return handleSaveAnnouncement(request, env);
+      if (path === "/api/admin/announcement" && method === "POST") {
+        const body = await request.clone().json().catch(() => ({}));
+        return alog(
+          env, session, request,
+          { action: "announcement.save", summary: "更新系統公告", detail: sanitizeForLog(body) },
+          handleSaveAnnouncement(request, env)
+        );
+      }
 
       if (path === "/api/admin/rates" && method === "GET") return handleGetRates(request, env);
-      if (path === "/api/admin/rates" && method === "POST") return handleSaveRates(request, env);
+      if (path === "/api/admin/rates" && method === "POST") {
+        const body = await request.clone().json().catch(() => ({}));
+        return alog(
+          env, session, request,
+          { action: "rates.save", summary: `更新費率設定（${body.group || "tiktok"}）` },
+          handleSaveRates(request, env)
+        );
+      }
 
       if (path === "/api/admin/coupons" && method === "GET") return handleListCoupons(env);
-      if (path === "/api/admin/coupons" && method === "POST") return handleCreateCoupon(request, env);
+      if (path === "/api/admin/coupons" && method === "POST") {
+        const body = await request.clone().json().catch(() => ({}));
+        return alog(
+          env, session, request,
+          { action: "coupon.create", summary: `新增優惠碼「${(body.code || "").toUpperCase()}」`, detail: sanitizeForLog(body) },
+          handleCreateCoupon(request, env)
+        );
+      }
 
       const couponMatch = path.match(/^\/api\/admin\/coupons\/(\d+)$/);
-      if (couponMatch && method === "PATCH") return handleUpdateCoupon(couponMatch[1], request, env);
-      if (couponMatch && method === "DELETE") return handleDeleteCoupon(couponMatch[1], env);
+      if (couponMatch && method === "PATCH") {
+        const body = await request.clone().json().catch(() => ({}));
+        return alog(
+          env, session, request,
+          { action: "coupon.update", summary: `編輯優惠碼 #${couponMatch[1]}`, detail: sanitizeForLog(body) },
+          handleUpdateCoupon(couponMatch[1], request, env)
+        );
+      }
+      if (couponMatch && method === "DELETE") {
+        return alog(
+          env, session, request,
+          { action: "coupon.delete", summary: `刪除優惠碼 #${couponMatch[1]}` },
+          handleDeleteCoupon(couponMatch[1], env)
+        );
+      }
 
-      if (path === "/api/admin/orders" && method === "POST") return handleCreateOrder(request, env);
+      if (path === "/api/admin/orders" && method === "POST") {
+        const body = await request.clone().json().catch(() => ({}));
+        return alog(
+          env, session, request,
+          (resBody) => ({
+            action: "order.create",
+            summary: `結帳櫃檯建立訂單${resBody && resBody.order_no ? `（${resBody.order_no}）` : ""}，金額 $${body.amount ?? ""}`,
+            detail: sanitizeForLog(body),
+          }),
+          handleCreateOrder(request, env)
+        );
+      }
       if (path === "/api/admin/orders" && method === "GET") return handleListOrders(request, env);
 
       const barcodeMatch = path.match(/^\/api\/admin\/orders\/(\d+)\/barcode$/);
-      if (barcodeMatch && method === "POST") return handleUploadBarcode(barcodeMatch[1], request, env);
+      if (barcodeMatch && method === "POST") {
+        return alog(
+          env, session, request,
+          { action: "order.upload_barcode", summary: `上傳訂單 #${barcodeMatch[1]} 的條碼圖片` },
+          handleUploadBarcode(barcodeMatch[1], request, env)
+        );
+      }
 
       const markPaidMatch = path.match(/^\/api\/admin\/orders\/(\d+)\/mark-paid$/);
-      if (markPaidMatch && method === "POST") return handleMarkPaid(markPaidMatch[1], env);
+      if (markPaidMatch && method === "POST") {
+        return alog(
+          env, session, request,
+          { action: "order.mark_paid", summary: `將訂單 #${markPaidMatch[1]} 標記為已完成付款` },
+          handleMarkPaid(markPaidMatch[1], env)
+        );
+      }
 
       const cancelMatch = path.match(/^\/api\/admin\/orders\/(\d+)\/cancel$/);
-      if (cancelMatch && method === "POST") return handleCancelOrder(cancelMatch[1], env);
+      if (cancelMatch && method === "POST") {
+        return alog(
+          env, session, request,
+          { action: "order.cancel", summary: `取消訂單 #${cancelMatch[1]}` },
+          handleCancelOrder(cancelMatch[1], env)
+        );
+      }
 
       const correctMatch = path.match(/^\/api\/admin\/orders\/(\d+)$/);
-      if (correctMatch && method === "PATCH") return handleCorrectOrder(correctMatch[1], request, env);
-      if (correctMatch && method === "DELETE") return handleDeleteOrder(correctMatch[1], env);
+      if (correctMatch && method === "PATCH") {
+        const body = await request.clone().json().catch(() => ({}));
+        return alog(
+          env, session, request,
+          { action: "order.correct", summary: `更正訂單 #${correctMatch[1]}`, detail: sanitizeForLog(body) },
+          handleCorrectOrder(correctMatch[1], request, env)
+        );
+      }
+      if (correctMatch && method === "DELETE") {
+        return alog(
+          env, session, request,
+          { action: "order.delete", summary: `刪除訂單 #${correctMatch[1]}（無法復原）` },
+          handleDeleteOrder(correctMatch[1], env)
+        );
+      }
 
       const completeMatch = path.match(/^\/api\/admin\/orders\/(\d+)\/complete$/);
-      if (completeMatch && method === "POST") return handleCompleteOrder(completeMatch[1], request, env);
+      if (completeMatch && method === "POST") {
+        return alog(
+          env, session, request,
+          { action: "order.complete", summary: `將訂單 #${completeMatch[1]} 標記為訂單完成（結案）` },
+          handleCompleteOrder(completeMatch[1], request, env)
+        );
+      }
 
       const uncompleteMatch = path.match(/^\/api\/admin\/orders\/(\d+)\/uncomplete$/);
-      if (uncompleteMatch && method === "POST") return handleUncompleteOrder(uncompleteMatch[1], env);
+      if (uncompleteMatch && method === "POST") {
+        return alog(
+          env, session, request,
+          { action: "order.uncomplete", summary: `取消訂單 #${uncompleteMatch[1]} 的結案標記` },
+          handleUncompleteOrder(uncompleteMatch[1], env)
+        );
+      }
 
       const noteMatch = path.match(/^\/api\/admin\/orders\/(\d+)\/note$/);
-      if (noteMatch && method === "PATCH") return handleUpdateOrderNote(noteMatch[1], request, env);
+      if (noteMatch && method === "PATCH") {
+        const body = await request.clone().json().catch(() => ({}));
+        return alog(
+          env, session, request,
+          { action: "order.update_note", summary: `編輯訂單 #${noteMatch[1]} 的內部備註`, detail: sanitizeForLog(body) },
+          handleUpdateOrderNote(noteMatch[1], request, env)
+        );
+      }
 
       if (path === "/api/admin/platforms" && method === "GET") return handleAdminListPlatforms(env);
-      if (path === "/api/admin/platforms" && method === "POST") return handleAdminAddPlatform(request, env);
+      if (path === "/api/admin/platforms" && method === "POST") {
+        const body = await request.clone().json().catch(() => ({}));
+        return alog(
+          env, session, request,
+          { action: "platform.create", summary: `新增儲值平台「${body.name || ""}」`, detail: sanitizeForLog(body) },
+          handleAdminAddPlatform(request, env)
+        );
+      }
       const platformMatch = path.match(/^\/api\/admin\/platforms\/([a-z0-9_]{1,24})$/);
-      if (platformMatch && method === "PATCH") return handleAdminUpdatePlatform(platformMatch[1], request, env);
-      if (platformMatch && method === "DELETE") return handleAdminDeletePlatform(platformMatch[1], env);
+      if (platformMatch && method === "PATCH") {
+        const body = await request.clone().json().catch(() => ({}));
+        return alog(
+          env, session, request,
+          { action: "platform.update", summary: `編輯儲值平台「${platformMatch[1]}」`, detail: sanitizeForLog(body) },
+          handleAdminUpdatePlatform(platformMatch[1], request, env)
+        );
+      }
+      if (platformMatch && method === "DELETE") {
+        return alog(
+          env, session, request,
+          { action: "platform.delete", summary: `刪除儲值平台「${platformMatch[1]}」` },
+          handleAdminDeletePlatform(platformMatch[1], env)
+        );
+      }
       if (path === "/api/admin/payment-methods" && method === "GET") return handleAdminGetMethods(env);
-      if (path === "/api/admin/payment-methods" && method === "POST") return handleAdminSaveMethods(request, env);
+      if (path === "/api/admin/payment-methods" && method === "POST") {
+        const body = await request.clone().json().catch(() => ({}));
+        return alog(
+          env, session, request,
+          { action: "payment_methods.save", summary: "更新付款方式開放設定", detail: sanitizeForLog(body) },
+          handleAdminSaveMethods(request, env)
+        );
+      }
 
       if (path === "/api/admin/points/config" && method === "GET") return handleGetPointsConfigAdmin(env);
-      if (path === "/api/admin/points/config" && method === "POST") return handleSavePointsConfigAdmin(request, env);
+      if (path === "/api/admin/points/config" && method === "POST") {
+        const body = await request.clone().json().catch(() => ({}));
+        return alog(
+          env, session, request,
+          { action: "points.save_config", summary: "更新點數系統設定", detail: sanitizeForLog(body) },
+          handleSavePointsConfigAdmin(request, env)
+        );
+      }
       if (path === "/api/admin/points/members" && method === "GET") return handleAdminPointsMembers(env);
       if (path === "/api/admin/points/ledger" && method === "GET") return handleAdminPointsLedger(request, env);
-      if (path === "/api/admin/points/adjust" && method === "POST") return handleAdminPointsAdjust(request, env);
+      if (path === "/api/admin/points/adjust" && method === "POST") {
+        const body = await request.clone().json().catch(() => ({}));
+        return alog(
+          env, session, request,
+          {
+            action: "points.adjust",
+            summary: `手動調整會員 #${body.member_id ?? "?"} 點數 ${body.delta > 0 ? "+" : ""}${body.delta ?? ""}`,
+            detail: sanitizeForLog(body),
+          },
+          handleAdminPointsAdjust(request, env)
+        );
+      }
       if (path === "/api/admin/points/items" && method === "GET") return handleAdminListPointItems(env);
-      if (path === "/api/admin/points/items" && method === "POST") return handleAdminCreatePointItem(request, env);
+      if (path === "/api/admin/points/items" && method === "POST") {
+        const body = await request.clone().json().catch(() => ({}));
+        return alog(
+          env, session, request,
+          { action: "points.item_create", summary: `新增點數商城商品「${body.name || ""}」`, detail: sanitizeForLog(body) },
+          handleAdminCreatePointItem(request, env)
+        );
+      }
       const pointItemMatch = path.match(/^\/api\/admin\/points\/items\/(\d+)$/);
-      if (pointItemMatch && method === "PATCH") return handleAdminUpdatePointItem(pointItemMatch[1], request, env);
-      if (pointItemMatch && method === "DELETE") return handleAdminDeletePointItem(pointItemMatch[1], env);
+      if (pointItemMatch && method === "PATCH") {
+        const body = await request.clone().json().catch(() => ({}));
+        return alog(
+          env, session, request,
+          { action: "points.item_update", summary: `編輯點數商城商品 #${pointItemMatch[1]}`, detail: sanitizeForLog(body) },
+          handleAdminUpdatePointItem(pointItemMatch[1], request, env)
+        );
+      }
+      if (pointItemMatch && method === "DELETE") {
+        return alog(
+          env, session, request,
+          { action: "points.item_delete", summary: `刪除點數商城商品 #${pointItemMatch[1]}` },
+          handleAdminDeletePointItem(pointItemMatch[1], env)
+        );
+      }
       if (path === "/api/admin/points/redemptions" && method === "GET") return handleAdminListRedemptions(request, env);
       const redemptionMatch = path.match(/^\/api\/admin\/points\/redemptions\/(\d+)\/(fulfill|reject)$/);
-      if (redemptionMatch && method === "POST") return handleAdminProcessRedemption(redemptionMatch[1], redemptionMatch[2], request, env);
+      if (redemptionMatch && method === "POST") {
+        const actionLabel = redemptionMatch[2] === "fulfill" ? "完成出貨" : "拒絕並退點";
+        return alog(
+          env, session, request,
+          { action: "points.redemption_" + redemptionMatch[2], summary: `將兌換單 #${redemptionMatch[1]} 標記為「${actionLabel}」` },
+          handleAdminProcessRedemption(redemptionMatch[1], redemptionMatch[2], request, env)
+        );
+      }
 
       // ---- 直播下單 ----
       if (path === "/api/admin/live/ingest-key" && method === "GET") return handleLiveGetIngestKey(request, env);
-      if (path === "/api/admin/live/ingest-key" && method === "POST") return handleLiveResetIngestKey(request, env);
+      if (path === "/api/admin/live/ingest-key" && method === "POST") {
+        return alog(
+          env, session, request,
+          { action: "live.reset_ingest_key", summary: "重設直播留言監聽金鑰" },
+          handleLiveResetIngestKey(request, env)
+        );
+      }
       if (path === "/api/admin/live/rounds" && method === "GET") return handleLiveListRounds(env);
-      if (path === "/api/admin/live/rounds" && method === "POST") return handleLiveCreateRound(request, env);
+      if (path === "/api/admin/live/rounds" && method === "POST") {
+        const body = await request.clone().json().catch(() => ({}));
+        return alog(
+          env, session, request,
+          (resBody) => ({
+            action: "live.round_create",
+            summary: `建立直播場次「${body.name || ""}」${resBody && resBody.id ? ` #${resBody.id}` : ""}`,
+          }),
+          handleLiveCreateRound(request, env)
+        );
+      }
       const liveRoundMatch = path.match(/^\/api\/admin\/live\/rounds\/(\d+)$/);
       if (liveRoundMatch && method === "GET") return handleLiveGetRound(liveRoundMatch[1], env);
-      if (liveRoundMatch && method === "PATCH") return handleLiveUpdateRound(liveRoundMatch[1], request, env);
-      if (liveRoundMatch && method === "DELETE") return handleLiveDeleteRound(liveRoundMatch[1], env);
+      if (liveRoundMatch && method === "PATCH") {
+        const body = await request.clone().json().catch(() => ({}));
+        return alog(
+          env, session, request,
+          { action: "live.round_update", summary: `編輯直播場次 #${liveRoundMatch[1]}`, detail: sanitizeForLog(body) },
+          handleLiveUpdateRound(liveRoundMatch[1], request, env)
+        );
+      }
+      if (liveRoundMatch && method === "DELETE") {
+        return alog(
+          env, session, request,
+          { action: "live.round_delete", summary: `刪除直播場次 #${liveRoundMatch[1]}` },
+          handleLiveDeleteRound(liveRoundMatch[1], env)
+        );
+      }
       const liveRoundSub = path.match(/^\/api\/admin\/live\/rounds\/(\d+)\/(items|comments|rematch|create-orders)$/);
       if (liveRoundSub && method === "POST") {
         const rid = liveRoundSub[1];
-        if (liveRoundSub[2] === "items") return handleLiveAddItem(rid, request, env);
-        if (liveRoundSub[2] === "comments") return handleLiveAddComments(rid, request, env);
-        if (liveRoundSub[2] === "rematch") return handleLiveRematch(rid, env);
-        if (liveRoundSub[2] === "create-orders") return handleLiveCreateOrders(rid, request, env, handleCreateOrder);
+        if (liveRoundSub[2] === "items") {
+          const body = await request.clone().json().catch(() => ({}));
+          return alog(
+            env, session, request,
+            { action: "live.item_add", summary: `直播場次 #${rid} 新增商品「${body.code || ""} ${body.name || ""}」`, detail: sanitizeForLog(body) },
+            handleLiveAddItem(rid, request, env)
+          );
+        }
+        if (liveRoundSub[2] === "comments") {
+          return alog(
+            env, session, request,
+            { action: "live.comments_add", summary: `直播場次 #${rid} 貼入留言` },
+            handleLiveAddComments(rid, request, env)
+          );
+        }
+        if (liveRoundSub[2] === "rematch") {
+          return alog(
+            env, session, request,
+            { action: "live.rematch", summary: `直播場次 #${rid} 重新比對留言` },
+            handleLiveRematch(rid, env)
+          );
+        }
+        if (liveRoundSub[2] === "create-orders") {
+          return alog(
+            env, session, request,
+            { action: "live.create_orders", summary: `直播場次 #${rid} 批次建立訂單` },
+            handleLiveCreateOrders(rid, request, env, handleCreateOrder)
+          );
+        }
       }
       const liveItemMatch = path.match(/^\/api\/admin\/live\/items\/(\d+)$/);
-      if (liveItemMatch && method === "PATCH") return handleLiveUpdateItem(liveItemMatch[1], request, env);
-      if (liveItemMatch && method === "DELETE") return handleLiveDeleteItem(liveItemMatch[1], env);
+      if (liveItemMatch && method === "PATCH") {
+        const body = await request.clone().json().catch(() => ({}));
+        return alog(
+          env, session, request,
+          { action: "live.item_update", summary: `編輯直播商品 #${liveItemMatch[1]}`, detail: sanitizeForLog(body) },
+          handleLiveUpdateItem(liveItemMatch[1], request, env)
+        );
+      }
+      if (liveItemMatch && method === "DELETE") {
+        return alog(
+          env, session, request,
+          { action: "live.item_delete", summary: `刪除直播商品 #${liveItemMatch[1]}` },
+          handleLiveDeleteItem(liveItemMatch[1], env)
+        );
+      }
       const liveCommentMatch = path.match(/^\/api\/admin\/live\/comments\/(\d+)$/);
-      if (liveCommentMatch && method === "DELETE") return handleLiveDeleteComment(liveCommentMatch[1], env);
+      if (liveCommentMatch && method === "DELETE") {
+        return alog(
+          env, session, request,
+          { action: "live.comment_delete", summary: `刪除直播留言 #${liveCommentMatch[1]}` },
+          handleLiveDeleteComment(liveCommentMatch[1], env)
+        );
+      }
       const liveCommentAct = path.match(/^\/api\/admin\/live\/comments\/(\d+)\/(bind|guest|promote)$/);
       if (liveCommentAct && method === "POST") {
-        if (liveCommentAct[2] === "bind") return handleLiveBindComment(liveCommentAct[1], request, env);
-        if (liveCommentAct[2] === "guest") return handleLiveGuestComment(liveCommentAct[1], env);
-        if (liveCommentAct[2] === "promote") return handleLivePromoteComment(liveCommentAct[1], env);
+        const actLabel = { bind: "手動綁定會員", guest: "標記為訪客下單", promote: "候補遞補" }[liveCommentAct[2]] || liveCommentAct[2];
+        if (liveCommentAct[2] === "bind") {
+          const body = await request.clone().json().catch(() => ({}));
+          return alog(
+            env, session, request,
+            { action: "live.comment_bind", summary: `直播留言 #${liveCommentAct[1]}：${actLabel}`, detail: sanitizeForLog(body) },
+            handleLiveBindComment(liveCommentAct[1], request, env)
+          );
+        }
+        if (liveCommentAct[2] === "guest") {
+          return alog(
+            env, session, request,
+            { action: "live.comment_guest", summary: `直播留言 #${liveCommentAct[1]}：${actLabel}` },
+            handleLiveGuestComment(liveCommentAct[1], env)
+          );
+        }
+        if (liveCommentAct[2] === "promote") {
+          return alog(
+            env, session, request,
+            { action: "live.comment_promote", summary: `直播留言 #${liveCommentAct[1]}：${actLabel}` },
+            handleLivePromoteComment(liveCommentAct[1], env)
+          );
+        }
       }
 
       if (path === "/api/admin/export" && method === "GET") return handleExport(request, env);

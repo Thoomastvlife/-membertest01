@@ -502,3 +502,59 @@ export async function sendEmail(env, { to, subject, html, text, from }) {
     throw new Error(`EMAIL_SEND_FAILED:${res.status}:${detail.slice(0, 200)}`);
   }
 }
+
+// ========================================================================
+// 後台操作紀錄（操作稽核用）
+// ========================================================================
+
+// 送進 detail 欄位前，過濾掉密碼、圖片等不該長期留存/不適合給其他管理員看到的欄位。
+const LOG_HIDE_FIELDS = new Set([
+  "password",
+  "new_password",
+  "platform_password",
+  "proof_image",
+  "barcode_image",
+  "image_base64",
+]);
+
+// 把 API 收到的 body 物件過濾成適合寫進操作紀錄的樣子：
+// - 敏感欄位（密碼、圖片）只留「有無填寫」，不留內容本身
+// - 過長的文字（例如備註貼了一大段）截斷，避免 detail 爆量
+export function sanitizeForLog(obj) {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return obj;
+  const out = {};
+  for (const k of Object.keys(obj)) {
+    const v = obj[k];
+    if (LOG_HIDE_FIELDS.has(k)) {
+      out[k] = v ? "(已填寫，內容不紀錄)" : v;
+      continue;
+    }
+    if (typeof v === "string" && v.length > 300) {
+      out[k] = v.slice(0, 300) + "…（已截斷）";
+      continue;
+    }
+    out[k] = v;
+  }
+  return out;
+}
+
+// 寫入一筆操作紀錄。寫入失敗只記錄到 console，不會讓原本的後台操作跟著失敗。
+export async function logAdminAction(env, session, request, { action, summary, detail }) {
+  try {
+    const ip = (request && (request.headers.get("CF-Connecting-IP") || request.headers.get("X-Forwarded-For"))) || null;
+    await env.DB.prepare(
+      "INSERT INTO admin_logs (admin_id, admin_username, action, summary, detail, ip) VALUES (?, ?, ?, ?, ?, ?)"
+    )
+      .bind(
+        session && session.adminId != null ? session.adminId : null,
+        (session && session.username) || "(未知帳號)",
+        action,
+        summary,
+        detail !== undefined && detail !== null ? JSON.stringify(detail) : null,
+        ip
+      )
+      .run();
+  } catch (err) {
+    console.error("logAdminAction failed:", err);
+  }
+}
