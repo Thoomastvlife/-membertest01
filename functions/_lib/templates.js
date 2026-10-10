@@ -501,7 +501,15 @@ ${THEME_CSS_ADMIN}
         </div>
 
         <div id="stat_chart_wrap" class="hidden">
-          <div class="stat-chart-box"><canvas id="stat_chart"></canvas></div>
+          <div style="display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;margin-top:6px;">
+          <label for="stat_top_n" style="margin:0;">圓餅圖顯示</label>
+          <select id="stat_top_n" onchange="statTopNChange(this.value)" style="width:auto;">
+            <option value="8">前 8 名（其餘合併成「其他」）</option>
+            <option value="12">前 12 名</option>
+            <option value="0">全部會員</option>
+          </select>
+        </div>
+        <div class="stat-chart-box" id="stat_chart_box"><canvas id="stat_chart"></canvas></div>
           <div id="stat_chart_msg" class="msg" style="text-align:center;"></div>
         </div>
 
@@ -807,6 +815,18 @@ ${THEME_CSS_ADMIN}
     <h2>操作詳細內容</h2>
     <pre id="ld_content" style="white-space:pre-wrap;word-break:break-all;font-size:13px;background:var(--bg-alt,rgba(127,127,127,.08));border-radius:8px;padding:10px;max-height:60vh;overflow:auto;"></pre>
     <button class="btn secondary" onclick="closeLogDetail()">關閉</button>
+  </div>
+</div>
+
+<div id="statOtherModal" class="modal-overlay hidden">
+  <div class="modal-box wide">
+    <h2 id="so_title">其他會員</h2>
+    <div id="so_sub" class="msg"></div>
+    <table id="so_table">
+      <thead><tr><th>會員 / 客人</th><th>儲值筆數</th><th>儲值金額合計</th><th>占比</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <button class="btn secondary" onclick="closeStatOther()">關閉</button>
   </div>
 </div>
 
@@ -2406,8 +2426,30 @@ let statsMonth = '';
 let statsChart = null;
 let chartJsPromise = null;
 let statDetailSeq = 0;
-const STAT_TOP_N = 8;
-const STAT_COLORS = ['#5B8CFF','#4CC38A','#F5A623','#E5646B','#9B7BEA','#2EC4D6','#E58AC3','#A3C14A','#9CA3AF'];
+const STAT_OTHER_COLOR = '#9CA3AF';
+const STAT_COLORS = ['#5B8CFF','#4CC38A','#F5A623','#E5646B','#9B7BEA','#2EC4D6','#E58AC3','#A3C14A','#FF8A5B','#3FA7D6','#C7A3FF','#6FCF97'];
+let statTopN = 8;      // 0 = 全部會員
+let statTopCount = 0;  // 目前圓餅圖上單獨顯示的人數（其餘在「其他」）
+try { const saved = parseInt(localStorage.getItem('statTopN'), 10); if (saved === 0 || saved === 8 || saved === 12) statTopN = saved; } catch (e) {}
+
+// 前 12 名用固定色盤，超過的用色相輪替產生，每個人顏色都不同
+function statColor(i){
+  if (i < STAT_COLORS.length) return STAT_COLORS[i];
+  return 'hsl(' + ((i * 37 + 15) % 360) + ',55%,' + (i % 2 ? 52 : 62) + '%)';
+}
+
+// 圓餅圖上會單獨顯示幾個人（其餘合併成「其他」）；「其他」只剩 1 位就直接單獨顯示
+function statCalcTopCount(len){
+  let n = statTopN > 0 ? statTopN : len;
+  if (len - n === 1) n++;
+  return Math.min(n, len);
+}
+
+function statTopNChange(v){
+  statTopN = parseInt(v, 10) || 0;
+  try { localStorage.setItem('statTopN', String(statTopN)); } catch (e) {}
+  renderStatsChart();
+}
 
 function statCssVar(name, fallback){
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -2454,7 +2496,7 @@ async function loadStats(){
 
   const tbody = document.querySelector('#stat_table tbody');
   const rows = list.map(function(r, i){
-    const color = i < STAT_TOP_N ? STAT_COLORS[i] : STAT_COLORS[STAT_COLORS.length - 1];
+    const color = i < statCalcTopCount(list.length) ? statColor(i) : STAT_OTHER_COLOR;
     return '<tr class="stat-row" data-i="' + i + '" tabindex="0" title="點擊查看訂單明細">'
       + '<td data-label="會員 / 客人"><span class="stat-dot" style="background:' + color + ';"></span><span class="stat-name">' + escapeHtml(r.member_name) + '</span></td>'
       + '<td data-label="儲值筆數">' + r.count + '</td>'
@@ -2489,16 +2531,28 @@ function renderStatsChart(){
   cmsg.textContent = '';
 
   // 前 N 名各自一塊，其餘合併成「其他」，避免會員多的時候圓餅圖碎成一堆細縫
-  const top = statsList.slice(0, STAT_TOP_N);
-  const rest = statsList.slice(STAT_TOP_N);
+  document.getElementById('stat_top_n').value = String(statTopN);
+  statTopCount = statCalcTopCount(statsList.length);
+  // 表格每一列前面的色點，跟圓餅圖目前的分法同步
+  document.querySelectorAll('#stat_table .stat-row').forEach(function(tr){
+    const i = parseInt(tr.dataset.i, 10);
+    const dot = tr.querySelector('.stat-dot');
+    if (dot) dot.style.background = i < statTopCount ? statColor(i) : STAT_OTHER_COLOR;
+  });
+  const top = statsList.slice(0, statTopCount);
+  const rest = statsList.slice(statTopCount);
   const labels = top.map(function(r){ return r.member_name; });
   const data = top.map(function(r){ return Number(r.total) || 0; });
-  const colors = top.map(function(r, i){ return STAT_COLORS[i]; });
+  const colors = top.map(function(r, i){ return statColor(i); });
   if (rest.length){
-    labels.push('其他（' + rest.length + ' 位）');
+    labels.push('其他（' + rest.length + ' 位，點一下看名單）');
     data.push(rest.reduce(function(a, r){ return a + (Number(r.total) || 0); }, 0));
-    colors.push(STAT_COLORS[STAT_COLORS.length - 1]);
+    colors.push(STAT_OTHER_COLOR);
   }
+  // 圖例會隨人數變長，圖表高度跟著加高，圓餅才不會被擠小
+  const perRow = window.innerWidth < 700 ? 2 : 4;
+  const legendRows = Math.ceil(labels.length / perRow);
+  document.getElementById('stat_chart_box').style.height = Math.max(window.innerWidth < 700 ? 280 : 320, 230 + legendRows * 26) + 'px';
   const sum = data.reduce(function(a, b){ return a + b; }, 0);
 
   loadChartJs().then(function(){
@@ -2525,11 +2579,12 @@ function renderStatsChart(){
         onClick: function(evt, els){
           if (!els.length) return;
           const i = els[0].index;
-          if (i < top.length) openStatDetail(i);   // 「其他」那塊沒有單一會員，不開明細
+          if (i < top.length) openStatDetail(i);
+          else openStatOther();                    // 「其他」那塊：列出裡面的會員，再點某一位可看明細
         },
         onHover: function(evt, els){
           const el = evt.native && evt.native.target;
-          if (el) el.style.cursor = (els.length && els[0].index < top.length) ? 'pointer' : 'default';
+          if (el) el.style.cursor = els.length ? 'pointer' : 'default';
         }
       }
     });
@@ -2556,6 +2611,25 @@ function statRowOpen(e){
 }
 document.querySelector('#stat_table tbody').addEventListener('click', statRowOpen);
 document.querySelector('#stat_table tbody').addEventListener('keydown', statRowOpen);
+
+function openStatOther(){
+  const rest = statsList.slice(statTopCount);
+  if (!rest.length) return;
+  const all = statsList.reduce(function(a, r){ return a + (Number(r.total) || 0); }, 0);
+  const sub = rest.reduce(function(a, r){ return a + (Number(r.total) || 0); }, 0);
+  document.getElementById('so_title').textContent = '其他 ' + rest.length + ' 位會員';
+  document.getElementById('so_sub').textContent = statsMonth + '　合計 ' + dMoney(sub) + '（占整體 ' + statPct(sub, all) + '）。點名字可看儲值明細。';
+  document.querySelector('#so_table tbody').innerHTML = rest.map(function(r, j){
+    return '<tr style="cursor:pointer;" onclick="openStatDetailFromOther(' + (statTopCount + j) + ')">'
+      + '<td data-label="會員 / 客人"><b>' + escapeHtml(r.member_name) + '</b></td>'
+      + '<td data-label="儲值筆數">' + r.count + '</td>'
+      + '<td data-label="儲值金額合計">' + dMoney(r.total) + '</td>'
+      + '<td data-label="占比">' + statPct(r.total, all) + '</td></tr>';
+  }).join('');
+  document.getElementById('statOtherModal').classList.remove('hidden');
+}
+function closeStatOther(){ document.getElementById('statOtherModal').classList.add('hidden'); }
+function openStatDetailFromOther(i){ closeStatOther(); openStatDetail(i); }
 
 async function openStatDetail(i){
   const r = statsList[i];
