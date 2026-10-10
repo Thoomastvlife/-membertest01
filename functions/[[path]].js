@@ -12,6 +12,7 @@ import {
   RATE_GROUP_CHOICES,
 } from "./_lib/platforms.js";
 import { homeHtml } from "./_lib/home.js";
+import { hasOrderSearchParams, buildOrderSearch } from "./_lib/ordersearch.js";
 import {
   getPointsConfig,
   savePointsConfig,
@@ -800,6 +801,13 @@ async function handleListOrders(request, env) {
     const id = parseOrderNo(orderNoParam);
     if (!id) return json([]);
     const { results } = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).all();
+    return json(results.map((o) => ({ ...o, order_no: formatOrderNo(o.id) })));
+  }
+
+  // 進階搜尋：關鍵字（任何內容）、日期區間、會員、狀態、付款方式、平台、金額…（見 _lib/ordersearch.js）
+  if (hasOrderSearchParams(url.searchParams)) {
+    const { sql, binds } = buildOrderSearch(url.searchParams, await getPlatforms(env.DB));
+    const { results } = await env.DB.prepare(sql).bind(...binds).all();
     return json(results.map((o) => ({ ...o, order_no: formatOrderNo(o.id) })));
   }
 

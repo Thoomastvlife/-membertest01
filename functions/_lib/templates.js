@@ -392,15 +392,42 @@ ${THEME_CSS_ADMIN}
     <section id="tab-orders" class="tab hidden">
       <div class="card">
         <h2>訂單列表</h2>
-        <label>訂單編號快速搜尋（例如 TW210007，不分月份都能找到）</label>
+        <label>搜尋訂單：會員姓名／帳號／電話、訂單編號、平台帳號、金額、優惠碼、備註…任何內容都可以（多個關鍵字用空白隔開，需全部符合，不分月份）</label>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <input id="ord_search" placeholder="輸入訂單編號" style="flex:1;min-width:160px;" onkeydown="if(event.key==='Enter')searchOrderByNo();" />
-          <button class="btn secondary" onclick="searchOrderByNo()">搜尋</button>
+          <input id="ord_search" placeholder="例如：王小明 轉帳 已付款" style="flex:1;min-width:160px;" onkeydown="if(event.key==='Enter')searchOrders();" />
+          <button class="btn secondary" onclick="searchOrders()">搜尋</button>
           <button class="btn secondary hidden" id="ord_search_clear" onclick="clearOrderSearch()">清除搜尋，回到本月列表</button>
         </div>
-        <label style="margin-top:14px;">月份</label>
+        <label style="margin-top:14px;">日期範圍（台灣時間）</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+          <select id="ord_date_field" style="width:auto;flex:0 0 auto;"><option value="created">建立日期</option><option value="paid">付款日期</option></select>
+          <input id="ord_date_from" type="date" style="width:auto;flex:1;min-width:140px;" />
+          <span style="color:var(--muted);">～</span>
+          <input id="ord_date_to" type="date" style="width:auto;flex:1;min-width:140px;" />
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">
+          <button class="btn secondary small" onclick="setOrdDateRange('today')">今天</button>
+          <button class="btn secondary small" onclick="setOrdDateRange('yesterday')">昨天</button>
+          <button class="btn secondary small" onclick="setOrdDateRange('last7')">近 7 天</button>
+          <button class="btn secondary small" onclick="setOrdDateRange('month')">本月</button>
+          <button class="btn secondary small" onclick="setOrdDateRange('lastmonth')">上月</button>
+          <button class="btn secondary small" id="ord_adv_btn" onclick="toggleOrdAdv()">進階篩選 ▾</button>
+        </div>
+        <div id="ord_adv" class="hidden">
+          <div class="grid2">
+            <div><label>會員</label><select id="ord_f_member"></select></div>
+            <div><label>訂單狀態</label><select id="ord_f_status"></select></div>
+            <div><label>付款方式</label><select id="ord_f_method"></select></div>
+            <div><label>儲值平台</label><select id="ord_f_platform"></select></div>
+            <div><label>結案</label><select id="ord_f_completed"><option value="">不限</option><option value="yes">已結案</option><option value="no">未結案</option></select></div>
+            <div><label>金額（最低～最高）</label>
+              <div style="display:flex;gap:6px;align-items:center;"><input id="ord_f_amin" type="number" inputmode="numeric" min="0" placeholder="最低" /><span style="color:var(--muted);">～</span><input id="ord_f_amax" type="number" inputmode="numeric" min="0" placeholder="最高" /></div></div>
+          </div>
+        </div>
+        <div id="ord_search_info" class="msg hidden"></div>
+        <label style="margin-top:14px;">或直接瀏覽整個月份</label>
         <input id="ord_month" type="month" />
-        <button class="btn secondary" onclick="loadOrders()">查詢</button>
+        <button class="btn secondary" onclick="loadOrders({forceMonth:true})">查詢</button>
         <div class="filter-row">
           <input type="checkbox" id="ord_hide_completed" onchange="renderOrders()" />
           <label for="ord_hide_completed" style="margin:0;">隱藏已結案訂單</label>
@@ -1331,7 +1358,7 @@ function showTab(name, opts){
   document.getElementById('tab-'+name).classList.remove('hidden');
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active', b.dataset.tab===name));
   if (name==='dashboard') { loadDashboard(); startDashPolling(); } else { stopDashPolling(); }
-  if (name==='orders') { loadOrders(); startOrdersPolling(); }
+  if (name==='orders') { fillOrderFilters(); loadOrders(); startOrdersPolling(); }
   else { stopOrdersPolling(); }
   if (name==='members') loadMembers();
   if (name==='stats') loadStats();
@@ -1362,7 +1389,7 @@ function startOrdersPolling(){
       || !document.getElementById('completeModal').classList.contains('hidden');
     const picking = barcodePickAt && (Date.now() - barcodePickAt < 120000);
     const typing = isTypingIn(tab);                                   // 正在輸入備註 / 搜尋 → 不更新
-    const searching = (document.getElementById('ord_search').value || '').trim() !== ''; // 搜尋結果顯示中 → 不要被整月列表蓋掉
+    const searching = orderSearchActive; // 搜尋結果顯示中 → 不要被整月列表蓋掉
     if (tab && !tab.classList.contains('hidden') && !modalOpen && !picking && !typing && !searching) {
       loadOrders({silent:true}).catch(function(){});
     }
@@ -1375,6 +1402,8 @@ function stopOrdersPolling(){
 
 let membersCache = [];
 let ordersCache = [];
+let orderSearchActive = false;   // true = 列表目前顯示的是搜尋結果
+let lastOrderSearchQs = '';
 let correctingId = null;
 let editingMemberId = null;
 
@@ -1515,6 +1544,13 @@ function copyLink(){
 
 async function loadOrders(opts){
   const silent = !!(opts && opts.silent);   // true = 背景自動更新（不是使用者按的）
+  const forceMonth = !!(opts && opts.forceMonth);
+  // 搜尋結果顯示中：標記付款、更正…等操作後留在搜尋結果；背景自動更新則完全不動
+  if (orderSearchActive && !forceMonth) {
+    if (silent) return;
+    await runOrderSearch(lastOrderSearchQs);
+    return;
+  }
   if (!silent) clearOrderSearchState();
   const monthInput = document.getElementById('ord_month');
   if (!monthInput.value) monthInput.value = new Date().toISOString().slice(0,7);
@@ -1529,25 +1565,127 @@ async function loadOrders(opts){
   renderOrders();
 }
 
-function clearOrderSearchState(){
-  document.getElementById('ord_search_clear').classList.add('hidden');
+// ---- 訂單搜尋 ----
+const ORD_METHODS = [['transfer','轉帳'],['store_barcode','超商條碼'],['taiwan_pay','TWQR'],['none','尚未選擇']];
+
+function ordVal(id){ const el = document.getElementById(id); return el ? String(el.value || '').trim() : ''; }
+
+function fillOrderFilters(){
+  function fill(id, opts){
+    const el = document.getElementById(id); if (!el) return;
+    const cur = el.value;
+    el.innerHTML = '';
+    opts.forEach(function(o){ const op = document.createElement('option'); op.value = o[0]; op.textContent = o[1]; el.appendChild(op); });
+    if (Array.prototype.some.call(el.options, function(op){ return op.value === cur; })) el.value = cur;
+  }
+  fill('ord_f_status', [['','不限']].concat(Object.keys(STATUS_LABEL).map(function(k){ return [k, STATUS_LABEL[k][0]]; })));
+  fill('ord_f_method', [['','不限']].concat(ORD_METHODS));
+  fill('ord_f_platform', [['','不限']].concat(Object.keys(PLATFORM_LABEL).map(function(k){ return [k, PLATFORM_LABEL[k]]; })).concat([['none','未指定']]));
+  fill('ord_f_member', [['','不限'],['guest','非會員（訪客訂單）']].concat((membersCache || []).map(function(m){ return [String(m.id), m.name + (m.account ? '（' + m.account + '）' : '')]; })));
 }
 
-async function searchOrderByNo(){
-  const raw = document.getElementById('ord_search').value.trim();
-  if (!raw){ alert('請輸入要查詢的訂單編號'); return; }
+function toggleOrdAdv(){
+  const box = document.getElementById('ord_adv');
+  const hidden = box.classList.toggle('hidden');
+  document.getElementById('ord_adv_btn').textContent = hidden ? '進階篩選 ▾' : '收合進階篩選 ▴';
+}
+
+function collectOrderSearchQs(){
+  const p = [];
+  function add(k, v){ if (v !== '') p.push(k + '=' + encodeURIComponent(v)); }
+  add('q', ordVal('ord_search'));
+  const from = ordVal('ord_date_from'), to = ordVal('ord_date_to');
+  add('date_from', from); add('date_to', to);
+  if (from || to) add('date_field', ordVal('ord_date_field'));
+  add('member_id', ordVal('ord_f_member'));
+  add('status', ordVal('ord_f_status'));
+  add('payment_method', ordVal('ord_f_method'));
+  add('platform', ordVal('ord_f_platform'));
+  add('completed', ordVal('ord_f_completed'));
+  add('amount_min', ordVal('ord_f_amin'));
+  add('amount_max', ordVal('ord_f_amax'));
+  return p.join('&');
+}
+
+async function searchOrders(){
+  const qs = collectOrderSearchQs();
+  if (!qs) { alert('請輸入關鍵字，或選擇日期／其他篩選條件'); return; }
+  const from = ordVal('ord_date_from'), to = ordVal('ord_date_to');
+  if (from && to && from > to) { alert('日期範圍不正確：開始日期不能晚於結束日期'); return; }
+  await runOrderSearch(qs);
+}
+
+async function runOrderSearch(qs){
   try{
-    const results = await api('/api/admin/orders?order_no='+encodeURIComponent(raw));
-    if (!results.length){ alert('查無此訂單編號：'+raw); return; }
+    const results = await api('/api/admin/orders?' + qs);
     ordersCache = results;
+    orderSearchActive = true;
+    lastOrderSearchQs = qs;
     document.getElementById('ord_search_clear').classList.remove('hidden');
+    showOrderSearchInfo(results);
     renderOrders();
   }catch(e){ alert(e.message); }
 }
 
+function showOrderSearchInfo(list){
+  const el = document.getElementById('ord_search_info');
+  let total = 0, paid = 0, paidN = 0;
+  list.forEach(function(o){
+    const a = Number(o.amount) || 0;
+    total += a;
+    if (o.status === 'paid') { paid += a; paidN++; }
+  });
+  const fmt = function(n){ return '$' + n.toLocaleString('en-US', {maximumFractionDigits: 2}); };
+  let txt = list.length
+    ? ('找到 ' + list.length + ' 筆　訂單金額合計 ' + fmt(total) + '　其中已付款 ' + paidN + ' 筆、' + fmt(paid))
+    : '查無符合的訂單，請換個關鍵字或放寬條件';
+  if (list.length >= 300) txt += '　（最多顯示 300 筆，請縮小條件）';
+  el.textContent = txt;
+  el.className = 'msg' + (list.length ? '' : ' err');
+}
+
+function resetOrderSearchFields(){
+  ['ord_search','ord_date_from','ord_date_to','ord_f_amin','ord_f_amax'].forEach(function(id){ const el = document.getElementById(id); if (el) el.value = ''; });
+  ['ord_f_member','ord_f_status','ord_f_method','ord_f_platform','ord_f_completed'].forEach(function(id){ const el = document.getElementById(id); if (el) el.value = ''; });
+  const df = document.getElementById('ord_date_field'); if (df) df.value = 'created';
+}
+
+function clearOrderSearchState(){
+  orderSearchActive = false;
+  lastOrderSearchQs = '';
+  document.getElementById('ord_search_clear').classList.add('hidden');
+  document.getElementById('ord_search_info').classList.add('hidden');
+  resetOrderSearchFields();
+}
+
 function clearOrderSearch(){
-  document.getElementById('ord_search').value = '';
-  loadOrders();
+  loadOrders({forceMonth:true});
+}
+
+function taipeiToday(){
+  const parts = new Intl.DateTimeFormat('en-US', {timeZone:'Asia/Taipei', year:'numeric', month:'2-digit', day:'2-digit'}).formatToParts(new Date());
+  const g = function(type){ return parts.filter(function(x){ return x.type === type; })[0].value; };
+  return g('year') + '-' + g('month') + '-' + g('day');
+}
+function ymdShift(ymd, days){
+  const d = new Date(ymd + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+function setOrdDateRange(kind){
+  const today = taipeiToday();
+  let from = today, to = today;
+  if (kind === 'yesterday') { from = to = ymdShift(today, -1); }
+  else if (kind === 'last7') { from = ymdShift(today, -6); }
+  else if (kind === 'month') { from = today.slice(0, 7) + '-01'; }
+  else if (kind === 'lastmonth') {
+    const y = parseInt(today.slice(0, 4), 10), m = parseInt(today.slice(5, 7), 10);
+    from = new Date(Date.UTC(y, m - 2, 1)).toISOString().slice(0, 10);
+    to = new Date(Date.UTC(y, m - 1, 0)).toISOString().slice(0, 10);
+  }
+  document.getElementById('ord_date_from').value = from;
+  document.getElementById('ord_date_to').value = to;
+  searchOrders();
 }
 
 function renderOrders(){
@@ -1609,7 +1747,7 @@ function renderOrders(){
       <td data-label="備註"><input class="ord-note-input" value="\${escapeHtml(o.admin_note||'')}" placeholder="內部備註" style="width:130px;font-size:12px;padding:5px 7px;" onblur="saveOrderNote(\${o.id}, this)" onkeydown="if(event.key==='Enter'){this.blur();}" /></td>
       <td data-label="操作">\${actions}</td>
     </tr>\`;
-  }).join('') || '<tr><td colspan="14">本月尚無訂單</td></tr>';
+  }).join('') || ('<tr><td colspan="14">' + (orderSearchActive ? '沒有符合條件的訂單' : (hideCompleted && ordersCache.length ? '沒有未結案的訂單（已勾選隱藏已結案訂單）' : '本月尚無訂單')) + '</td></tr>');
 }
 
 async function saveOrderNote(id, inputEl){
