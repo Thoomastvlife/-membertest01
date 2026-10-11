@@ -201,15 +201,39 @@ async function logAuthFailure(env, request, action, summary) {
   await logAdminAction(env, ANON_ACTOR, request, { action, summary });
 }
 
-// 後台「操作紀錄」頁籤：列出 admin_logs，支援關鍵字搜尋跟依帳號篩選，新→舊排序、分頁
-async function handleListAdminLogs(request, env) {
-  const url = new URL(request.url);
-  const { page, size, offset } = parsePage(url, 50, 200);
-  const q = (url.searchParams.get("q") || "").trim();
-  const adminIdParam = url.searchParams.get("admin_id");
-  const category = url.searchParams.get("category");
-  const dateFrom = url.searchParams.get("date_from");
-  const dateTo = url.searchParams.get("date_to");
+// 後台「操作紀錄」頁籤：列出 admin_logs，支援關鍵字搜尋、依帳號／類別／日期篩選，新→舊排序、分頁（每頁最多 50 筆）。
+// 「匯出 CSV」跟列表共用同一組篩選條件（buildLogsWhere）。
+const LOGS_PAGE_SIZE = 50;
+const LOGS_EXPORT_LIMIT = 20000;
+
+// 類別：依 action 前綴分組（pattern 是 SQL LIKE 的寫法）
+const LOG_CATEGORIES = {
+  auth: ["auth.%"],
+  order: ["order.%", "guest.%", "self.order%"],
+  member: ["member.%", "self.profile", "self.tiktok"],
+  points: ["points.%", "self.redeem"],
+  live: ["live.%"],
+  settings: ["settings.%", "announcement.%", "rates.%", "coupon.%", "platform.%", "payment_methods.%"],
+  staff: ["staff.%"],
+  data: ["data.%"],
+};
+const LOG_CATEGORY_LABELS = {
+  auth: "登入／登出／註冊",
+  order: "訂單",
+  member: "會員資料",
+  points: "點數／兌換",
+  live: "直播下單",
+  settings: "設定",
+  staff: "員工帳號",
+  data: "資料匯出",
+};
+
+function buildLogsWhere(sp) {
+  const q = (sp.get("q") || "").trim();
+  const adminIdParam = sp.get("admin_id");
+  const category = sp.get("category");
+  const dateFrom = sp.get("date_from");
+  const dateTo = sp.get("date_to");
 
   const where = [];
   const binds = [];
@@ -221,17 +245,6 @@ async function handleListAdminLogs(request, env) {
   } else if (adminIdParam === "guest") {
     where.push("admin_username IN ('(客人)','(未登入)')");
   }
-  // 類別：依 action 前綴分組
-  const LOG_CATEGORIES = {
-    auth: ["auth.%"],
-    order: ["order.%", "guest.%", "self.order%"],
-    member: ["member.%", "self.profile", "self.tiktok"],
-    points: ["points.%", "self.redeem"],
-    live: ["live.%"],
-    settings: ["settings.%", "announcement.%", "rates.%", "coupon.%", "platform.%", "payment_methods.%"],
-    staff: ["staff.%"],
-    data: ["data.%"],
-  };
   if (category && LOG_CATEGORIES[category]) {
     where.push("(" + LOG_CATEGORIES[category].map(() => "action LIKE ?").join(" OR ") + ")");
     binds.push(...LOG_CATEGORIES[category]);
@@ -246,11 +259,20 @@ async function handleListAdminLogs(request, env) {
     binds.push(dateTo + " 23:59:59");
   }
   if (q) {
-    where.push("(summary LIKE ? OR admin_username LIKE ? OR action LIKE ? OR detail LIKE ?)");
-    const kw = `%${q}%`;
-    binds.push(kw, kw, kw, kw);
+    // 逸出 % _ \，讓使用者輸入的 % 和 _ 當一般字元比對（IP 裡的 . 本來就不是萬用字元）
+    where.push(
+      "(summary LIKE ? ESCAPE '\\' OR admin_username LIKE ? ESCAPE '\\' OR action LIKE ? ESCAPE '\\' OR detail LIKE ? ESCAPE '\\' OR ip LIKE ? ESCAPE '\\')"
+    );
+    const kw = "%" + q.replace(/[\\%_]/g, (c) => "\\" + c) + "%";
+    binds.push(kw, kw, kw, kw, kw);
   }
-  const whereSql = where.length ? " WHERE " + where.join(" AND ") : "";
+  return { whereSql: where.length ? " WHERE " + where.join(" AND ") : "", binds };
+}
+
+async function handleListAdminLogs(request, env) {
+  const url = new URL(request.url);
+  const { page, size, offset } = parsePage(url, LOGS_PAGE_SIZE, LOGS_PAGE_SIZE); // 每頁最多 50 筆，網址參數要求更多也一樣
+  const { whereSql, binds } = buildLogsWhere(url.searchParams);
 
   const totalRow = await env.DB.prepare("SELECT COUNT(*) AS c FROM admin_logs" + whereSql).bind(...binds).first();
   const total = totalRow ? totalRow.c : 0;
@@ -263,6 +285,86 @@ async function handleListAdminLogs(request, env) {
     .all();
 
   return json({ rows: results, total, page: Math.min(page, pages), pages, size });
+}
+
+// ---- 匯出操作紀錄（CSV，Excel 可直接開啟）----
+// 依目前的篩選條件，最多匯出最近 20,000 筆（新→舊）；匯出這個動作本身也會留一筆紀錄（不會出現在剛匯出的檔案裡）。
+function logCategoryLabel(action) {
+  const a = String(action || "");
+  for (const [key, patterns] of Object.entries(LOG_CATEGORIES)) {
+    // LIKE 的 "xxx.%" / "self.order%" 都是「前綴比對」
+    if (patterns.some((p) => a.startsWith(p.replace(/%$/, "")))) return LOG_CATEGORY_LABELS[key];
+  }
+  return "其他";
+}
+
+function logDetailText(raw) {
+  if (!raw) return "";
+  try {
+    const o = JSON.parse(raw);
+    if (o && typeof o === "object" && !Array.isArray(o)) {
+      return Object.entries(o)
+        .map(([k, v]) => k + ": " + (v !== null && typeof v === "object" ? JSON.stringify(v) : String(v)))
+        .join("; ");
+    }
+    return String(raw);
+  } catch {
+    return String(raw);
+  }
+}
+
+// 儲存格內容有一部分是外人可以影響的（例如登入失敗時別人輸入的帳號、客人填的名稱），
+// 開頭是 = + - @ 的文字用 Excel 開啟可能被當成公式執行，所以這類儲存格前面補一個單引號，讓它只當文字。
+function csvCell(v) {
+  let str = String(v ?? "");
+  if (/^[=+\-@\t\r]/.test(str)) str = "'" + str;
+  return /[",\r\n]/.test(str) ? '"' + str.replace(/"/g, '""') + '"' : str;
+}
+
+async function handleExportAdminLogs(request, env, session) {
+  const url = new URL(request.url);
+  const { whereSql, binds } = buildLogsWhere(url.searchParams);
+  const { results } = await env.DB.prepare("SELECT * FROM admin_logs" + whereSql + " ORDER BY id DESC LIMIT ?")
+    .bind(...binds, LOGS_EXPORT_LIMIT)
+    .all();
+
+  // 資料庫存的是 UTC：自己換算成台灣時間（+8 小時），輸出固定格式 2026-10-10 01:00:00，不依賴執行環境的語系設定
+  const toTaipei = (dateStr) => {
+    if (!dateStr) return "";
+    const t = Date.parse(String(dateStr).replace(" ", "T") + "Z");
+    return Number.isNaN(t) ? String(dateStr) : new Date(t + 8 * 3600 * 1000).toISOString().slice(0, 19).replace("T", " ");
+  };
+  const header = ["時間（台灣時間）", "操作人員", "類別", "內容", "詳細", "IP"];
+  const rows = results.map((r) => [
+    toTaipei(r.created_at),
+    r.admin_username,
+    logCategoryLabel(r.action),
+    r.summary,
+    logDetailText(r.detail),
+    r.ip || "",
+  ]);
+  const csv = "\uFEFF" + [header, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n");
+
+  const filters = {};
+  for (const k of ["q", "admin_id", "category", "date_from", "date_to"]) {
+    const v = (url.searchParams.get(k) || "").trim();
+    if (v) filters[k] = v;
+  }
+  await logAdminAction(env, session, request, {
+    action: "data.export_logs",
+    summary: "匯出操作紀錄（" + results.length + " 筆）",
+    detail: { filters, rows: results.length },
+  });
+
+  const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10).replace(/-/g, "");
+  return new Response(csv, {
+    status: 200,
+    headers: {
+      "Content-Type": "text/csv; charset=utf-8",
+      "Content-Disposition": 'attachment; filename="admin_logs_' + today + '.csv"',
+      "Cache-Control": "no-store",
+    },
+  });
 }
 
 // ---- Setup / auth ----
@@ -2871,6 +2973,7 @@ export async function onRequest(context) {
       const L = await resolveLogLabels(env, path, method);
 
       if (path === "/api/admin/logs" && method === "GET") return handleListAdminLogs(request, env);
+      if (path === "/api/admin/logs/export" && method === "GET") return handleExportAdminLogs(request, env, session);
 
       if (path === "/api/admin/staff" && method === "GET") return handleListStaff(env, access);
       if (path === "/api/admin/staff" && method === "POST") {

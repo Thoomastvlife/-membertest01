@@ -826,7 +826,7 @@ ${THEME_CSS_ADMIN}
         <h2>操作紀錄</h2>
         <small class="hint">記錄後台操作、登入／登出（含登入失敗）、會員自助操作與客人在付款頁的動作（誰、什麼時候、做了什麼），密碼與圖片等敏感內容不會記錄。每頁 50 筆；只看得到功能啟用之後的紀錄，無法回溯之前的歷史。</small>
         <div class="grid2" style="margin-top:10px;">
-          <div><label>關鍵字（操作內容、帳號）</label><input id="logs_q" placeholder="例如：會員姓名、訂單編號…" oninput="logsSearchDebounced()" /></div>
+          <div><label>關鍵字（操作內容、帳號、IP）</label><input id="logs_q" placeholder="例如：會員姓名、訂單編號、IP…" oninput="logsSearchDebounced()" /></div>
           <div><label>操作人員</label>
             <select id="logs_admin_id" onchange="loadLogs(1)"><option value="">全部</option><option value="member">會員（自助操作）</option><option value="guest">客人／未登入</option></select>
           </div>
@@ -850,6 +850,11 @@ ${THEME_CSS_ADMIN}
               <input type="date" id="logs_date_to" onchange="loadLogs(1)" />
             </div>
           </div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:4px 0 10px;">
+          <button class="btn secondary" onclick="exportLogs()">匯出 CSV</button>
+          <button class="btn secondary" onclick="resetLogsFilters()">清除篩選</button>
+          <small class="hint" style="margin:0;">匯出會依照上面的篩選條件，最多匯出最近 20,000 筆（不受每頁 50 筆限制）；匯出本身也會留下一筆紀錄。</small>
         </div>
         <table id="logs_table">
           <thead><tr><th>時間</th><th>操作人員</th><th>內容</th><th>詳細</th><th>IP</th></tr></thead>
@@ -3561,22 +3566,51 @@ async function ensureLogsAdminOptions(){
   }catch(e){ /* 下拉選單載入失敗不影響主要列表功能，忽略即可 */ }
 }
 
-async function loadLogs(page){
-  if (page) logsPage = page;
-  await ensureLogsAdminOptions();
-  const m = document.getElementById('logs_msg');
-  m.textContent=''; m.className='msg';
+function logsFilterParams(){
+  const qs = new URLSearchParams();
   const q = document.getElementById('logs_q').value.trim();
   const adminId = document.getElementById('logs_admin_id').value;
   const category = document.getElementById('logs_category').value;
   const dateFrom = document.getElementById('logs_date_from').value;
   const dateTo = document.getElementById('logs_date_to').value;
-  const qs = new URLSearchParams({ page: logsPage, size: LOGS_SIZE });
   if (q) qs.set('q', q);
   if (adminId) qs.set('admin_id', adminId);
   if (category) qs.set('category', category);
   if (dateFrom) qs.set('date_from', dateFrom);
   if (dateTo) qs.set('date_to', dateTo);
+  return qs;
+}
+
+function logsDateError(){
+  const from = document.getElementById('logs_date_from').value;
+  const to = document.getElementById('logs_date_to').value;
+  return (from && to && from > to) ? '日期區間不正確：開始日期不能晚於結束日期' : '';
+}
+
+function resetLogsFilters(){
+  ['logs_q','logs_admin_id','logs_category','logs_date_from','logs_date_to'].forEach(function(id){ document.getElementById(id).value = ''; });
+  loadLogs(1);
+}
+
+function exportLogs(){
+  const m = document.getElementById('logs_msg');
+  const dateErr = logsDateError();
+  if (dateErr) { m.textContent = dateErr; m.className = 'msg err'; return; }
+  window.location.href = '/api/admin/logs/export?' + logsFilterParams().toString();
+  m.textContent = '已開始下載（依照目前的篩選條件，最多匯出最近 20,000 筆）'; m.className = 'msg ok';
+  setTimeout(function(){ loadLogs(); }, 1500);   // 匯出本身會留下一筆紀錄，稍後重新整理列表就看得到
+}
+
+async function loadLogs(page){
+  if (page) logsPage = page;
+  await ensureLogsAdminOptions();
+  const m = document.getElementById('logs_msg');
+  m.textContent=''; m.className='msg';
+  const dateErr = logsDateError();
+  if (dateErr) { m.textContent = dateErr; m.className = 'msg err'; return; }
+  const qs = logsFilterParams();
+  qs.set('page', logsPage);
+  qs.set('size', LOGS_SIZE);
   try{
     const d = await api('/api/admin/logs?'+qs.toString());
     logsPage = d.page;
