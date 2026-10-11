@@ -6,8 +6,9 @@
 // 可以勾選的權限。requires = 必須同時有另一項（例如要能刪除訂單，先要能使用訂單功能）
 export const PERMISSIONS = [
   { key: "dashboard", label: "首頁", desc: "查看營收與待辦總覽" },
-  { key: "orders", label: "結帳櫃檯／訂單列表", desc: "建立訂單、查看與處理訂單（標記付款、更正、結案、上傳條碼）" },
-  { key: "orders_delete", label: "永久刪除訂單", desc: "危險操作，刪除後無法復原", requires: "orders" },
+  { key: "checkout", label: "結帳櫃檯", desc: "建立訂單（含品項明細、優惠碼試算）並產生付款連結；不能查看或修改已建立的訂單" },
+  { key: "order_list", label: "訂單列表", desc: "查看與搜尋訂單、處理訂單（標記付款、更正、結案、上傳條碼、品項與交貨、寄明細）" },
+  { key: "orders_delete", label: "永久刪除訂單", desc: "危險操作，刪除後無法復原", requires: "order_list" },
   { key: "members", label: "會員管理", desc: "新增、編輯會員，重設會員密碼" },
   { key: "members_delete", label: "刪除會員", desc: "危險操作，刪除後無法復原", requires: "members" },
   { key: "stats", label: "儲值統計／資料匯出", desc: "查看每月儲值統計、下載匯出檔" },
@@ -21,11 +22,18 @@ export const PERMISSIONS = [
 
 export const PERMISSION_KEYS = PERMISSIONS.map((p) => p.key);
 // 新增員工時預設勾選的項目
-export const DEFAULT_STAFF_PERMISSIONS = ["dashboard", "orders"];
+export const DEFAULT_STAFF_PERMISSIONS = ["dashboard", "checkout", "order_list"];
+
+// 舊版的「orders」（結帳櫃檯／訂單列表合在一起）已經拆成「checkout」和「order_list」。
+// 資料庫裡還存著舊的 "orders" 的員工帳號，視為「兩個都有」，行為跟拆分之前完全一樣，不需要另外升級資料庫；
+// 之後在後台重新儲存該員工的權限，就會改存成新的兩個項目。
+const LEGACY_ORDERS_KEY = "orders";
 
 // 把前端送來的權限清單整理乾淨：去掉不認識的、重複的，沒有前提的相依權限也一併拿掉
 export function normalizePermissions(list) {
-  const set = new Set((Array.isArray(list) ? list : []).filter((k) => PERMISSION_KEYS.includes(k)));
+  const arr = Array.isArray(list) ? list : [];
+  const expanded = arr.includes(LEGACY_ORDERS_KEY) ? [...arr, "checkout", "order_list"] : arr;
+  const set = new Set(expanded.filter((k) => PERMISSION_KEYS.includes(k)));
   for (const p of PERMISSIONS) {
     if (p.requires && set.has(p.key) && !set.has(p.requires)) set.delete(p.key);
   }
@@ -52,10 +60,15 @@ export function requiredAdminPermission(path, method) {
     case "logs":
       return "logs";
     case "orders":
-      return m === "DELETE" ? "orders_delete" : "orders";
+      if (m === "DELETE") return "orders_delete";
+      // 只有「建立訂單」（POST /api/admin/orders）屬於結帳櫃檯；其餘查詢與處理（含 /orders/:id/...）都屬於訂單列表
+      if (m === "POST" && String(path).replace(/\/+$/, "") === "/api/admin/orders") return "checkout";
+      return "order_list";
+    case "order-items": // 訂單的品項（修改、刪除、標記交貨）屬於訂單列表
+      return "order_list";
     case "members":
       if (m === "DELETE") return "members_delete";
-      return read ? { any: ["members", "orders", "live", "points"] } : "members"; // 結帳櫃檯、直播、點數都要挑會員
+      return read ? { any: ["members", "checkout", "order_list", "live", "points"] } : "members"; // 結帳櫃檯、直播、點數都要挑會員
     case "stats":
     case "export":
       return "stats";
@@ -64,7 +77,7 @@ export function requiredAdminPermission(path, method) {
     case "payment-methods":
       return "settings";
     case "platforms":
-      return read ? { any: ["settings", "rates", "orders"] } : "settings";
+      return read ? { any: ["settings", "rates", "checkout", "order_list"] } : "settings";
     case "rates":
       return "rates";
     case "coupons":

@@ -1056,7 +1056,7 @@ async function checkSession(){
     document.getElementById('appView').classList.remove('hidden');
     applyAccess();
     showTab(firstAllowedTab());
-    if (canUse('orders') || canUse('members') || canUse('live') || canUse('points')) loadMembersIntoSelect();
+    if (canUse('checkout') || canUse('order_list') || canUse('members') || canUse('live') || canUse('points')) loadMembersIntoSelect();
     refreshPushButton();
   }catch(e){
     try{
@@ -2489,8 +2489,8 @@ async function deleteMember(id){
 }
 
 // ---- 員工權限 ----
-const TAB_NEED = {dashboard:'dashboard', checkout:'orders', orders:'orders', members:'members', stats:'stats', settings:'settings', announcement:'settings', export:'stats', staff:'OWNER', rates:'rates', coupons:'coupons', points:'points', live:'live', logs:'logs'};
-const DEFAULT_NEW_PERMS = ['dashboard', 'orders'];
+const TAB_NEED = {dashboard:'dashboard', checkout:'checkout', orders:'order_list', members:'members', stats:'stats', settings:'settings', announcement:'settings', export:'stats', staff:'OWNER', rates:'rates', coupons:'coupons', points:'points', live:'live', logs:'logs'};
+const DEFAULT_NEW_PERMS = ['dashboard', 'checkout', 'order_list'];
 let adminMe = null, staffCache = [], spmId = null;
 
 function canUse(key){
@@ -2670,13 +2670,13 @@ async function loadDashboard(opts){
     // 待處理
     const p = d.pending;
     const todos = [
-      ['待上傳條碼', p.need_barcode, 'orders', true],
-      ['已上傳付款證明，待核對', p.need_verify, 'orders', true],
-      ['已付款，待結案', p.to_complete, 'orders', false],
+      ['待上傳條碼', p.need_barcode, 'order_list', true],
+      ['已上傳付款證明，待核對', p.need_verify, 'order_list', true],
+      ['已付款，待結案', p.to_complete, 'order_list', false],
       ['點數兌換單待處理', p.redemptions, 'points', true],
-      ['等客人轉帳', p.wait_transfer, 'orders', false],
-      ['等客人用條碼付款', p.wait_barcode_pay, 'orders', false],
-      ['等客人選付款方式', p.wait_method, 'orders', false]
+      ['等客人轉帳', p.wait_transfer, 'order_list', false],
+      ['等客人用條碼付款', p.wait_barcode_pay, 'order_list', false],
+      ['等客人選付款方式', p.wait_method, 'order_list', false]
     ];
     const box = document.getElementById('dash_todos');
     box.innerHTML = '';
