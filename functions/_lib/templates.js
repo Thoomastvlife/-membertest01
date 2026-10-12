@@ -162,6 +162,28 @@ ${THEME_HEAD}
   .rank-bar{height:6px;background:var(--border);border-radius:3px;margin-top:4px;overflow:hidden;}
   .rank-bar i{display:block;height:100%;background:var(--accent);}
   @media (max-width:700px){ .dash-cols{grid-template-columns:1fr;} .kpi-value{font-size:22px;} .bars .bar span:nth-child(n){font-size:9px;} }
+  /* ---- 儀表板圖表 ---- */
+  .viz-head{display:flex;justify-content:space-between;align-items:baseline;gap:4px 12px;flex-wrap:wrap;}
+  .viz-head h2{margin:0;}
+  .viz-num{font-size:24px;font-weight:700;margin-right:8px;}
+  .viz-sub{font-size:12px;color:var(--muted);}
+  .viz-box{position:relative;height:250px;margin-top:10px;}
+  .viz-box.short{height:215px;}
+  .viz-empty{font-size:13px;color:var(--muted);padding:34px 0;text-align:center;}
+  .viz-stack{display:flex;gap:2px;height:24px;margin:12px 0 10px;}
+  .viz-seg{min-width:3px;outline:none;cursor:default;}
+  .viz-seg:first-child{border-radius:4px 0 0 4px;} .viz-seg:last-child{border-radius:0 4px 4px 0;} .viz-seg:only-child{border-radius:4px;}
+  .viz-seg:hover,.viz-seg:focus-visible{filter:brightness(1.15);box-shadow:0 0 0 2px var(--text) inset;}
+  .viz-row{display:grid;grid-template-columns:12px minmax(0,1fr) auto 52px;gap:8px;align-items:center;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px;}
+  .viz-row:last-child{border-bottom:none;}
+  .viz-key{width:12px;height:12px;border-radius:3px;}
+  .viz-row .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .viz-row .amt{color:var(--muted);font-size:12px;white-space:nowrap;}
+  .viz-row .pct{text-align:right;font-weight:700;}
+  details.viz-table summary{cursor:pointer;color:var(--muted);font-size:12px;margin-top:10px;}
+  details.viz-table table{font-size:12px;}
+  #viz_tip{position:fixed;z-index:70;pointer-events:none;display:none;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 10px;font-size:12px;line-height:1.5;box-shadow:0 6px 18px rgba(0,0,0,.18);max-width:240px;}
+  #viz_tip .v{font-size:14px;font-weight:700;} #viz_tip .m{color:var(--muted);}
 
   @media (max-width:700px){
     header{padding:10px 12px;flex-wrap:nowrap;gap:8px;}
@@ -267,14 +289,31 @@ ${THEME_CSS_ADMIN}
       </div>
 
       <div class="card">
-        <h2>近 14 天儲值金額</h2>
-        <div class="bars" id="dash_bars"></div>
+        <div class="viz-head">
+          <h2>近 30 天儲值金額</h2>
+          <div><span class="viz-num" id="viz_rev_total">-</span><span class="viz-sub" id="viz_rev_delta"></span></div>
+        </div>
+        <div class="viz-box" id="viz_rev_box"><canvas id="viz_rev" role="img" aria-label="近 30 天每日儲值金額折線圖，詳細數字見下方表格"></canvas></div>
+        <div class="viz-empty hidden" id="viz_rev_empty">近 30 天還沒有已付款的訂單</div>
+        <details class="viz-table"><summary>查看表格</summary><div id="viz_rev_table"></div></details>
+        <div class="msg err" id="viz_rev_msg"></div>
       </div>
 
       <div class="dash-cols" style="margin-bottom:16px;">
-        <div class="card"><h2>本月各平台</h2><div id="dash_platforms"></div></div>
-        <div class="card"><h2>本月儲值排行 Top 5</h2><div id="dash_top"></div></div>
+        <div class="card">
+          <div class="viz-head"><h2>各平台占比</h2><span class="viz-sub">近 30 天・已付款金額</span></div>
+          <div id="viz_plat"></div>
+        </div>
+        <div class="card">
+          <div class="viz-head"><h2>熱門時段</h2><span class="viz-sub" id="viz_hour_peak">近 30 天・已付款筆數</span></div>
+          <div class="viz-box short" id="viz_hour_box"><canvas id="viz_hour" role="img" aria-label="近 30 天各時段已付款筆數長條圖，詳細數字見下方表格"></canvas></div>
+          <div class="viz-empty hidden" id="viz_hour_empty">近 30 天還沒有已付款的訂單</div>
+          <details class="viz-table"><summary>查看表格</summary><div id="viz_hour_table"></div></details>
+          <div class="msg err" id="viz_hour_msg"></div>
+        </div>
       </div>
+
+      <div class="card"><h2>本月儲值排行 Top 5</h2><div id="dash_top"></div></div>
 
       <div class="card">
         <h2>最新訂單</h2>
@@ -2650,6 +2689,259 @@ function dDelta(cur, prev, label){
   return '較' + label + ' <span class="' + cls + '">' + (pct >= 0 ? '▲ ' : '▼ ') + Math.abs(pct) + '%</span>';
 }
 
+// ---- 儀表板圖表：近 30 天營收折線 / 各平台占比 / 熱門時段 ----
+// 配色：分類色依平台「在設定裡的順序」固定對應（顏色跟著平台走，不跟排名走）；淺色／深色各用自己驗證過的色階。
+const VIZ_CAT = {
+  light: ['#2a78d6','#eb6834','#1baf7a','#eda100','#e87ba4','#008300','#6250d6','#e34948'],
+  dark:  ['#3987e5','#d95926','#199e70','#c98500','#d55181','#008300','#9085e9','#e66767']
+};
+const VIZ_MUTE = { light: '#c9c8c1', dark: '#4a4d57' };   // 「不是重點」的灰
+const VIZ_OTHER = '#898781';                               // 已刪除的平台
+let vizRevChart = null, vizHourChart = null, vizSig = '', vizLast = null;
+
+function vizMode(){ return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light'; }
+function vizTick(v){ v = Number(v) || 0; if (v >= 1e6) return (v / 1e6) + 'M'; if (v >= 1000) return (v / 1000) + 'K'; return String(v); }
+function vizWeekday(dateStr){ return '日一二三四五六'.charAt(new Date(dateStr + 'T00:00:00Z').getUTCDay()); }
+
+// 共用的提示框（用 textContent 塞字，名稱來自資料，不走 innerHTML）
+function vizShowTip(x, y, lines){
+  let t = document.getElementById('viz_tip');
+  if (!t){ t = document.createElement('div'); t.id = 'viz_tip'; document.body.appendChild(t); }
+  t.textContent = '';
+  lines.forEach(function(l){ const d = document.createElement('div'); d.textContent = l[0]; if (l[1]) d.className = l[1]; t.appendChild(d); });
+  t.style.display = 'block';
+  const r = t.getBoundingClientRect();
+  let px = x + 14, py = y + 14;
+  if (px + r.width > window.innerWidth - 8) px = x - r.width - 14;
+  if (py + r.height > window.innerHeight - 8) py = y - r.height - 14;
+  t.style.left = Math.max(8, px) + 'px'; t.style.top = Math.max(8, py) + 'px';
+}
+function vizHideTip(){ const t = document.getElementById('viz_tip'); if (t) t.style.display = 'none'; }
+
+// 折線圖的垂直指示線（滑鼠移到哪一天就貼齊那一天）與高點標籤
+const vizCrosshair = {
+  id: 'vizCrosshair',
+  afterDatasetsDraw: function(chart){
+    const act = chart.tooltip && chart.tooltip.getActiveElements ? chart.tooltip.getActiveElements() : [];
+    if (!act.length) return;
+    const x = act[0].element.x, a = chart.chartArea, c = chart.ctx;
+    c.save(); c.beginPath(); c.moveTo(x, a.top); c.lineTo(x, a.bottom);
+    c.lineWidth = 1; c.strokeStyle = chart.options.plugins.vizCrosshair.color; c.stroke(); c.restore();
+  }
+};
+const vizPeakLabel = {
+  id: 'vizPeakLabel',
+  afterDatasetsDraw: function(chart){
+    const o = chart.options.plugins.vizPeakLabel;
+    if (!o || !o.text) return;
+    const pt = chart.getDatasetMeta(0).data[o.index];
+    if (!pt) return;
+    const c = chart.ctx, a = chart.chartArea;
+    c.save();
+    c.font = '12px ' + Chart.defaults.font.family; c.fillStyle = o.color; c.textBaseline = 'bottom';
+    const w = c.measureText(o.text).width;
+    c.fillText(o.text, Math.max(a.left, Math.min(a.right - w, pt.x - w / 2)), pt.y - 8);
+    c.restore();
+  }
+};
+
+function vizTable(el, head, rows){
+  el.textContent = '';
+  const tb = document.createElement('table');
+  const hr = document.createElement('tr');
+  head.forEach(function(h){ const th = document.createElement('th'); th.textContent = h; hr.appendChild(th); });
+  tb.appendChild(hr);
+  rows.forEach(function(r){
+    const tr = document.createElement('tr');
+    r.forEach(function(v){ const td = document.createElement('td'); td.textContent = v; tr.appendChild(td); });
+    tb.appendChild(tr);
+  });
+  el.appendChild(tb);
+}
+
+function vizRenderRevenue(tr, ui){
+  const days = tr.days30;
+  const total = days.reduce(function(a, x){ return a + x.total; }, 0);
+  document.getElementById('viz_rev_total').textContent = dMoney(total);
+  document.getElementById('viz_rev_delta').innerHTML = dDelta(total, tr.prev30.total, '前 30 天');
+  vizTable(document.getElementById('viz_rev_table'), ['日期', '儲值金額', '筆數'],
+    days.slice().reverse().map(function(x){ return [x.date.slice(5).replace('-', '/') + '（' + vizWeekday(x.date) + '）', dMoney(x.total), String(x.count)]; }));
+  const box = document.getElementById('viz_rev_box'), empty = document.getElementById('viz_rev_empty');
+  if (total <= 0){
+    box.classList.add('hidden'); empty.classList.remove('hidden');
+    if (vizRevChart){ vizRevChart.destroy(); vizRevChart = null; }
+    return;
+  }
+  box.classList.remove('hidden'); empty.classList.add('hidden');
+  if (vizRevChart){ vizRevChart.destroy(); vizRevChart = null; }
+  const vals = days.map(function(x){ return x.total; });
+  let peak = 0; vals.forEach(function(v, i){ if (v > vals[peak]) peak = i; });
+  const last = vals.length - 1;
+  vizRevChart = new Chart(document.getElementById('viz_rev'), {
+    type: 'line',
+    plugins: [vizCrosshair, vizPeakLabel],
+    data: {
+      labels: days.map(function(x){ return x.date; }),
+      datasets: [{
+        data: vals, borderColor: ui.s1, borderWidth: 2, borderJoinStyle: 'round', borderCapStyle: 'round',
+        backgroundColor: ui.s1 + '1A', fill: true, tension: 0,
+        pointRadius: function(c){ return c.dataIndex === last ? 4 : 0; },
+        pointBackgroundColor: ui.s1, pointBorderColor: ui.surface, pointBorderWidth: 2,
+        pointHoverRadius: 5, pointHoverBackgroundColor: ui.s1, pointHoverBorderColor: ui.surface, pointHoverBorderWidth: 2
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      layout: { padding: { right: 8 } },
+      scales: {
+        x: { grid: { display: false }, border: { color: ui.grid },
+             ticks: { color: ui.muted, maxRotation: 0, autoSkip: true, maxTicksLimit: 7,
+                      callback: function(v){ return this.getLabelForValue(v).slice(5).replace('-', '/'); } } },
+        y: { beginAtZero: true, grace: '14%', border: { display: false }, grid: { color: ui.grid },
+             ticks: { color: ui.muted, maxTicksLimit: 5, callback: function(v){ return vizTick(v); } } }
+      },
+      plugins: {
+        legend: { display: false },
+        vizCrosshair: { color: ui.muted },
+        vizPeakLabel: { text: vals[peak] > 0 ? '高點 ' + dMoney(vals[peak]) : '', index: peak, color: ui.ink },
+        tooltip: {
+          backgroundColor: ui.surface, borderColor: ui.grid, borderWidth: 1, cornerRadius: 8, padding: 10,
+          titleColor: ui.muted, bodyColor: ui.ink, boxWidth: 10, boxHeight: 2, boxPadding: 4,
+          callbacks: {
+            title: function(items){ const d = items[0].label; return d.slice(5).replace('-', '/') + '（週' + vizWeekday(d) + '）'; },
+            label: function(c){ return ' ' + dMoney(c.parsed.y) + '　' + days[c.dataIndex].count + ' 筆'; },
+            labelColor: function(){ return { borderColor: ui.s1, backgroundColor: ui.s1 }; }
+          }
+        }
+      }
+    }
+  });
+}
+
+function vizRenderHours(tr, ui){
+  const hrs = tr.hours30;
+  const totalCnt = hrs.reduce(function(a, x){ return a + x.count; }, 0);
+  vizTable(document.getElementById('viz_hour_table'), ['時段', '筆數', '儲值金額'],
+    hrs.map(function(x){ return [('0' + x.hour).slice(-2) + ':00–' + ('0' + x.hour).slice(-2) + ':59', String(x.count), dMoney(x.total)]; }));
+  const box = document.getElementById('viz_hour_box'), empty = document.getElementById('viz_hour_empty');
+  const peakEl = document.getElementById('viz_hour_peak');
+  if (vizHourChart){ vizHourChart.destroy(); vizHourChart = null; }
+  if (totalCnt <= 0){
+    box.classList.add('hidden'); empty.classList.remove('hidden'); peakEl.textContent = '近 30 天・已付款筆數';
+    return;
+  }
+  box.classList.remove('hidden'); empty.classList.add('hidden');
+  // 重點只標示前 3 名（同分一起算），其他退成灰色
+  const counts = hrs.map(function(x){ return x.count; });
+  const third = counts.slice().sort(function(a, b){ return b - a; })[2] || 0;
+  const isTop = counts.map(function(c){ return c > 0 && c >= third; });
+  let best = 0; counts.forEach(function(c, i){ if (c > counts[best]) best = i; });
+  peakEl.textContent = '最熱 ' + ('0' + best).slice(-2) + ':00 前後（' + counts[best] + ' 筆）・近 30 天';
+  vizHourChart = new Chart(document.getElementById('viz_hour'), {
+    type: 'bar',
+    data: {
+      labels: hrs.map(function(x){ return x.hour; }),
+      datasets: [{
+        data: counts,
+        backgroundColor: isTop.map(function(f){ return f ? ui.s1 : ui.mute; }),
+        borderRadius: { topLeft: 4, topRight: 4 }, borderSkipped: 'bottom',
+        categoryPercentage: 0.9, barPercentage: 0.78, maxBarThickness: 24
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: {
+        x: { grid: { display: false }, border: { color: ui.grid },
+             ticks: { color: ui.muted, maxRotation: 0, autoSkip: false,
+                      callback: function(v){ return v % 3 === 0 ? v + '時' : ''; } } },
+        y: { beginAtZero: true, grace: '10%', border: { display: false }, grid: { color: ui.grid },
+             ticks: { color: ui.muted, maxTicksLimit: 4, precision: 0 } }
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: ui.surface, borderColor: ui.grid, borderWidth: 1, cornerRadius: 8, padding: 10,
+          titleColor: ui.muted, bodyColor: ui.ink, displayColors: false,
+          callbacks: {
+            title: function(items){ const h = ('0' + items[0].label).slice(-2); return h + ':00–' + h + ':59'; },
+            label: function(c){ return c.parsed.y + ' 筆　' + dMoney(hrs[c.dataIndex].total); }
+          }
+        }
+      }
+    }
+  });
+}
+
+function vizRenderPlatforms(tr, ui){
+  const el = document.getElementById('viz_plat');
+  el.textContent = '';
+  const rows = tr.platforms30 || [];
+  const total = rows.reduce(function(a, r){ return a + r.total; }, 0);
+  if (!rows.length || total <= 0){
+    const e = document.createElement('div'); e.className = 'viz-empty'; e.textContent = '近 30 天還沒有已付款的訂單'; el.appendChild(e); return;
+  }
+  const cat = VIZ_CAT[vizMode()];
+  function colorOf(r){
+    if (r.removed) return VIZ_OTHER;
+    if (r.slot >= 0 && r.slot < cat.length) return cat[r.slot];
+    return ui.mute;                                   // 未指定、或第 9 個以後的平台
+  }
+  function pct(v){ const p = v / total * 100; return (p > 0 && p < 1 ? '<1' : String(Math.round(p))) + '%'; }
+  const stack = document.createElement('div'); stack.className = 'viz-stack'; stack.setAttribute('role', 'img');
+  stack.setAttribute('aria-label', '各平台占比：' + rows.map(function(r){ return r.name + ' ' + pct(r.total); }).join('，'));
+  rows.forEach(function(r){
+    const seg = document.createElement('div');
+    seg.className = 'viz-seg'; seg.tabIndex = 0;
+    seg.style.flex = String(r.total) + ' 1 0'; seg.style.background = colorOf(r);
+    const lines = [[dMoney(r.total) + '　' + pct(r.total), 'v'], [r.name + '・' + r.count + ' 筆', 'm']];
+    seg.addEventListener('pointermove', function(e){ vizShowTip(e.clientX, e.clientY, lines); });
+    seg.addEventListener('pointerleave', vizHideTip);
+    seg.addEventListener('focus', function(){ const b = seg.getBoundingClientRect(); vizShowTip(b.left + b.width / 2, b.top, lines); });
+    seg.addEventListener('blur', vizHideTip);
+    stack.appendChild(seg);
+  });
+  el.appendChild(stack);
+  rows.forEach(function(r){
+    const row = document.createElement('div'); row.className = 'viz-row';
+    const key = document.createElement('span'); key.className = 'viz-key'; key.style.background = colorOf(r);
+    const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = r.name + (r.removed ? '（已移除）' : ''); nm.title = nm.textContent;
+    const amt = document.createElement('span'); amt.className = 'amt'; amt.textContent = dMoney(r.total) + '・' + r.count + ' 筆';
+    const pc = document.createElement('span'); pc.className = 'pct'; pc.textContent = pct(r.total);
+    row.appendChild(key); row.appendChild(nm); row.appendChild(amt); row.appendChild(pc);
+    el.appendChild(row);
+  });
+}
+
+function renderDashCharts(trend){
+  if (!trend) return;
+  const mode = vizMode();
+  const sig = mode + JSON.stringify(trend);
+  if (sig === vizSig) return;                          // 資料沒變就不重畫，自動更新時圖不會閃
+  vizLast = trend;
+  const ui = {
+    s1: VIZ_CAT[mode][0], mute: VIZ_MUTE[mode],
+    grid: statCssVar('--border', '#e2e4e8'), muted: statCssVar('--muted', '#6b7280'),
+    ink: statCssVar('--text', '#1f2430'), surface: statCssVar('--card', '#fff')
+  };
+  vizRenderPlatforms(trend, ui);                       // 純 HTML，不用等圖表套件
+  loadChartJs().then(function(){
+    Chart.defaults.font.family = '-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif';
+    vizRenderRevenue(trend, ui);
+    vizRenderHours(trend, ui);
+    document.getElementById('viz_rev_msg').textContent = '';
+    document.getElementById('viz_hour_msg').textContent = '';
+    vizSig = sig;
+  }).catch(function(e){
+    ['viz_rev_msg', 'viz_hour_msg'].forEach(function(id){ document.getElementById(id).textContent = e.message + '（可展開下方表格查看數字）'; });
+  });
+}
+
+// 切換深色／淺色時，圖表的顏色要重新套用
+new MutationObserver(function(){
+  if (vizLast){ vizSig = ''; renderDashCharts(vizLast); }
+}).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
 async function loadDashboard(opts){
   opts = opts || {};
   const msg = document.getElementById('dash_msg');
@@ -2694,22 +2986,6 @@ async function loadDashboard(opts){
     const pendingKinds = todos.filter(function(t){ return t[1] > 0; }).length;
     document.getElementById('todo_summary').textContent = pendingKinds ? '· ' + pendingKinds + ' 類有待處理' : '· 全部完成';
 
-    // 近 14 天長條圖
-    const max = Math.max.apply(null, d.days.map(function(x){ return x.total; }).concat([1]));
-    const bars = document.getElementById('dash_bars');
-    bars.innerHTML = '';
-    d.days.forEach(function(x){
-      const bar = document.createElement('div');
-      bar.className = 'bar' + (x.date === d.today ? ' today' : '');
-      bar.title = x.date + '：' + dMoney(x.total) + '（' + x.count + ' 筆）';
-      const i = document.createElement('i');
-      i.style.height = (x.total / max * 100) + '%';
-      const sp = document.createElement('span');
-      sp.textContent = x.date.slice(5).replace('-', '/');
-      bar.appendChild(i); bar.appendChild(sp);
-      bars.appendChild(bar);
-    });
-
     // 平台、排行
     function rankList(elId, rows, nameKey){
       const el = document.getElementById(elId);
@@ -2725,8 +3001,8 @@ async function loadDashboard(opts){
         el.appendChild(row);
       });
     }
-    rankList('dash_platforms', d.platforms, 'name');
     rankList('dash_top', d.top_members, 'name');
+    renderDashCharts(d.trend);
 
     // 最新訂單
     const tb = document.querySelector('#dash_recent tbody');

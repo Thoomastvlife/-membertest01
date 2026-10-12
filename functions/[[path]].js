@@ -1737,6 +1737,55 @@ async function handleDashboard(env) {
      FROM orders ORDER BY id DESC LIMIT 8`
   );
 
+  // ---- 趨勢圖表資料：近 30 天（含今天）、只算已付款、以「付款時間」的台灣日期／時段統計 ----
+  const platList = await getPlatforms(db);
+  const platLabelMap30 = platformLabelMap(platList);
+  const paidTz = `datetime(paid_at, ${TZ})`;
+  const in30 = `${paidTz} >= date('now', ${TZ}, '-29 days')`;
+  const day30Rows = await all(
+    `SELECT ${paidBy("%Y-%m-%d")} AS d, COUNT(*) AS c, SUM(amount) AS t FROM orders WHERE status='paid' AND ${in30} GROUP BY d`
+  );
+  const day30Map = {};
+  for (const r of day30Rows) day30Map[r.d] = r;
+  const days30 = [];
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(Date.parse(today + "T00:00:00Z") - i * 86400000).toISOString().slice(0, 10);
+    days30.push({ date: d, count: day30Map[d]?.c || 0, total: day30Map[d]?.t || 0 });
+  }
+  const prev30 = await one(
+    `SELECT COUNT(*) AS c, COALESCE(SUM(amount),0) AS t FROM orders
+     WHERE status='paid' AND ${paidTz} >= date('now', ${TZ}, '-59 days') AND ${paidTz} < date('now', ${TZ}, '-29 days')`
+  );
+  const plat30Rows = await all(
+    `SELECT COALESCE(platform,'') AS platform, COUNT(*) AS c, SUM(amount) AS t FROM orders
+     WHERE status='paid' AND ${in30} GROUP BY platform ORDER BY t DESC`
+  );
+  const hour30Rows = await all(
+    `SELECT CAST(strftime('%H', ${paidTz}) AS INTEGER) AS h, COUNT(*) AS c, SUM(amount) AS t FROM orders
+     WHERE status='paid' AND ${in30} GROUP BY h`
+  );
+  const hourMap = {};
+  for (const r of hour30Rows) hourMap[r.h] = r;
+  const hours30 = [];
+  for (let h = 0; h < 24; h++) hours30.push({ hour: h, count: hourMap[h]?.c || 0, total: hourMap[h]?.t || 0 });
+  const trend = {
+    days30,
+    prev30: { count: prev30.c || 0, total: prev30.t || 0 },
+    // slot = 平台在「儲值平台設定」裡的順序，固定對應一個顏色（顏色跟著平台走，不跟排名走）；-1 = 未指定／已不存在的平台
+    platforms30: plat30Rows.map((r) => {
+      const idx = r.platform ? platList.findIndex((p) => p.key === r.platform) : -1;
+      return {
+        key: r.platform,
+        name: r.platform ? (platLabelMap30[r.platform] || r.platform) : "未指定",
+        slot: idx,
+        removed: !!r.platform && idx < 0,
+        count: r.c,
+        total: r.t || 0,
+      };
+    }),
+    hours30,
+  };
+
   const members = await one(
     `SELECT COUNT(*) AS total,
             SUM(CASE WHEN date(datetime(created_at, ${TZ})) = ? THEN 1 ELSE 0 END) AS today,
@@ -1763,6 +1812,7 @@ async function handleDashboard(env) {
       live_ready: liveOpen.ready || 0,
     },
     days,
+    trend,
     platforms: platforms.map((r) => ({ key: r.platform, name: platformLabels[r.platform] || "未指定", count: r.c, total: r.t || 0 })),
     top_members: topMembers.map((r) => ({ name: r.name, count: r.c, total: r.t || 0 })),
     recent: recent.map((r) => ({
