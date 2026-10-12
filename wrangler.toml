@@ -32,9 +32,9 @@ EMAIL_FROM_ORDER = "咖啡代儲訂單通知 <order@member.ytgp168.com>"
 # 管理員沒填信箱、這裡也沒設定，就不會寄。
 # 另外要設定 secret CRON_SECRET（GitHub Actions 呼叫日報 API 用的金鑰，兩邊要一樣）：
 #   wrangler pages secret put CRON_SECRET --project-name=member-checkout-pages
-# DAILY_REPORT_TO = "owner@gmail.com"
+#  DAILY_REPORT_TO = "owner@gmail.com"
 # 日報寄件人，選填；不填沿用 EMAIL_FROM_ORDER，再沒有就用 EMAIL_FROM。
-# EMAIL_FROM_REPORT = "咖啡代儲營運日報 <report@member.ytgp168.com>"
+EMAIL_FROM_REPORT = "咖啡代儲營運日報 <report@member.ytgp168.com>"
 
 # 部署前務必設定這個機密值（用來簽署登入 session）：
 #   wrangler pages secret put ADMIN_SESSION_SECRET --project-name=member-checkout-pages
