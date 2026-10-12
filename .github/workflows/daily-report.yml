@@ -1,0 +1,26 @@
+# 每日營運日報：每天台灣時間 10:00 呼叫網站的日報 API（統計「昨天」並寄給有填信箱的管理員，以及 DAILY_REPORT_TO）。
+# 需要在 GitHub 專案的 Settings > Secrets and variables > Actions 設定兩個 secret：
+#   SITE_URL    例如 https://member.ytgp168.com（結尾不要加斜線）
+#   CRON_SECRET 要跟 Cloudflare Pages 的 CRON_SECRET 一樣
+# 想改時間：改下面的 cron（UTC 時間；台灣 = UTC+8，所以 0 2 = 台灣 10:00）。
+# 也可以到 Actions 頁面手動按「Run workflow」立刻寄一封。
+name: 每日營運日報
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 呼叫日報 API
+        env:
+          SITE_URL: ${{ secrets.SITE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          code=$(curl -sS -o resp.json -w "%{http_code}" -X POST \
+            -H "X-Cron-Key: $CRON_SECRET" "$SITE_URL/api/cron/daily-report")
+          cat resp.json; echo
+          [ "$code" = "200" ]
