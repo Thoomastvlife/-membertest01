@@ -353,7 +353,8 @@ v60 待處理推播 + 每日營運日報
         付款方式與平台分布、前 5 名會員、目前待處理（待核對／待上傳條碼／等轉帳／等繳費／未結案／兌換單）與等最久的 5 筆。
   日期一律台灣時間；統計口徑跟後台首頁一樣（只計已付款，依付款時間）。
 
-  Cloudflare Pages 沒有內建排程，所以做成：GitHub Actions 每天台灣 08:00 → 呼叫 POST /api/cron/daily-report。
+  Cloudflare Pages 沒有內建排程，所以做成：GitHub Actions 每天台灣 10:00（v61 起，原為 08:00）→ 呼叫 POST /api/cron/daily-report。
+  想改時間：編輯 .github/workflows/daily-report.yml 的 cron（UTC；台灣時間減 8 小時，例：10:00 = "0 2 * * *"），push 即生效。
 
   設定步驟（一次性）：
   1. Cloudflare Pages 加 secret：  wrangler pages secret put CRON_SECRET --project-name=member-checkout-pages
