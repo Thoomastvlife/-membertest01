@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS admins (
   password_hash TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'staff',   -- owner（管理員，可新增員工並設定權限）| staff（員工，只能用被勾選的功能）
   permissions TEXT,                      -- 員工可用的功能（JSON 陣列）；NULL = 還沒設定過
+  email TEXT,                            -- 信箱（選填）；role = owner 且有填的帳號會收到每日營運日報。既有資料庫用 migrate_v24.sql 加上
   created_at TEXT DEFAULT (datetime('now'))
 );
 

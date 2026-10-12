@@ -376,3 +376,28 @@ v60 待處理推播 + 每日營運日報
 異動檔案：functions/_lib/helpers.js、functions/_lib/access.js（匯出 parsePermissions）、functions/_lib/report.js（新）、
           functions/[[path]].js、wrangler.toml、.github/workflows/daily-report.yml（新）、README.txt
 資料庫無需 migration；前端與 sw.js 不用改。
+
+
+==================================================
+v61 管理員信箱欄位（資料庫部分，日報收件人改讀資料庫的第一步）
+==================================================
+目的：不用再改 wrangler.toml 的 DAILY_REPORT_TO；改成在管理員帳號上填「信箱」，
+      日報寄給「role = owner 且有填信箱」的帳號。
+
+【本次只做資料庫】
+  - 新增 admins.email（TEXT，可為空）。
+  - 既有資料庫執行一次：
+      wrangler d1 execute <你的資料庫名稱> --remote --file=./migrate_v24.sql
+    全新安裝用最新 schema.sql 已包含，不用跑。
+  - 現有程式不會壞：所有 INSERT 都有指定欄位名稱，登入用的 SELECT * 多一欄也沒影響；
+    沒跑 migration 就先部署也一樣，因為目前的程式還沒用到這個欄位。
+  - 欄位刻意不加 UNIQUE（SQLite 的 ALTER ADD COLUMN 不能加；同一信箱也可能給多個帳號）。
+    格式檢查、轉小寫、去空白，之後在後端儲存時處理。
+
+【接下來的步驟（還沒做）】
+  1. 後台「員工帳號」頁讓管理員填／改自己的信箱（API：更新 admins.email）。
+  2. report.js 的收件人邏輯：SELECT email FROM admins WHERE role='owner' AND email 不為空，
+     與 DAILY_REPORT_TO（若有設定）合併去重；兩邊都沒有才回「沒有收件人」。
+
+異動檔案：migrate_v24.sql（新）、schema.sql、README.txt
+
