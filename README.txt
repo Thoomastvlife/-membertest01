@@ -335,3 +335,44 @@ v59 儀表板圖表（近 30 天趨勢）
 異動檔案：functions/[[path]].js（handleDashboard 新增 trend 資料）、functions/_lib/templates.js（圖表畫面）
 資料庫無需 migration。圖表使用 Chart.js 4.4.1（cdnjs，失敗時改用 jsdelivr）。
 若要還原舊版 14 天長條圖，請用 v58 的這兩個檔案覆蓋回去即可。
+
+
+==================================================
+v60 待處理推播 + 每日營運日報
+==================================================
+【一、待處理推播】（沿用原本的後台推播訂閱，員工不用重新訂閱）
+  - 客人在付款頁上傳轉帳證明／帳號末幾碼 → 推播「待核對付款」
+  - 客人選了超商條碼或台灣Pay → 推播「待上傳條碼」
+  - 這兩種只推給「管理員」和「有勾訂單列表權限」的員工；原本的「有新訂單」仍推給所有訂閱的裝置。
+  - 同一筆訂單用固定 tag（verify-訂單ID／barcode-訂單ID），重複上傳證明只會更新同一則通知，不會洗版。
+  - 後台自己建立的訂單不推播（店員自己知道）。
+  - 推播失敗不影響客人操作；失效的訂閱（404/410）會自動清掉。
+
+【二、每日營運日報】
+  內容：昨天的已付款筆數／金額（含較前一日漲跌）、本月累計、新單／取消／過期、優惠碼與點數折抵、
+        付款方式與平台分布、前 5 名會員、目前待處理（待核對／待上傳條碼／等轉帳／等繳費／未結案／兌換單）與等最久的 5 筆。
+  日期一律台灣時間；統計口徑跟後台首頁一樣（只計已付款，依付款時間）。
+
+  Cloudflare Pages 沒有內建排程，所以做成：GitHub Actions 每天台灣 08:00 → 呼叫 POST /api/cron/daily-report。
+
+  設定步驟（一次性）：
+  1. Cloudflare Pages 加 secret：  wrangler pages secret put CRON_SECRET --project-name=member-checkout-pages
+     （用 openssl rand -hex 32 產生一長串）
+  2. wrangler.toml 取消註解並填 DAILY_REPORT_TO = "你的信箱"（多個用逗號分隔），重新部署。
+     寄信沿用現有 Resend（RESEND_API_KEY、EMAIL_FROM）；寄件人可用 EMAIL_FROM_REPORT 另外指定。
+  3. GitHub 專案 Settings > Secrets and variables > Actions 新增：
+       SITE_URL    = https://member.ytgp168.com
+       CRON_SECRET = 跟步驟 1 同一串
+  4. 到 Actions > 「每日營運日報」按 Run workflow 手動測一次。
+
+  API 參數（標頭都要帶 X-Cron-Key）：
+    ?dry=1            只回傳預覽，不寄信（用 curl 先看內容）
+    ?date=YYYY-MM-DD  指定統計日期（預設昨天）
+    ?force=1          同一天已寄過也再寄（預設同一天只寄一次，避免排程重複觸發）
+  例：curl -X POST -H "X-Cron-Key: 你的金鑰" "https://member.ytgp168.com/api/cron/daily-report?dry=1"
+
+  注意：GitHub 排程可能延遲幾分鐘；專案 60 天沒有任何活動時 GitHub 會自動停用排程，記得偶爾 push 或手動跑一次。
+
+異動檔案：functions/_lib/helpers.js、functions/_lib/access.js（匯出 parsePermissions）、functions/_lib/report.js（新）、
+          functions/[[path]].js、wrangler.toml、.github/workflows/daily-report.yml（新）、README.txt
+資料庫無需 migration；前端與 sw.js 不用改。

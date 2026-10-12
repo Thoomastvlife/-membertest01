@@ -1,3 +1,4 @@
+import { handleDailyReportCron } from "./_lib/report.js";
 import { adminHtml, payHtml, memberHtml, memberRegisterHtml } from "./_lib/templates.js";
 import {
   getPlatforms,
@@ -71,6 +72,8 @@ import {
   getSettingsObj,
   getOrCreateVapidKeys,
   notifyAdminsOfNewOrder,
+  notifyAdminsOfPendingVerify,
+  notifyAdminsOfPendingBarcode,
   generateReferralCode,
   ensureMemberReferralCode,
   applyCouponToAmount,
@@ -1975,7 +1978,7 @@ async function handleSelectMethod(token, request, env) {
     };
   }
 
-  await env.DB.prepare(
+  const methodRes = await env.DB.prepare(
     `UPDATE orders SET payment_method=?, status=?, method_selected_at=?,
       bank_name=?, bank_account_number=?, bank_account_holder=?, store_brand=? WHERE token=? AND payment_method IS NULL`
   )
@@ -1983,6 +1986,10 @@ async function handleSelectMethod(token, request, env) {
     .run();
 
   const updated = await env.DB.prepare("SELECT * FROM orders WHERE token=?").bind(token).first();
+  // 客人選了超商條碼／台灣Pay → 推播「待上傳條碼」（只有這次請求真的寫入成功才推，避免重複點擊重複通知）
+  if (newStatus === "awaiting_barcode" && methodRes.meta && methodRes.meta.changes > 0) {
+    await notifyAdminsOfPendingBarcode(env, updated);
+  }
   return payViewJson(env, updated);
 }
 
@@ -2017,6 +2024,10 @@ async function handleUploadProof(token, request, env) {
     .run();
 
   const updated = await env.DB.prepare("SELECT * FROM orders WHERE token=?").bind(token).first();
+  // 轉帳訂單客人上傳了證明 → 推播「待核對付款」（已付款的訂單不需要再核對）
+  if (updated && updated.status === "awaiting_payment") {
+    await notifyAdminsOfPendingVerify(env, updated);
+  }
   return payViewJson(env, updated);
 }
 
@@ -2879,6 +2890,9 @@ export async function onRequest(context) {
       if (who) await logAdminAction(env, who, request, { action: "auth.admin_logout", summary: "登出後台" });
       return handleLogout();
     }
+
+    // 每日營運日報：GitHub Actions 排程用金鑰（X-Cron-Key）呼叫，不需要登入
+    if (path === "/api/cron/daily-report") return handleDailyReportCron(request, env);
 
     // 直播留言自動抓取：監聽程式用金鑰（X-Ingest-Key）送留言進來，不需要登入
     if (path === "/api/live/ingest" && method === "POST") return handleLiveIngest(request, env);

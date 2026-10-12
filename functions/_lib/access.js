@@ -91,7 +91,7 @@ export function requiredAdminPermission(path, method) {
   }
 }
 
-function parsePermissions(raw) {
+export function parsePermissions(raw) {
   if (raw == null || raw === "") return null;
   try {
     const arr = JSON.parse(raw);

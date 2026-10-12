@@ -1,3 +1,4 @@
+import { parsePermissions } from "./access.js";
 // 共用工具函式。放在 _lib 資料夾（開頭底線）Cloudflare Pages 不會把它當成路由。
 
 export function jsonRes(data, status = 200, extraHeaders = {}) {
@@ -412,22 +413,36 @@ async function sendWebPush(sub, payloadText, env) {
   });
 }
 
-// 通知所有已訂閱推播的後台裝置：有新訂單進來了。單一裝置推播失敗（例如已解除訂閱）
-// 不應該影響下單流程本身，所以這裡整個函式吞掉錯誤，並順手清掉失效的訂閱。
-export async function notifyAdminsOfNewOrder(env, order) {
+// 推播給後台裝置。need = 需要的權限（例如 "order_list"）：只推給管理員，以及有勾這項權限的員工；
+// need 為 null 就推給所有已訂閱的裝置。單一裝置推播失敗（例如已解除訂閱）不應該影響主流程，
+// 所以這裡整個函式吞掉錯誤，並順手清掉失效的訂閱（404/410）。
+export async function pushToAdmins(env, { title, body, url, tag, need }) {
   try {
-    const { results } = await env.DB.prepare("SELECT * FROM push_subscriptions").all();
-    if (!results || !results.length) return;
+    let rows;
+    try {
+      const r = await env.DB.prepare(
+        `SELECT s.*, a.role AS admin_role, a.permissions AS admin_permissions
+           FROM push_subscriptions s LEFT JOIN admins a ON a.id = s.admin_id`
+      ).all();
+      rows = r.results || [];
+    } catch (e) {
+      // 資料庫還沒執行 migrate_v22.sql（admins 沒有 role 欄位）：維持舊行為，推給所有訂閱
+      const r = await env.DB.prepare("SELECT * FROM push_subscriptions").all();
+      rows = (r.results || []).map((x) => ({ ...x, admin_role: "owner" }));
+    }
+    if (need) {
+      rows = rows.filter((sub) => {
+        if (sub.admin_role === "owner") return true;
+        const perms = parsePermissions(sub.admin_permissions);
+        if (perms === null) return true; // 還沒設定過權限 = 維持升級前行為（全部功能）
+        return perms.includes(need);
+      });
+    }
+    if (!rows.length) return;
 
-    const payload = JSON.stringify({
-      title: "有新訂單",
-      body: `${order.member_name_snapshot} 送出自助下單，金額 $${order.amount}`,
-      url: "/admin",
-      tag: "order-" + order.id,
-    });
-
+    const payload = JSON.stringify({ title, body, url: url || "/admin", tag });
     await Promise.all(
-      results.map(async (sub) => {
+      rows.map(async (sub) => {
         try {
           const res = await sendWebPush(sub, payload, env);
           if (res.status === 404 || res.status === 410) {
@@ -439,8 +454,42 @@ export async function notifyAdminsOfNewOrder(env, order) {
       })
     );
   } catch (e) {
-    // 推播整體出錯也不應該影響下單本身
+    // 推播整體出錯也不應該影響主流程
   }
+}
+
+// 有新訂單進來了（會員自助下單）
+export async function notifyAdminsOfNewOrder(env, order) {
+  await pushToAdmins(env, {
+    title: "有新訂單",
+    body: `${order.member_name_snapshot} 送出自助下單，金額 $${order.amount}`,
+    url: "/admin",
+    tag: "order-" + order.id,
+    need: null,
+  });
+}
+
+// 客人上傳了轉帳證明／帳號末幾碼：有一筆「待核對付款」
+export async function notifyAdminsOfPendingVerify(env, order) {
+  await pushToAdmins(env, {
+    title: "待核對付款",
+    body: `${order.member_name_snapshot} 已上傳付款證明，$${order.amount}，請核對入帳`,
+    url: "/admin",
+    tag: "verify-" + order.id,
+    need: "order_list",
+  });
+}
+
+// 客人選了超商條碼／台灣Pay：有一筆「待上傳條碼」
+export async function notifyAdminsOfPendingBarcode(env, order) {
+  const label = order.payment_method === "taiwan_pay" ? "台灣Pay" : "超商條碼";
+  await pushToAdmins(env, {
+    title: "待上傳條碼",
+    body: `${order.member_name_snapshot} 選了${label}，$${order.amount}，請上傳條碼`,
+    url: "/admin",
+    tag: "barcode-" + order.id,
+    need: "order_list",
+  });
 }
 
 // ========================================================================
