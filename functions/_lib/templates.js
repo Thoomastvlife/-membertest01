@@ -699,9 +699,9 @@ ${THEME_CSS_ADMIN}
       </div>
       <div class="card">
         <h2>帳號列表</h2>
-        <small class="hint">「尚未設定」的員工目前可以使用全部功能（員工帳號管理除外），建議按「設定權限」確認一次。</small>
+        <small class="hint">「尚未設定」的員工目前可以使用全部功能（員工帳號管理除外），建議按「設定權限」確認一次。<br>管理員帳號可以按「設定信箱」填入信箱；每日營運日報會寄給有填信箱的管理員。</small>
         <table id="staff_table">
-          <thead><tr><th>ID</th><th>帳號</th><th>角色</th><th>可使用的功能</th><th>建立時間</th><th>操作</th></tr></thead>
+          <thead><tr><th>ID</th><th>帳號</th><th>角色</th><th>信箱</th><th>可使用的功能</th><th>建立時間</th><th>操作</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -2599,14 +2599,26 @@ async function loadStaff(){
       '<td data-label="ID">'+s.id+'</td>'+
       '<td data-label="帳號">'+escapeHtml(s.username)+(isSelf?'（目前登入）':'')+'</td>'+
       '<td data-label="角色">'+(isOwner?'管理員':'員工')+'</td>'+
+      '<td data-label="信箱">'+(isOwner ? (s.email ? escapeHtml(s.email) : '<span style="color:var(--muted,#888);">未設定</span>') : '—')+'</td>'+
       '<td data-label="可使用的功能">'+permText+'</td>'+
       '<td data-label="建立時間">'+toTaipeiTime(s.created_at)+'</td>'+
       '<td data-label="操作">'+
-        (isOwner ? '' : '<button class="btn secondary small" onclick="openStaffPerms('+s.id+')">設定權限</button>')+
+        (isOwner ? '<button class="btn secondary small" onclick="setStaffEmail('+s.id+')">設定信箱</button>' : '<button class="btn secondary small" onclick="openStaffPerms('+s.id+')">設定權限</button>')+
         '<button class="btn secondary small" onclick="resetStaffPassword('+s.id+')">重設密碼</button>'+
         '<button class="btn danger small" '+((isSelf||isOwner)?'disabled':'')+' onclick="deleteStaff('+s.id+')">刪除</button>'+
       '</td></tr>';
-  }).join('') || '<tr><td colspan="6">尚無帳號</td></tr>';
+  }).join('') || '<tr><td colspan="7">尚無帳號</td></tr>';
+}
+
+async function setStaffEmail(id){
+  const s = staffCache.find(function(x){ return x.id === id; });
+  if (!s) return;
+  const v = prompt('請輸入「' + s.username + '」的信箱（每日營運日報會寄到這裡；留空 = 清除）：', s.email || '');
+  if (v === null) return;
+  try{
+    await api('/api/admin/staff/'+id+'/email', {method:'PATCH', body: JSON.stringify({email: v})});
+    loadStaff();
+  }catch(e){ alert(e.message); }
 }
 
 async function submitStaff(){

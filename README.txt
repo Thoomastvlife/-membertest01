@@ -394,10 +394,27 @@ v61 管理員信箱欄位（資料庫部分，日報收件人改讀資料庫的�
   - 欄位刻意不加 UNIQUE（SQLite 的 ALTER ADD COLUMN 不能加；同一信箱也可能給多個帳號）。
     格式檢查、轉小寫、去空白，之後在後端儲存時處理。
 
-【接下來的步驟（還沒做）】
-  1. 後台「員工帳號」頁讓管理員填／改自己的信箱（API：更新 admins.email）。
-  2. report.js 的收件人邏輯：SELECT email FROM admins WHERE role='owner' AND email 不為空，
-     與 DAILY_REPORT_TO（若有設定）合併去重；兩邊都沒有才回「沒有收件人」。
+【第 1 步：後台可以填信箱（已完成）】
+  - 後台 → 員工帳號：帳號列表多一欄「信箱」；管理員那一列有「設定信箱」按鈕，輸入後儲存，留空 = 清除。
+  - API：PATCH /api/admin/staff/:id/email  body: {"email": "..."}（只有管理員能呼叫）。
+    會去空白並轉小寫、檢查格式（最長 254 字）；寫入「操作紀錄」（staff.email）。
+  - 沒執行 migrate_v24.sql 就先部署也不會壞：列表照常顯示（信箱欄是空的），按儲存時提示先執行 migrate_v24.sql。
+  - 員工帳號的列不顯示信箱，也不能在畫面上設定（日報只寄給管理員）。
 
-異動檔案：migrate_v24.sql（新）、schema.sql、README.txt
+【第 2 步：日報收件人（已完成）】
+  - 收件人 = role = 'owner' 且有填信箱的帳號 ＋ DAILY_REPORT_TO（若有設定），合併、去重（不分大小寫）。
+  - DAILY_REPORT_TO 變成選填，不用再改 wrangler.toml；想多寄給不是帳號的人才需要。
+  - 都沒有收件人時，API 回 400：「請到後台『員工帳號』替管理員帳號設定信箱…」。
+  - 沒執行 migrate_v24.sql 時，管理員信箱這一路會被略過，仍可用 DAILY_REPORT_TO。
+  - ?dry=1 預覽現在也會回傳 "to"（這次實際會寄給誰），先用它確認再正式寄。
+  - 寄信沿用現有 Resend（RESEND_API_KEY、EMAIL_FROM；寄件人可用 EMAIL_FROM_REPORT 指定）。
+
+【v61 上線步驟】
+  1. wrangler d1 execute test2 --remote --file=./migrate_v24.sql
+  2. 重新部署（wrangler.toml 的 DAILY_REPORT_TO 可以繼續保持註解）。
+  3. 後台 → 員工帳號 → 管理員帳號按「設定信箱」。
+  4. 預覽：curl -X POST -H "X-Cron-Key: 你的金鑰" "https://member.ytgp168.com/api/cron/daily-report?dry=1"
+     確認回傳的 "to" 有你的信箱；再到 GitHub Actions 按 Run workflow 正式測一次。
+
+異動檔案：migrate_v24.sql（新）、schema.sql、functions/[[path]].js、functions/_lib/templates.js、functions/_lib/report.js、wrangler.toml、README.txt
 

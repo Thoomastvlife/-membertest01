@@ -431,13 +431,19 @@ async function handleListStaff(env, access) {
     const r = await env.DB.prepare("SELECT id, username, created_at FROM admins ORDER BY created_at ASC").all();
     rows = r.results.map((x) => ({ ...x, role: "owner", permissions: null }));
   } else {
-    const r = await env.DB.prepare("SELECT id, username, role, permissions, created_at FROM admins ORDER BY created_at ASC").all();
+    let r;
+    try {
+      r = await env.DB.prepare("SELECT id, username, role, permissions, email, created_at FROM admins ORDER BY created_at ASC").all();
+    } catch (e) {
+      if (!/no such column/i.test(String(e && e.message))) throw e;
+      r = await env.DB.prepare("SELECT id, username, role, permissions, created_at FROM admins ORDER BY created_at ASC").all(); // 還沒執行 migrate_v24.sql
+    }
     rows = r.results.map((x) => {
       let perms = null;
       if (x.role !== "owner" && x.permissions != null && x.permissions !== "") {
         try { perms = normalizePermissions(JSON.parse(x.permissions)); } catch { perms = []; }
       }
-      return { id: x.id, username: x.username, role: x.role === "owner" ? "owner" : "staff", permissions: perms, created_at: x.created_at };
+      return { id: x.id, username: x.username, role: x.role === "owner" ? "owner" : "staff", permissions: perms, email: x.email || "", created_at: x.created_at };
     });
   }
   return json(rows);
@@ -475,6 +481,23 @@ async function handleSetStaffPermissions(id, request, env) {
   const perms = normalizePermissions(body.permissions);
   await env.DB.prepare("UPDATE admins SET permissions=? WHERE id=?").bind(JSON.stringify(perms), id).run();
   return json({ ok: true, permissions: perms, username: target.username });
+}
+
+// 設定帳號信箱（每日營運日報寄給「管理員且有填信箱」的帳號）。空白 = 清除。
+// 只有管理員可以呼叫（由 API 入口統一擋，requiredAdminPermission 對 staff 的寫入都是 OWNER）
+async function handleSetStaffEmail(id, request, env) {
+  const body = await request.json().catch(() => ({}));
+  const email = String(body.email == null ? "" : body.email).trim().toLowerCase();
+  if (email && (email.length > 254 || !EMAIL_RE.test(email))) return json({ error: "信箱格式不正確" }, 400);
+  const target = await env.DB.prepare("SELECT id, username, role FROM admins WHERE id=?").bind(id).first();
+  if (!target) return json({ error: "找不到這個帳號" }, 404);
+  try {
+    await env.DB.prepare("UPDATE admins SET email=? WHERE id=?").bind(email || null, id).run();
+  } catch (err) {
+    if (/no such column/i.test(String(err.message || ""))) return json({ error: "資料庫尚未升級，請先執行 migrate_v24.sql" }, 400);
+    throw err;
+  }
+  return json({ ok: true, email, username: target.username, role: target.role === "owner" ? "owner" : "staff" });
 }
 
 async function handleResetStaffPassword(id, request, env) {
@@ -3065,6 +3088,20 @@ export async function onRequest(context) {
             detail: { permissions: (resBody && resBody.permissions) || normalizePermissions(body.permissions) },
           }),
           handleSetStaffPermissions(staffPermMatch[1], request, env)
+        );
+      }
+
+      const staffEmailMatch = path.match(/^\/api\/admin\/staff\/(\d+)\/email$/);
+      if (staffEmailMatch && method === "PATCH") {
+        return alog(
+          env, session, request,
+          (resBody) => ({
+            action: "staff.email",
+            summary: (resBody && resBody.email)
+              ? `設定${L.staff}的信箱：${resBody.email}`
+              : `清除${L.staff}的信箱`,
+          }),
+          handleSetStaffEmail(staffEmailMatch[1], request, env)
         );
       }
 

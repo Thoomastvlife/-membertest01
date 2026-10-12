@@ -27,8 +27,24 @@ const esc = (v) =>
   String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const money = (n) => "$" + Math.round(Number(n) || 0).toLocaleString("en-US");
 
-// 收件人：環境變數 DAILY_REPORT_TO（可用逗號分隔多個）；沒設定就看 settings 表的 daily_report_to
+// 收件人 = 「管理員（role = owner）在後台填的信箱」＋「DAILY_REPORT_TO（環境變數，沒設定就看 settings 表的 daily_report_to）」，
+// 合併後去重（不分大小寫）。DAILY_REPORT_TO 變成選填：想額外寄給不是帳號的人（例如會計）才需要。
+const MAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
 async function reportRecipients(env) {
+  const list = [];
+
+  // 1) 管理員帳號上的信箱（還沒執行 migrate_v24.sql、或舊資料庫沒有 role 欄位時就略過，不影響其他來源）
+  try {
+    const { results } = await env.DB.prepare(
+      "SELECT email FROM admins WHERE role='owner' AND email IS NOT NULL AND TRIM(email) <> '' ORDER BY id ASC"
+    ).all();
+    for (const r of results || []) list.push(r.email);
+  } catch (e) {
+    /* no such column：舊資料庫，改用下面的來源 */
+  }
+
+  // 2) 額外指定的收件人（可用逗號分隔多個）
   let raw = env.DAILY_REPORT_TO || "";
   if (!raw) {
     try {
@@ -37,10 +53,18 @@ async function reportRecipients(env) {
       raw = "";
     }
   }
-  return String(raw)
-    .split(/[,;\s]+/)
-    .map((x) => x.trim())
-    .filter((x) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x));
+  for (const x of String(raw).split(/[,;\s]+/)) list.push(x);
+
+  const seen = new Set();
+  const out = [];
+  for (const x of list) {
+    const addr = String(x || "").trim();
+    const key = addr.toLowerCase();
+    if (!addr || !MAIL_RE.test(addr) || seen.has(key)) continue;
+    seen.add(key);
+    out.push(addr);
+  }
+  return out;
 }
 
 // 統計指定日期（台灣時間 YYYY-MM-DD；不給就是「昨天」）
@@ -247,10 +271,10 @@ export async function handleDailyReportCron(request, env) {
   }
   const mail = renderDailyReport(report, platformNames);
 
-  if (dry) return json({ ok: true, dry: true, report, subject: mail.subject, text: mail.text });
-
   const to = await reportRecipients(env);
-  if (!to.length) return json({ error: "沒有收件人：請設定 DAILY_REPORT_TO（環境變數）" }, 400);
+  if (dry) return json({ ok: true, dry: true, to, report, subject: mail.subject, text: mail.text });
+
+  if (!to.length) return json({ error: "沒有收件人：請到後台「員工帳號」替管理員帳號設定信箱（或設定 DAILY_REPORT_TO 環境變數）" }, 400);
 
   // 同一天只寄一次（GitHub 排程偶爾會重複觸發）
   const lastKey = "daily_report_last_sent";

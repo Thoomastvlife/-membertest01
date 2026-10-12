@@ -27,7 +27,9 @@ EMAIL_FROM = "咖啡代儲會員驗證系統 <noreply@member.ytgp168.com>"
 # 記得這個信箱所屬的網域也要先在 Resend 驗證過，不然寄信會失敗。
 EMAIL_FROM_ORDER = "咖啡代儲訂單通知 <order@member.ytgp168.com>"
 
-# 每日營運日報（寄給管理員）：收件人信箱，多個用逗號分隔。沒設定就不會寄。
+# 每日營運日報：預設寄給「後台 → 員工帳號」裡有填信箱的管理員帳號，這裡不用設定。
+# DAILY_REPORT_TO 是「額外」收件人（選填，多個用逗號分隔，例如會計）；會和管理員信箱合併、去重。
+# 管理員沒填信箱、這裡也沒設定，就不會寄。
 # 另外要設定 secret CRON_SECRET（GitHub Actions 呼叫日報 API 用的金鑰，兩邊要一樣）：
 #   wrangler pages secret put CRON_SECRET --project-name=member-checkout-pages
 # DAILY_REPORT_TO = "owner@gmail.com"
