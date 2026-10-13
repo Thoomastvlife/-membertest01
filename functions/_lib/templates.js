@@ -269,6 +269,7 @@ ${THEME_CSS_ADMIN}
     <h1>會員結帳後台</h1>
     <div><span id="whoami" style="margin-right:12px;color:var(--muted);font-size:13px;"></span>
       <button class="btn secondary" id="pushBtn" onclick="togglePush()" style="margin-right:8px;" aria-label="開啟通知" title="開啟通知"><span class="pb-ic">🔕</span><span class="pb-lb"> 開啟通知</span></button>
+      <button class="btn secondary" onclick="openPushPrefs()" style="margin-right:8px;" aria-label="通知類型設定" title="選擇要收哪些通知">⚙</button>
       ${THEME_HEADER_BTN.replace('class="btn secondary', 'style="margin-right:8px;" class="btn secondary')}
       <button class="btn secondary" onclick="doLogout()">登出</button></div>
   </header>
@@ -375,6 +376,7 @@ ${THEME_CSS_ADMIN}
           <input type="hidden" id="co_member" value="" />
           <div class="member-picker-dropdown hidden" id="co_member_dropdown"></div>
         </div>
+        <div id="co_member_flags" class="hidden" style="margin-top:6px;"></div>
         <div id="co_nonmember_wrap">
           <label>非會員名稱（選填，方便辨識）</label>
           <input id="co_nonmember_name" placeholder="例如：現場客人" />
@@ -1127,6 +1129,17 @@ ${THEME_CSS_ADMIN}
   </div>
 </div>
 
+<div id="pushPrefsModal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <h2>要收哪些通知？</h2>
+    <small class="hint">只影響你自己的帳號（你所有的裝置都一樣）。「待核對付款」「待上傳條碼」只有管理員和有「訂單列表」權限的人才會收到。</small>
+    <div id="pp_list" style="margin:12px 0;"></div>
+    <div id="pp_msg" class="msg"></div>
+    <button class="btn" onclick="savePushPrefs()">儲存</button>
+    <button class="btn secondary" onclick="closePushPrefs()">取消</button>
+  </div>
+</div>
+
 <div id="staffPermModal" class="modal-overlay hidden">
   <div class="modal-box wide">
     <h2 id="spm_title">設定權限</h2>
@@ -1345,6 +1358,37 @@ async function togglePush(){
   }catch(e){ alert('開啟通知失敗: ' + e.message); }
 }
 
+// ---- 通知類型設定（每個人自己選要收哪些推播） ----
+async function openPushPrefs(){
+  const msg = document.getElementById('pp_msg');
+  msg.textContent = ''; msg.className = 'msg';
+  const box = document.getElementById('pp_list');
+  box.innerHTML = '讀取中…';
+  document.getElementById('pushPrefsModal').classList.remove('hidden');
+  try{
+    const d = await api('/api/admin/push/prefs');
+    box.innerHTML = d.types.map(function(t){
+      return '<label style="display:flex;gap:8px;align-items:flex-start;margin:8px 0;cursor:pointer;">'
+        + '<input type="checkbox" class="pp_cb" data-key="'+escapeHtml(t.key)+'" '+(d.prefs[t.key] ? 'checked' : '')+' style="margin-top:3px;">'
+        + '<span><b>'+escapeHtml(t.label)+'</b><br><small class="hint">'+escapeHtml(t.hint)+'</small></span></label>';
+    }).join('');
+    if (!d.ready){ msg.textContent = '資料庫還沒升級（需執行 migrate_v27.sql），現在改了也存不起來；通知目前是全部都收。'; msg.className = 'msg error'; }
+  }catch(e){ box.innerHTML = ''; msg.textContent = e.message; msg.className = 'msg error'; }
+}
+function closePushPrefs(){ document.getElementById('pushPrefsModal').classList.add('hidden'); }
+async function savePushPrefs(){
+  const msg = document.getElementById('pp_msg');
+  const prefs = {};
+  document.querySelectorAll('#pp_list .pp_cb').forEach(function(cb){ prefs[cb.dataset.key] = cb.checked; });
+  if (!Object.keys(prefs).length) return;
+  const allOff = Object.keys(prefs).every(function(k){ return !prefs[k]; });
+  if (allOff && !confirm('三種通知都關閉，你不會再收到任何訂單推播。確定嗎？')) return;
+  try{
+    await api('/api/admin/push/prefs', {method:'PUT', body: JSON.stringify({prefs})});
+    closePushPrefs();
+  }catch(e){ msg.textContent = e.message; msg.className = 'msg error'; }
+}
+
 // ---- 直播下單 ----
 let liveRounds = [], liveRoundId = null, liveData = null, liveBindCommentId = null, liveLastLinks = [];
 const LIVE_ST = {ok:['已歸戶','b-ready'], guest:['非會員','b-pending'], unbound:['未綁定','b-await'], waitlist:['候補','b-cancel'], invalid:['無效','b-expired'], ordered:['已建單','b-paid'], blocked:['已封鎖','b-cancel']};
@@ -1417,7 +1461,7 @@ function liveRender(){
 
   document.querySelector('#lc_table tbody').innerHTML = d.comments.map(c=>{
     const st = LIVE_ST[c.status] || [c.status, 'b-pending'];
-    let who = c.member_name ? escapeHtml(c.member_name) : '-';
+    let who = c.member_name ? escapeHtml(c.member_name) + memberFlagsInline(membersCache.find(function(x){ return x.id === c.member_id; })) : '-';
     let acts = '';
     if (c.status==='unbound') acts += '<button class="btn secondary small" onclick="liveBindOpen('+c.id+')">歸給會員</button><button class="btn secondary small" onclick="liveGuest('+c.id+')">當非會員</button>';
     if (c.status==='waitlist') acts += '<button class="btn secondary small" onclick="livePromote('+c.id+')">改為正式</button>';
@@ -1546,7 +1590,7 @@ function liveBindRender(){
   const list = membersCache.filter(m=> !q || [m.name, m.account, m.phone, m.tiktok_id].some(v=> v && String(v).toLowerCase().indexOf(q) >= 0)).slice(0, 30);
   document.getElementById('lb_list').innerHTML = list.map(m=>{
     const sub = [m.account ? '帳號 '+m.account : '', m.phone || '', m.tiktok_id ? 'TikTok @'+m.tiktok_id : ''].filter(Boolean).join(' ・ ');
-    return '<div class="member-picker-option" onclick="liveBindPick('+m.id+')">'+escapeHtml(m.name)+(sub?'<div class="mp-sub">'+escapeHtml(sub)+'</div>':'')+'</div>';
+    return '<div class="member-picker-option" onclick="liveBindPick('+m.id+')">'+escapeHtml(m.name)+memberFlagsInline(m)+(sub?'<div class="mp-sub">'+escapeHtml(sub)+'</div>':'')+'</div>';
   }).join('') || '<div class="member-picker-empty">查無符合的會員</div>';
 }
 
@@ -1767,7 +1811,7 @@ function setupMemberPicker(prefix, onChange){
     let html = '<div class="member-picker-option mp-nonmember" data-id="">-- 非會員 --</div>';
     html += list.length ? list.map(m=>{
       const sub = [m.account?('帳號 '+m.account):'', m.phone||''].filter(Boolean).join(' ・ ');
-      return '<div class="member-picker-option" data-id="'+m.id+'" data-name="'+escapeHtml(m.name)+'">'+escapeHtml(m.name)+(sub?'<div class="mp-sub">'+escapeHtml(sub)+'</div>':'')+'</div>';
+      return '<div class="member-picker-option" data-id="'+m.id+'" data-name="'+escapeHtml(m.name)+'">'+escapeHtml(m.name)+memberFlagsInline(m)+(sub?'<div class="mp-sub">'+escapeHtml(sub)+'</div>':'')+'</div>';
     }).join('') : '<div class="member-picker-empty">查無符合的會員</div>';
     dropdown.innerHTML = html;
     dropdown.classList.remove('hidden');
@@ -2146,7 +2190,7 @@ function renderOrders(){
     return \`<tr>
       <td data-label="訂單編號"><code>\${o.order_no}</code></td>
       <td data-label="建立時間">\${toTaipeiTime(o.created_at)}</td>
-      <td data-label="會員">\${o.member_name_snapshot}\${o.notify_email ? ' <span title="顧客下單時選擇：訂單完成寄信通知' + (o.notify_email_addr ? '（' + o.notify_email_addr + '）' : '') + '" style="color:var(--accent);">✉</span>' : ''}</td>
+      <td data-label="會員">\${escapeHtml(o.member_name_snapshot)}\${orderMemberFlags(o)}\${o.notify_email ? ' <span title="顧客下單時選擇：訂單完成寄信通知' + (o.notify_email_addr ? '（' + o.notify_email_addr + '）' : '') + '" style="color:var(--accent);">✉</span>' : ''}</td>
       <td data-label="儲值平台">\${PLATFORM_LABEL[o.platform]||'<span class="muted" style="color:var(--muted)">未指定</span>'}</td>
       <td data-label="帳號/密碼">\${accountInfo}</td>
       <td data-label="金額">$\${o.amount}</td>
@@ -2751,6 +2795,25 @@ async function mdDeleteNote(noteId){
     mdRenderNotes();
     mdSay('md_note_msg', '已刪除備註', true);
   }catch(e){ mdSay('md_note_msg', e.message, false); }
+}
+
+// ---- 標籤顯示在其他地方（訂單列表、結帳櫃檯選會員、直播留言）----
+function orderMemberFlags(o){
+  const f = (o.member_blocked ? '<span class="tag-blocked">已封鎖下單</span>' : '') + tagBadges(o.member_tags);
+  return f ? '<div>' + f + '</div>' : '';
+}
+function memberFlagsInline(m){
+  if (!m) return '';
+  return (m.is_blocked ? ' <span class="tag-blocked">已封鎖</span>' : '') + (m.tags && m.tags.length ? ' ' + tagBadges(m.tags) : '');
+}
+// 結帳櫃檯選好會員後，在下面顯示他的標籤；被封鎖的會員顯示醒目的警告
+function showMemberFlags(elId, id){
+  const el = document.getElementById(elId);
+  const m = id ? membersCache.find(function(x){ return String(x.id) === String(id); }) : null;
+  if (!m || (!m.is_blocked && !(m.tags && m.tags.length))) { el.classList.add('hidden'); el.innerHTML = ''; return; }
+  el.innerHTML = (m.is_blocked ? '<div class="md-block" style="margin-top:0;"><b>此會員已被封鎖下單</b>，無法建立訂單，請先到會員詳細頁解除封鎖。</div>' : '') +
+    (m.tags && m.tags.length ? '<div style="margin-top:6px;">標籤：' + tagBadges(m.tags) + '</div>' : '');
+  el.classList.remove('hidden');
 }
 
 function toggleMembersPanel(){
@@ -4960,7 +5023,7 @@ async function broadcastCoupon(id){
   msg.className = 'msg ok';
 }
 
-coMemberPicker = setupMemberPicker('co', (id)=>{ document.getElementById('co_nonmember_wrap').style.display = id ? 'none':'block'; });
+coMemberPicker = setupMemberPicker('co', (id)=>{ document.getElementById('co_nonmember_wrap').style.display = id ? 'none':'block'; showMemberFlags('co_member_flags', id); });
 corMemberPicker = setupMemberPicker('cor', (id)=>{ document.getElementById('cor_nonmember_wrap').style.display = id ? 'none':'block'; });
 checkSession();
 </script>

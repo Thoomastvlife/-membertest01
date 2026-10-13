@@ -194,3 +194,25 @@ export async function handleMemberDeleteNote(id, noteId, env) {
     throw e;
   }
 }
+
+// 訂單列表用：幫每筆訂單補上會員的標籤與封鎖狀態（member_tags、member_blocked）。
+// 還沒執行 migrate_v26.sql（沒有這兩個欄位）時，一律當成沒有標籤、沒有封鎖，訂單列表照常運作。
+export async function attachMemberFlags(env, orders) {
+  const ids = [...new Set(orders.map((o) => o.member_id).filter((x) => x != null))];
+  const byId = new Map();
+  try {
+    for (let i = 0; i < ids.length; i += 90) {
+      const part = ids.slice(i, i + 90);
+      const { results } = await env.DB.prepare("SELECT id, tags, is_blocked FROM members WHERE id IN (" + part.map(() => "?").join(",") + ")")
+        .bind(...part)
+        .all();
+      results.forEach((m) => byId.set(m.id, m));
+    }
+  } catch (e) {
+    if (!isMissingColumn(e)) throw e;
+  }
+  return orders.map((o) => {
+    const m = o.member_id != null ? byId.get(o.member_id) : null;
+    return { ...o, member_tags: m ? parseTags(m.tags) : [], member_blocked: !!(m && m.is_blocked) };
+  });
+}

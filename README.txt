@@ -526,3 +526,25 @@ v61 管理員信箱欄位（資料庫部分，日報收件人改讀資料庫的�
 
 異動檔案：migrate_v26.sql（新）、schema.sql、functions/_lib/memberdetail.js（新）、functions/_lib/access.js、
 functions/_lib/live.js、functions/_lib/templates.js、functions/[[path]].js
+
+
+==================== v64：標籤與封鎖狀態顯示在訂單列表、結帳櫃檯、直播留言 ====================
+- 沒有資料庫變動，直接重新部署即可（需要已執行 v63 的 migrate_v26.sql 才看得到標籤；沒執行也不會壞，只是不顯示）。
+- 訂單列表（含搜尋結果）：「會員」欄的姓名下方顯示該會員的標籤，被封鎖的會員會多一個紅色「已封鎖下單」標示。
+  顯示的是會員「目前」的標籤，不是下單當時的快照；非會員訂單沒有標籤。
+- 結帳櫃檯：選會員的下拉選單每個人後面會顯示標籤與「已封鎖」；選好會員後，下方會顯示標籤；
+  選到被封鎖的會員，會出現紅色警告（後端也會擋下建單）。
+- 直播下單：留言列表的「會員」欄、「歸給會員」的挑選視窗也會顯示標籤與封鎖狀態。
+- 順便修正：訂單列表的會員姓名原本是直接輸出，現在改成純文字輸出。
+異動檔案：functions/[[path]].js、functions/_lib/memberdetail.js、functions/_lib/templates.js
+
+
+==================== v65：員工自選要收哪些推播類型 ====================
+- 後台右上角「🔔 通知」旁邊多一顆「⚙」：勾選要收「有新訂單」「待核對付款」「待上傳條碼」，按儲存。
+- 偏好存在「管理員帳號」上（admins.push_prefs），不是每台裝置各設一次：同一個人的手機、電腦一起生效。
+- 沒設定過 = 三種都收（跟升級前一樣）。三種全關時會先跳確認。
+- 權限規則不變：「待核對付款」「待上傳條碼」仍只推給管理員和有「訂單列表」權限的人；偏好只能再「減少」，不能多收。
+- API：GET／PUT /api/admin/push/prefs（登入的人只能改自己的）。
+- 上線步驟：wrangler d1 execute <你的資料庫名稱> --remote --file=./migrate_v27.sql 後重新部署。
+  沒跑 migration 就先部署也不會壞：推播照舊全收，⚙ 畫面會提示先升級資料庫。
+異動檔案：migrate_v27.sql（新）、schema.sql、functions/_lib/helpers.js、functions/[[path]].js、functions/_lib/templates.js、README.txt

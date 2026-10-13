@@ -416,19 +416,50 @@ async function sendWebPush(sub, payloadText, env) {
 // 推播給後台裝置。need = 需要的權限（例如 "order_list"）：只推給管理員，以及有勾這項權限的員工；
 // need 為 null 就推給所有已訂閱的裝置。單一裝置推播失敗（例如已解除訂閱）不應該影響主流程，
 // 所以這裡整個函式吞掉錯誤，並順手清掉失效的訂閱（404/410）。
-export async function pushToAdmins(env, { title, body, url, tag, need }) {
+// 推播類型（員工可以各自開關）。key 會存進 admins.push_prefs。
+export const PUSH_TYPES = {
+  new_order: { label: "有新訂單", hint: "會員自助下單時" },
+  need_verify: { label: "待核對付款", hint: "客人上傳轉帳證明／帳號末幾碼時" },
+  need_barcode: { label: "待上傳條碼", hint: "客人選了超商條碼或台灣Pay 時" },
+};
+
+export function parsePushPrefs(raw) {
+  let obj = {};
+  try {
+    obj = raw ? JSON.parse(raw) : {};
+  } catch (e) {
+    obj = {};
+  }
+  const out = {};
+  for (const k of Object.keys(PUSH_TYPES)) out[k] = !(obj && obj[k] === false); // 沒設定 = 收
+  return out;
+}
+
+export async function pushToAdmins(env, { title, body, url, tag, need, type }) {
   try {
     let rows;
     try {
       const r = await env.DB.prepare(
-        `SELECT s.*, a.role AS admin_role, a.permissions AS admin_permissions
+        `SELECT s.*, a.role AS admin_role, a.permissions AS admin_permissions, a.push_prefs AS admin_push_prefs
            FROM push_subscriptions s LEFT JOIN admins a ON a.id = s.admin_id`
       ).all();
       rows = r.results || [];
     } catch (e) {
-      // 資料庫還沒執行 migrate_v22.sql（admins 沒有 role 欄位）：維持舊行為，推給所有訂閱
-      const r = await env.DB.prepare("SELECT * FROM push_subscriptions").all();
-      rows = (r.results || []).map((x) => ({ ...x, admin_role: "owner" }));
+      try {
+        // 還沒執行 migrate_v27.sql（沒有 push_prefs）：不套用類型偏好，其餘照舊
+        const r = await env.DB.prepare(
+          `SELECT s.*, a.role AS admin_role, a.permissions AS admin_permissions
+             FROM push_subscriptions s LEFT JOIN admins a ON a.id = s.admin_id`
+        ).all();
+        rows = r.results || [];
+      } catch (e2) {
+        // 資料庫還沒執行 migrate_v22.sql（admins 沒有 role 欄位）：維持舊行為，推給所有訂閱
+        const r = await env.DB.prepare("SELECT * FROM push_subscriptions").all();
+        rows = (r.results || []).map((x) => ({ ...x, admin_role: "owner" }));
+      }
+    }
+    if (type && PUSH_TYPES[type]) {
+      rows = rows.filter((sub) => parsePushPrefs(sub.admin_push_prefs)[type]);
     }
     if (need) {
       rows = rows.filter((sub) => {
@@ -466,6 +497,7 @@ export async function notifyAdminsOfNewOrder(env, order) {
     url: "/admin",
     tag: "order-" + order.id,
     need: null,
+    type: "new_order",
   });
 }
 
@@ -477,6 +509,7 @@ export async function notifyAdminsOfPendingVerify(env, order) {
     url: "/admin",
     tag: "verify-" + order.id,
     need: "order_list",
+    type: "need_verify",
   });
 }
 
@@ -489,6 +522,7 @@ export async function notifyAdminsOfPendingBarcode(env, order) {
     url: "/admin",
     tag: "barcode-" + order.id,
     need: "order_list",
+    type: "need_barcode",
   });
 }
 

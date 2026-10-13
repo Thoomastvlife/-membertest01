@@ -53,6 +53,7 @@ import {
   handleMemberSetBlock,
   handleMemberAddNote,
   handleMemberDeleteNote,
+  attachMemberFlags,
   parseTags,
 } from "./_lib/memberdetail.js";
 import { PERMISSIONS, DEFAULT_STAFF_PERMISSIONS, normalizePermissions, requiredAdminPermission, getAdminAccess, canAccess, accessSummary } from "./_lib/access.js";
@@ -80,6 +81,8 @@ import {
   isLinkHardExpired,
   getSettingsObj,
   getOrCreateVapidKeys,
+  PUSH_TYPES,
+  parsePushPrefs,
   notifyAdminsOfNewOrder,
   notifyAdminsOfPendingVerify,
   notifyAdminsOfPendingBarcode,
@@ -1374,14 +1377,14 @@ async function handleListOrders(request, env) {
     const id = parseOrderNo(orderNoParam);
     if (!id) return json([]);
     const { results } = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).all();
-    return json(results.map((o) => ({ ...o, order_no: formatOrderNo(o.id) })));
+    return json((await attachMemberFlags(env, results)).map((o) => ({ ...o, order_no: formatOrderNo(o.id) })));
   }
 
   // 進階搜尋：關鍵字（任何內容）、日期區間、會員、狀態、付款方式、平台、金額…（見 _lib/ordersearch.js）
   if (hasOrderSearchParams(url.searchParams)) {
     const { sql, binds } = buildOrderSearch(url.searchParams, await getPlatforms(env.DB));
     const { results } = await env.DB.prepare(sql).bind(...binds).all();
-    return json(results.map((o) => ({ ...o, order_no: formatOrderNo(o.id) })));
+    return json((await attachMemberFlags(env, results)).map((o) => ({ ...o, order_no: formatOrderNo(o.id) })));
   }
 
   let query = "SELECT * FROM orders";
@@ -1393,7 +1396,7 @@ async function handleListOrders(request, env) {
   query += " ORDER BY created_at DESC";
   const stmt = binds.length ? env.DB.prepare(query).bind(...binds) : env.DB.prepare(query);
   const { results } = await stmt.all();
-  return json(results.map((o) => ({ ...o, order_no: formatOrderNo(o.id) })));
+  return json((await attachMemberFlags(env, results)).map((o) => ({ ...o, order_no: formatOrderNo(o.id) })));
 }
 
 function normalizeImageDataUrl(v) {
@@ -3056,6 +3059,34 @@ async function handlePushUnsubscribe(request, env) {
   return json({ ok: true });
 }
 
+// 每個人自己的推播類型偏好（存在 admins.push_prefs；沒設定 = 全部都收）
+async function handlePushPrefsGet(session, env) {
+  let raw = null;
+  let ready = true;
+  try {
+    const row = await env.DB.prepare("SELECT push_prefs FROM admins WHERE id=?").bind(session.adminId).first();
+    raw = row ? row.push_prefs : null;
+  } catch (e) {
+    ready = false; // 還沒執行 migrate_v27.sql
+  }
+  const types = Object.entries(PUSH_TYPES).map(([key, v]) => ({ key, label: v.label, hint: v.hint }));
+  return json({ prefs: parsePushPrefs(raw), types, ready });
+}
+
+async function handlePushPrefsSave(session, request, env) {
+  const body = await request.json().catch(() => ({}));
+  const input = body && typeof body.prefs === "object" && body.prefs ? body.prefs : {};
+  const clean = {};
+  for (const k of Object.keys(PUSH_TYPES)) clean[k] = input[k] !== false && input[k] !== 0 && input[k] !== "0";
+  try {
+    await env.DB.prepare("UPDATE admins SET push_prefs=? WHERE id=?").bind(JSON.stringify(clean), session.adminId).run();
+  } catch (e) {
+    if (/no such column/i.test(String(e && e.message))) return json({ error: "請先執行 migrate_v27.sql（資料庫升級）才能儲存" }, 400);
+    throw e;
+  }
+  return json({ ok: true, prefs: clean });
+}
+
 // ================= Pages Functions entrypoint =================
 
 export async function onRequest(context) {
@@ -3903,6 +3934,8 @@ export async function onRequest(context) {
       if (path === "/api/admin/push/public-key" && method === "GET") return handlePushPublicKey(env);
       if (path === "/api/admin/push/subscribe" && method === "POST") return handlePushSubscribe(session, request, env);
       if (path === "/api/admin/push/unsubscribe" && method === "POST") return handlePushUnsubscribe(request, env);
+      if (path === "/api/admin/push/prefs" && method === "GET") return handlePushPrefsGet(session, env);
+      if (path === "/api/admin/push/prefs" && method === "PUT") return handlePushPrefsSave(session, request, env);
 
       return json({ error: "Not found" }, 404);
     }
