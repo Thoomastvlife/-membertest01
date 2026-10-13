@@ -21,6 +21,6 @@ jobs:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
           code=$(curl -sS -o resp.json -w "%{http_code}" -X POST \
-            -H "X-Cron-Key: $CRON_SECRET" "$SITE_URL/api/cron/daily-report")
+            -H "X-Cron-Key: $(printf '%s' "$CRON_SECRET" | tr -d '[:space:]')" "${SITE_URL%/}/api/cron/daily-report")
           cat resp.json; echo
           [ "$code" = "200" ]
