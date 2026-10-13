@@ -587,21 +587,45 @@ export function sanitizeForLog(obj) {
   return out;
 }
 
+// 操作紀錄要歸屬到哪張訂單：後台路由在「動手之前」先把訂單 id 查好放進來（以請求物件當 key），
+// logAdminAction 寫紀錄時取用；也可以直接在呼叫時傳 orderId。
+export const logOrderContext = new WeakMap();
+
+// 還沒執行 migrate_v25.sql（admin_logs 沒有 order_id 欄位）時，自動退回舊的寫法，操作紀錄不會整個壞掉。
+let adminLogsHasNoOrderIdColumn = false;
+
 // 寫入一筆操作紀錄。寫入失敗只記錄到 console，不會讓原本的後台操作跟著失敗。
-export async function logAdminAction(env, session, request, { action, summary, detail }) {
+export async function logAdminAction(env, session, request, { action, summary, detail, orderId }) {
   try {
     const ip = (request && (request.headers.get("CF-Connecting-IP") || request.headers.get("X-Forwarded-For"))) || null;
+    const base = [
+      session && session.adminId != null ? session.adminId : null,
+      (session && session.username) || "(未知帳號)",
+      action,
+      summary,
+      detail !== undefined && detail !== null ? JSON.stringify(detail) : null,
+      ip,
+    ];
+    let oid = orderId != null ? orderId : request ? logOrderContext.get(request) : null;
+    oid = Number.isInteger(oid) && oid > 0 ? oid : null;
+    if (!adminLogsHasNoOrderIdColumn) {
+      try {
+        await env.DB.prepare(
+          "INSERT INTO admin_logs (admin_id, admin_username, action, summary, detail, ip, order_id) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        )
+          .bind(...base, oid)
+          .run();
+        return;
+      } catch (err) {
+        // SQLite 的 INSERT 缺欄位訊息是「has no column named」，SELECT 才是「no such column」，兩種都要認
+        if (!/no such column|has no column named/i.test(String((err && err.message) || ""))) throw err;
+        adminLogsHasNoOrderIdColumn = true;
+      }
+    }
     await env.DB.prepare(
       "INSERT INTO admin_logs (admin_id, admin_username, action, summary, detail, ip) VALUES (?, ?, ?, ?, ?, ?)"
     )
-      .bind(
-        session && session.adminId != null ? session.adminId : null,
-        (session && session.username) || "(未知帳號)",
-        action,
-        summary,
-        detail !== undefined && detail !== null ? JSON.stringify(detail) : null,
-        ip
-      )
+      .bind(...base)
       .run();
   } catch (err) {
     console.error("logAdminAction failed:", err);

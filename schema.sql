@@ -226,10 +226,12 @@ CREATE TABLE IF NOT EXISTS admin_logs (
   summary TEXT NOT NULL,            -- 給人看的一句話描述，後台「操作紀錄」頁籤直接顯示這欄
   detail TEXT,                      -- JSON 字串，操作當下送出的內容（已過濾密碼等敏感欄位），可為 NULL
   ip TEXT,                          -- 操作來源 IP（取自 CF-Connecting-IP），可能為 NULL
-  created_at TEXT DEFAULT (datetime('now'))
+  created_at TEXT DEFAULT (datetime('now')),
+  order_id INTEGER                  -- 這筆操作屬於哪張訂單（沒有就是 NULL）；訂單的「查看操作歷程」用它查詢
 );
 CREATE INDEX IF NOT EXISTS idx_admin_logs_created_at ON admin_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_admin_logs_admin ON admin_logs(admin_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_admin_logs_order ON admin_logs(order_id, id);
 
 -- 訂單明細項目（品名、數量、單價、交貨狀態）。既有資料庫用 migrate_v23.sql 建立同一張表。
 CREATE TABLE IF NOT EXISTS order_items (

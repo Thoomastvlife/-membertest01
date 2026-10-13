@@ -86,6 +86,14 @@ ${THEME_HEAD}
   .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:50;padding:16px;}
   .modal-overlay.hidden{display:none;}
   .modal-box{background:#fff;border-radius:10px;padding:20px;max-width:380px;width:100%;max-height:90vh;overflow:auto;}
+  .oh-list{list-style:none;margin:10px 0 0;padding:0;}
+  .oh-item{border-left:3px solid var(--accent);padding:4px 0 10px 12px;margin-left:6px;}
+  .oh-item.sys{border-left:3px dashed var(--border);opacity:.8;}
+  .oh-head{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:baseline;}
+  .oh-label{font-weight:700;}
+  .oh-meta{color:var(--muted);font-size:12.5px;}
+  .oh-sum{font-size:13.5px;margin-top:2px;word-break:break-word;}
+  .oh-detail{font-size:13px;color:var(--muted);margin-top:2px;word-break:break-word;}
   .modal-box.wide{max-width:560px;}
   .perm-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:6px 0;}
   .perm-item{display:flex;gap:8px;align-items:flex-start;margin:0;padding:8px 10px;border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:14px;color:inherit;}
@@ -258,6 +266,7 @@ ${THEME_CSS_ADMIN}
     <button data-tab="announcement" onclick="showTab('announcement')">系統公告</button>
     <button data-tab="export" onclick="showTab('export')">資料匯出</button>
     <button data-tab="staff" onclick="showTab('staff')">員工帳號</button>
+    <button data-tab="backup" onclick="showTab('backup')">資料備份</button>
     <button data-tab="rates" onclick="showTab('rates')">費率設定</button>
     <button data-tab="coupons" onclick="showTab('coupons')">優惠碼</button>
     <button data-tab="points" onclick="showTab('points')">點數系統</button>
@@ -866,6 +875,51 @@ ${THEME_CSS_ADMIN}
       </div>
     </section>
 
+    <section id="tab-backup" class="tab hidden">
+      <div class="card">
+        <h2>資料備份（下載）</h2>
+        <small class="hint">把訂單、會員、點數、設定、操作紀錄等資料整份下載成一個檔案，萬一資料被誤刪或要搬家，可以用「還原」把資料放回來。建議每週下載一次，並存放在這台電腦以外的地方（雲端硬碟、隨身碟）。只有管理員看得到這個頁面。</small>
+        <div id="bk_last" class="msg"></div>
+        <table id="bk_table"><thead><tr><th>資料</th><th>筆數</th></tr></thead><tbody></tbody></table>
+        <label style="display:flex;gap:8px;align-items:center;cursor:pointer;"><input type="checkbox" id="bk_logs" checked style="width:auto;margin:0;" /> 包含操作紀錄</label>
+        <label style="display:flex;gap:8px;align-items:center;cursor:pointer;"><input type="checkbox" id="bk_admins" checked style="width:auto;margin:0;" /> 包含後台帳號（管理員與員工，含密碼雜湊）</label>
+        <label style="display:flex;gap:8px;align-items:center;cursor:pointer;"><input type="checkbox" id="bk_images" style="width:auto;margin:0;" /> 包含付款證明截圖與條碼圖片（檔案會大很多、下載較久）</label>
+        <label for="bk_pw" style="margin-top:12px;">備份檔密碼（強烈建議設定；忘記密碼就無法還原，我們也無法幫你找回）</label>
+        <input id="bk_pw" type="password" autocomplete="new-password" placeholder="不設定＝不加密" />
+        <label for="bk_pw2">再輸入一次密碼</label>
+        <input id="bk_pw2" type="password" autocomplete="new-password" />
+        <small class="hint">備份檔裡有會員個資、客人填寫的平台帳號密碼、系統金鑰等敏感資料，沒有加密的檔案任何人拿到都能直接看。加密在你的瀏覽器裡完成，密碼不會送到伺服器。</small>
+        <div style="margin-top:12px;"><button class="btn" onclick="downloadBackup()">下載備份</button></div>
+        <progress id="bk_progress" class="hidden" style="width:100%;margin-top:10px;"></progress>
+        <div id="bk_msg" class="msg"></div>
+      </div>
+
+      <div class="card">
+        <h2>還原備份（匯入）</h2>
+        <small class="hint">選擇之前下載的備份檔，先看內容摘要，確認後才會開始寫入。還原是危險操作，請先確認這份備份是你要的版本。</small>
+        <label for="rs_file">備份檔（.json）</label>
+        <input id="rs_file" type="file" accept=".json,application/json" />
+        <label for="rs_pw">備份檔密碼（備份時有設定的話才需要）</label>
+        <input id="rs_pw" type="password" autocomplete="off" />
+        <div style="margin-top:12px;"><button class="btn secondary" onclick="previewRestore()">讀取備份檔</button></div>
+        <div id="rs_msg" class="msg"></div>
+        <div id="rs_preview" class="hidden">
+          <div id="rs_summary" class="msg" style="color:var(--muted);"></div>
+          <table id="rs_table"><thead><tr><th>資料</th><th>備份裡的筆數</th><th>目前的筆數</th><th>狀態</th></tr></thead><tbody></tbody></table>
+          <label style="margin-top:12px;">還原方式</label>
+          <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;"><input type="radio" name="rs_mode" value="merge" checked style="width:auto;margin:4px 0 0;" /><span><b>補回缺少的資料</b>：只補上目前系統裡沒有的資料（以編號判斷），不會修改或刪除現有資料。適合救回被誤刪的資料。</span></label>
+          <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;"><input type="radio" name="rs_mode" value="replace" style="width:auto;margin:4px 0 0;" /><span><b>全部覆蓋</b>：把下列資料表整張換成備份裡的內容，備份之後新增的資料會消失。適合整個系統回到某個時間點，或搬到全新的資料庫。</span></label>
+          <label style="display:flex;gap:8px;align-items:center;cursor:pointer;margin-top:8px;"><input type="checkbox" id="rs_snapshot" checked style="width:auto;margin:0;" /> 還原前先自動下載一份「目前資料」的備份（強烈建議，含圖片）</label>
+          <label id="rs_admins_row" style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;"><input type="checkbox" id="rs_admins" style="width:auto;margin:4px 0 0;" /><span>同時還原後台帳號（預設不還原）。只會用備份覆寫「編號相同」的帳號，不會刪除任何現有帳號，也不會動到你目前登入的這個帳號。</span></label>
+          <small class="hint">操作紀錄一律只「補回缺少的」，不會被覆蓋或清空，稽核軌跡不會因為還原而消失。</small>
+          <label for="rs_confirm" style="margin-top:12px;">確認：選「補回缺少的資料」請輸入 還原；選「全部覆蓋」請輸入 覆蓋</label>
+          <input id="rs_confirm" autocomplete="off" placeholder="輸入 還原 或 覆蓋" />
+          <div style="margin-top:12px;"><button class="btn danger" onclick="startRestore()">開始還原</button></div>
+          <progress id="rs_progress" class="hidden" style="width:100%;margin-top:10px;"></progress>
+        </div>
+      </div>
+    </section>
+
     <section id="tab-logs" class="tab hidden">
       <div class="card">
         <h2>操作紀錄</h2>
@@ -918,6 +972,19 @@ ${THEME_CSS_ADMIN}
     <h2>操作詳細內容</h2>
     <pre id="ld_content" style="white-space:pre-wrap;word-break:break-all;font-size:13px;background:var(--bg-alt,rgba(127,127,127,.08));border-radius:8px;padding:10px;max-height:60vh;overflow:auto;"></pre>
     <button class="btn secondary" onclick="closeLogDetail()">關閉</button>
+  </div>
+</div>
+
+<div id="orderHistoryModal" class="modal-overlay hidden" onclick="if(event.target===this)closeOrderHistory()">
+  <div class="modal-box wide">
+    <h2 id="oh_title">訂單操作歷程</h2>
+    <div id="oh_sub" class="msg" style="color:var(--muted);margin:0 0 4px;"></div>
+    <div id="oh_msg" class="msg"></div>
+    <ul id="oh_list" class="oh-list"></ul>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+      <button class="btn secondary" onclick="exportOrderHistory()">匯出 CSV</button>
+      <button class="btn secondary" onclick="closeOrderHistory()">關閉</button>
+    </div>
   </div>
 </div>
 
@@ -1537,6 +1604,7 @@ function showTab(name, opts){
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active', b.dataset.tab===name));
   if (name==='dashboard') { loadDashboard(); startDashPolling(); } else { stopDashPolling(); }
   if (name==='orders') { fillOrderFilters(); loadOrders(); startOrdersPolling(); }
+  if (name==='backup') { loadBackupTab(); }
   else { stopOrdersPolling(); }
   if (name==='members') loadMembers();
   if (name==='stats') loadStats();
@@ -1962,6 +2030,7 @@ function renderOrders(){
     const st = STATUS_LABEL[o.status] || [o.status,'b-pending'];
     let actions = '';
     actions += \`<button class="btn secondary small" onclick="viewLink('\${o.token}')">查看連結</button>\`;
+    actions += '<button class="btn secondary small" onclick="viewOrderHistory(' + o.id + ')">紀錄</button>';
     if (o.payment_method==='store_barcode' || o.payment_method==='taiwan_pay') {
       if (o.status==='awaiting_barcode' || o.status==='ready_to_pay') {
         actions += \`<button class="btn secondary small" onclick="pickBarcode(\${o.id})">\${o.status==='ready_to_pay' ? '重新上傳條碼' : '上傳條碼'}</button>\`;
@@ -2534,7 +2603,7 @@ async function deleteMember(id){
 }
 
 // ---- 員工權限 ----
-const TAB_NEED = {dashboard:'dashboard', checkout:'checkout', orders:'order_list', members:'members', stats:'stats', settings:'settings', announcement:'settings', export:'stats', staff:'OWNER', rates:'rates', coupons:'coupons', points:'points', live:'live', logs:'logs'};
+const TAB_NEED = {dashboard:'dashboard', checkout:'checkout', orders:'order_list', members:'members', stats:'stats', settings:'settings', announcement:'settings', export:'stats', staff:'OWNER', backup:'OWNER', rates:'rates', coupons:'coupons', points:'points', live:'live', logs:'logs'};
 const DEFAULT_NEW_PERMS = ['dashboard', 'checkout', 'order_list'];
 let adminMe = null, staffCache = [], spmId = null;
 
@@ -3876,6 +3945,259 @@ async function ensureLogsAdminOptions(){
     });
     logsAdminOptionsLoaded = true;
   }catch(e){ /* 下拉選單載入失敗不影響主要列表功能，忽略即可 */ }
+}
+
+// ---- 訂單操作歷程 ----
+let ohOrderId = null;
+
+async function viewOrderHistory(id){
+  ohOrderId = id;
+  document.getElementById('orderHistoryModal').classList.remove('hidden');
+  document.getElementById('oh_title').textContent = '訂單操作歷程';
+  document.getElementById('oh_sub').textContent = '';
+  document.getElementById('oh_list').innerHTML = '';
+  const msg = document.getElementById('oh_msg');
+  msg.textContent = '載入中…'; msg.className = 'msg';
+  try{
+    const d = await api('/api/admin/orders/' + id + '/history');
+    const o = d.order;
+    document.getElementById('oh_title').textContent = '訂單操作歷程　' + o.order_no;
+    document.getElementById('oh_sub').textContent = '客戶：' + o.member_name_snapshot + '　金額：$' + o.amount + '　目前狀態：' + ((STATUS_LABEL[o.status] || [o.status])[0]);
+    document.getElementById('oh_list').innerHTML = d.events.map(function(e){
+      return '<li class="oh-item' + (e.synthetic ? ' sys' : '') + '">'
+        + '<div class="oh-head"><span class="oh-label">' + escapeHtml(e.label) + '</span>'
+        + '<span class="oh-meta">' + toTaipeiTime(e.time) + '　' + escapeHtml(e.actor) + (e.ip ? '　' + escapeHtml(e.ip) : '') + (e.synthetic ? '　（由訂單資料推算）' : '') + '</span></div>'
+        + '<div class="oh-sum">' + escapeHtml(e.summary) + '</div>'
+        + (e.detail_text ? '<div class="oh-detail">' + escapeHtml(e.detail_text) + '</div>' : '')
+        + '</li>';
+    }).join('') || '<li class="oh-meta">沒有任何紀錄</li>';
+    msg.textContent = d.truncated ? '紀錄超過 500 筆，只顯示最早的 500 筆；完整內容請用「匯出 CSV」或操作紀錄頁籤。' : '共 ' + d.events.length + ' 筆（依時間由舊到新）';
+    msg.className = 'msg' + (d.truncated ? ' err' : '');
+  }catch(e){ msg.textContent = e.message; msg.className = 'msg err'; }
+}
+
+function closeOrderHistory(){ document.getElementById('orderHistoryModal').classList.add('hidden'); }
+
+function exportOrderHistory(){
+  if (!ohOrderId) return;
+  window.location.href = '/api/admin/orders/' + ohOrderId + '/history/export';
+  const id = ohOrderId;
+  setTimeout(function(){ if (ohOrderId === id && !document.getElementById('orderHistoryModal').classList.contains('hidden')) viewOrderHistory(id); }, 1500); // 匯出本身也會留一筆紀錄，稍後重新整理就看得到
+}
+
+// ===== 資料備份 / 還原 =====
+const BK_FORMAT = 'member-checkout-backup';
+const BK_NAMES = {orders:'訂單', order_items:'訂單品項', members:'會員', admins:'後台帳號（管理員／員工）', admin_logs:'操作紀錄', settings:'系統設定', coupons:'優惠碼', points_ledger:'點數紀錄', points_items:'點數商城商品', points_redemptions:'點數兌換紀錄', live_rounds:'直播場次', live_items:'直播商品', live_comments:'直播留言'};
+let bkInfo = null;      // 伺服器回報的資料表資訊
+let rsBackup = null;    // 讀進來的備份檔內容
+let rsPassword = '';    // 讀取備份檔時輸入的密碼（還原前自動備份時沿用來加密）
+let bkBusy = false;
+
+function bkName(n){ return BK_NAMES[n] || n; }
+function bkShowOrder(list){ const pref = Object.keys(BK_NAMES); return list.slice().sort(function(a, b){ const ia = pref.indexOf(a.name || a), ib = pref.indexOf(b.name || b); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib); }); }
+function bkSet(id, text, cls){ const el = document.getElementById(id); el.textContent = text || ''; el.className = 'msg' + (cls ? ' ' + cls : ''); }
+function bkProgress(id, done, total){ const el = document.getElementById(id); el.classList.remove('hidden'); el.max = Math.max(1, total); el.value = done; }
+function bkHideProgress(id){ document.getElementById(id).classList.add('hidden'); }
+function bkChecked(id){ return document.getElementById(id).checked; }
+function bkStamp(){ const t = new Date(Date.now() + 8 * 3600 * 1000).toISOString(); return t.slice(0, 10).replace(/-/g, '') + '_' + t.slice(11, 16).replace(':', ''); }
+
+function bkB64(bytes){ let s = ''; const step = 0x8000; for (let i = 0; i < bytes.length; i += step) s += String.fromCharCode.apply(null, bytes.subarray(i, i + step)); return btoa(s); }
+function bkUnB64(str){ const bin = atob(str); const out = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i); return out; }
+
+async function bkKey(password, salt, iterations, usage){
+  const mat = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({name:'PBKDF2', salt: salt, iterations: iterations, hash:'SHA-256'}, mat, {name:'AES-GCM', length:256}, false, [usage]);
+}
+async function bkEncrypt(text, password){
+  const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await bkKey(password, salt, 200000, 'encrypt');
+  const ct = new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM', iv: iv}, key, new TextEncoder().encode(text)));
+  return JSON.stringify({format: BK_FORMAT, version: 1, encrypted: true, kdf: 'PBKDF2-SHA256', iterations: 200000, salt: bkB64(salt), iv: bkB64(iv), data: bkB64(ct)});
+}
+async function bkDecrypt(obj, password){
+  const key = await bkKey(password, bkUnB64(obj.salt), obj.iterations || 200000, 'decrypt');
+  try{
+    const pt = await crypto.subtle.decrypt({name:'AES-GCM', iv: bkUnB64(obj.iv)}, key, bkUnB64(obj.data));
+    return new TextDecoder().decode(pt);
+  }catch(e){ throw new Error('密碼不正確，或備份檔已經損毀'); }
+}
+function bkDownload(text, filename){
+  const blob = new Blob([text], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = filename;
+  document.body.appendChild(a); a.click();
+  setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+}
+
+async function loadBackupTab(){
+  try{
+    bkInfo = await api('/api/admin/backup/tables');
+    const tb = document.querySelector('#bk_table tbody');
+    tb.innerHTML = '';
+    bkShowOrder(bkInfo.tables).forEach(function(t){
+      const tr = document.createElement('tr');
+      const a = document.createElement('td'); a.textContent = bkName(t.name); a.setAttribute('data-label', '資料');
+      const b = document.createElement('td'); b.textContent = t.count; b.setAttribute('data-label', '筆數');
+      tr.appendChild(a); tr.appendChild(b); tb.appendChild(tr);
+    });
+    const last = document.getElementById('bk_last');
+    if (bkInfo.last_backup_at) {
+      const days = Math.floor((Date.now() - Date.parse(bkInfo.last_backup_at.replace(' ', 'T') + 'Z')) / 86400000);
+      last.textContent = '上次備份：' + toTaipeiTime(bkInfo.last_backup_at) + (bkInfo.last_backup_by ? '（' + bkInfo.last_backup_by + '）' : '') + (days >= 7 ? '　⚠ 已經 ' + days + ' 天沒有備份了' : '');
+      last.className = 'msg' + (days >= 7 ? ' err' : ' ok');
+    } else {
+      last.textContent = '⚠ 還沒有下載過備份，建議現在就備份一次。';
+      last.className = 'msg err';
+    }
+  }catch(e){ bkSet('bk_msg', e.message, 'err'); }
+}
+
+// 向伺服器分批讀取資料，回傳完整的備份內容
+async function bkCollect(opts, onProgress){
+  await loadBackupTab();
+  const out = {format: BK_FORMAT, version: 1, created_at: new Date().toISOString(), options: {images: !!opts.images}, tables: {}};
+  const names = bkInfo.order.filter(function(n){ return (n !== 'admins' || opts.admins) && (n !== 'admin_logs' || opts.logs); });
+  const countOf = {}; bkInfo.tables.forEach(function(t){ countOf[t.name] = t.count; });
+  let total = 0; names.forEach(function(n){ total += countOf[n] || 0; });
+  let done = 0;
+  for (let i = 0; i < names.length; i++) {
+    const n = names[i]; let after = 0, cols = null; const rows = [];
+    while (true) {
+      const d = await api('/api/admin/backup/rows?table=' + encodeURIComponent(n) + '&after=' + after + '&images=' + (opts.images ? '1' : '0'));
+      cols = d.columns;
+      for (let k = 0; k < d.rows.length; k++) rows.push(d.rows[k]);
+      done += d.rows.length; onProgress(done, total, n);
+      if (d.done || !d.rows.length) break;
+      after = d.last;
+    }
+    out.tables[n] = {columns: cols, rows: rows};
+  }
+  return {backup: out, total: total};
+}
+
+function bkCounts(backup){ const c = {}; Object.keys(backup.tables).forEach(function(k){ c[k] = backup.tables[k].rows.length; }); return c; }
+
+async function downloadBackup(){
+  if (bkBusy) return;
+  const pw = document.getElementById('bk_pw').value, pw2 = document.getElementById('bk_pw2').value;
+  if (pw !== pw2) { bkSet('bk_msg', '兩次輸入的備份檔密碼不一樣', 'err'); return; }
+  if (!pw && !confirm('沒有設定備份檔密碼：檔案裡的會員資料、客人的平台帳號密碼都是明碼，任何拿到檔案的人都看得到。確定要下載「未加密」的備份嗎？')) return;
+  bkBusy = true;
+  try{
+    const opts = {images: bkChecked('bk_images'), admins: bkChecked('bk_admins'), logs: bkChecked('bk_logs')};
+    bkSet('bk_msg', '正在讀取資料…');
+    const r = await bkCollect(opts, function(done, total, name){ bkProgress('bk_progress', done, total); bkSet('bk_msg', '讀取中：' + bkName(name) + '（' + done + ' / ' + total + '）'); });
+    let text = JSON.stringify(r.backup), enc = false;
+    if (pw) { bkSet('bk_msg', '加密中…'); text = await bkEncrypt(text, pw); enc = true; }
+    bkDownload(text, 'backup_' + bkStamp() + (enc ? '.enc' : '') + '.json');
+    await api('/api/admin/backup/finish', {method:'POST', body: JSON.stringify({type:'export', tables: bkCounts(r.backup), images: opts.images, encrypted: enc})});
+    bkSet('bk_msg', '備份完成，檔案已下載（共 ' + r.total + ' 筆' + (enc ? '，已加密' : '，未加密') + '）。請把檔案存到安全的地方，不要只放在這台電腦。', 'ok');
+    document.getElementById('bk_pw').value = ''; document.getElementById('bk_pw2').value = '';
+    loadBackupTab();
+  }catch(e){ bkSet('bk_msg', '備份失敗：' + e.message, 'err'); }
+  finally{ bkBusy = false; bkHideProgress('bk_progress'); }
+}
+
+async function previewRestore(){
+  const f = document.getElementById('rs_file').files[0];
+  rsBackup = null;
+  document.getElementById('rs_preview').classList.add('hidden');
+  if (!f) { bkSet('rs_msg', '請先選擇備份檔', 'err'); return; }
+  bkSet('rs_msg', '讀取中…');
+  try{
+    await loadBackupTab();
+    const pw = document.getElementById('rs_pw').value;
+    let obj;
+    try { obj = JSON.parse(await f.text()); } catch(e) { throw new Error('這不是有效的備份檔（無法解析內容）'); }
+    if (obj && obj.encrypted) {
+      if (!pw) throw new Error('這個備份檔有加密，請輸入備份檔密碼');
+      try { obj = JSON.parse(await bkDecrypt(obj, pw)); } catch(e) { throw new Error(e.message.indexOf('密碼') >= 0 ? e.message : '備份檔解密後的內容不正確'); }
+    }
+    if (!obj || obj.format !== BK_FORMAT || !obj.tables || typeof obj.tables !== 'object') throw new Error('這不是本系統產生的備份檔');
+    if (obj.version !== 1) throw new Error('備份檔的版本（' + obj.version + '）這個系統還不支援');
+    Object.keys(obj.tables).forEach(function(n){
+      const t = obj.tables[n];
+      if (!t || !Array.isArray(t.columns) || !Array.isArray(t.rows)) throw new Error('備份檔的「' + n + '」格式不正確');
+    });
+    rsBackup = obj; rsPassword = pw;
+    const cur = {}; bkInfo.tables.forEach(function(t){ cur[t.name] = t; });
+    const tb = document.querySelector('#rs_table tbody'); tb.innerHTML = '';
+    let blocked = false;
+    bkShowOrder(bkInfo.order).forEach(function(n){
+      if (!obj.tables[n]) return;
+      const bt = obj.tables[n];
+      const okCols = bt.columns.every(function(c){ return cur[n].columns.indexOf(c) >= 0; });
+      if (!okCols) blocked = true;
+      const status = !okCols ? '無法還原：備份有目前系統沒有的欄位（來自較新版本）' : (n === 'admins' ? '預設不還原（可在下方勾選）' : (n === 'admin_logs' ? '只補回缺少的' : '可還原'));
+      const tr = document.createElement('tr');
+      [[bkName(n), '資料'], [bt.rows.length, '備份裡的筆數'], [cur[n].count, '目前的筆數'], [status, '狀態']].forEach(function(c){
+        const td = document.createElement('td'); td.textContent = c[0]; td.setAttribute('data-label', c[1]); tr.appendChild(td);
+      });
+      tb.appendChild(tr);
+    });
+    const unknown = Object.keys(obj.tables).filter(function(n){ return !cur[n]; });
+    document.getElementById('rs_summary').textContent = '備份時間：' + (obj.created_at ? toTaipeiTime(obj.created_at.replace('T', ' ').slice(0, 19)) + '（台灣時間）' : '不明') + '　' + (obj.options && obj.options.images ? '含圖片' : '不含圖片') + (unknown.length ? '　這些資料表目前系統沒有，會略過：' + unknown.join('、') : '');
+    document.getElementById('rs_preview').classList.remove('hidden');
+    document.getElementById('rs_admins_row').style.display = obj.tables.admins ? 'flex' : 'none';
+    document.getElementById('rs_confirm').value = '';
+    bkSet('rs_msg', blocked ? '備份檔有欄位跟目前的系統不相容，無法還原，請先升級程式與資料庫。' : '備份檔讀取成功，請確認內容後選擇還原方式。', blocked ? 'err' : 'ok');
+  }catch(e){ bkSet('rs_msg', e.message, 'err'); }
+}
+
+async function startRestore(){
+  if (bkBusy) return;
+  if (!rsBackup) { bkSet('rs_msg', '請先讀取備份檔', 'err'); return; }
+  const mode = document.querySelector('input[name=rs_mode]:checked').value;
+  const need = mode === 'replace' ? '覆蓋' : '還原';
+  if (document.getElementById('rs_confirm').value.trim() !== need) { bkSet('rs_msg', '請在確認欄輸入「' + need + '」才能繼續', 'err'); return; }
+  const withAdmins = bkChecked('rs_admins') && !!rsBackup.tables.admins;
+  bkBusy = true;
+  let stage = '準備';
+  try{
+    await loadBackupTab();
+    const cur = {}; bkInfo.tables.forEach(function(t){ cur[t.name] = t; });
+    const names = bkInfo.order.filter(function(n){ return rsBackup.tables[n] && (n !== 'admins' || withAdmins); });
+    names.forEach(function(n){
+      if (!rsBackup.tables[n].columns.every(function(c){ return cur[n].columns.indexOf(c) >= 0; })) throw new Error('備份檔的「' + bkName(n) + '」有目前系統沒有的欄位，請先升級程式與資料庫');
+    });
+    if (bkChecked('rs_snapshot')) {
+      stage = '備份目前的資料';
+      const snap = await bkCollect({images: true, admins: true, logs: true}, function(done, total, name){ bkProgress('rs_progress', done, total); bkSet('rs_msg', '還原前先備份目前的資料：' + bkName(name) + '（' + done + ' / ' + total + '）'); });
+      let text = JSON.stringify(snap.backup), enc = false;
+      if (rsPassword) { text = await bkEncrypt(text, rsPassword); enc = true; }
+      bkDownload(text, 'before_restore_' + bkStamp() + (enc ? '.enc' : '') + '.json');
+      await api('/api/admin/backup/finish', {method:'POST', body: JSON.stringify({type:'export', snapshot: true, tables: bkCounts(snap.backup), images: true, encrypted: enc})});
+    }
+    if (mode === 'replace') {
+      stage = '清除舊資料';
+      bkSet('rs_msg', '清除舊資料…');
+      await api('/api/admin/backup/clear', {method:'POST', body: JSON.stringify({tables: names.filter(function(n){ return n !== 'admins' && n !== 'admin_logs'; })})});
+    }
+    stage = '寫入資料';
+    let total = 0, done = 0; const written = {};
+    names.forEach(function(n){ total += rsBackup.tables[n].rows.length; });
+    for (let ti = 0; ti < names.length; ti++) {
+      const n = names[ti], bt = rsBackup.tables[n]; written[n] = 0;
+      let i = 0;
+      while (i < bt.rows.length) {
+        const chunk = []; let bytes = 0;
+        while (i < bt.rows.length && chunk.length < 300 && bytes < 700000) { bytes += JSON.stringify(bt.rows[i]).length; chunk.push(bt.rows[i]); i++; }
+        const r = await api('/api/admin/backup/restore', {method:'POST', body: JSON.stringify({table: n, mode: mode, columns: bt.columns, rows: chunk})});
+        written[n] += r.inserted; done += chunk.length;
+        bkProgress('rs_progress', done, total);
+        bkSet('rs_msg', '寫入中：' + bkName(n) + '（' + done + ' / ' + total + '）');
+      }
+    }
+    stage = '收尾';
+    await api('/api/admin/backup/finish', {method:'POST', body: JSON.stringify({type:'restore', mode: mode, with_admins: withAdmins, tables: written})});
+    let sum = 0; Object.keys(written).forEach(function(k){ sum += written[k]; });
+    bkSet('rs_msg', '還原完成：共寫入 ' + sum + ' 筆資料。' + (withAdmins ? '後台帳號已更新，建議重新登入。' : '') + '建議重新整理頁面確認資料。', 'ok');
+    document.getElementById('rs_confirm').value = '';
+    loadBackupTab();
+  }catch(e){
+    bkSet('rs_msg', '還原中斷（' + stage + '）：' + e.message + (stage === '寫入資料' || stage === '清除舊資料' ? '　資料可能只還原了一部分，請不要關閉頁面以外的操作，並用「還原前自動備份」的檔案或原本的備份重新還原一次。' : ''), 'err');
+  }
+  finally{ bkBusy = false; bkHideProgress('rs_progress'); }
 }
 
 function logsFilterParams(){

@@ -14,6 +14,7 @@ import {
 } from "./_lib/platforms.js";
 import { homeHtml } from "./_lib/home.js";
 import { hasOrderSearchParams, buildOrderSearch } from "./_lib/ordersearch.js";
+import { handleBackupTables, handleBackupRows, handleBackupClear, handleBackupRestore, handleBackupFinish } from "./_lib/backup.js";
 import {
   getPointsConfig,
   savePointsConfig,
@@ -89,6 +90,7 @@ import {
   CVS_STORES,
   CVS_LIMIT,
   logAdminAction,
+  logOrderContext,
   sanitizeForLog,
 } from "./_lib/helpers.js";
 
@@ -135,7 +137,7 @@ async function itemLogLabel(env, itemId) {
 
 // ---- 操作紀錄：把 ID 換成看得懂的名稱 ----
 // 在「執行操作之前」一次查好（刪除後就查不到了）；查不到的退回顯示 ID。回傳的物件取不到的欄位會是空字串。
-async function resolveLogLabels(env, path, method) {
+async function resolveLogLabels(env, path, method, request) {
   const L = {};
   if (method === "GET") return L;
   const one = async (sql, id) => {
@@ -145,6 +147,11 @@ async function resolveLogLabels(env, path, method) {
   if ((m = path.match(/^\/api\/admin\/orders\/(\d+)(?:\/|$)/))) {
     const r = await one("SELECT id, member_name_snapshot, amount FROM orders WHERE id=?", m[1]);
     L.order = r ? `訂單 ${formatOrderNo(r.id)}（${r.member_name_snapshot}，$${r.amount}）` : `訂單 ${formatOrderNo(parseInt(m[1], 10))}`;
+    if (request) logOrderContext.set(request, parseInt(m[1], 10)); // 這筆操作屬於這張訂單（查看訂單歷程用）
+  }
+  if (request && (m = path.match(/^\/api\/admin\/order-items\/(\d+)(?:\/|$)/))) {
+    const r = await one("SELECT order_id FROM order_items WHERE id=?", m[1]); // 品項的操作也歸到它所屬的訂單
+    if (r) logOrderContext.set(request, r.order_id);
   }
   if ((m = path.match(/^\/api\/admin\/members\/(\d+)(?:\/|$)/))) {
     const r = await one("SELECT name, account FROM members WHERE id=?", m[1]);
@@ -365,6 +372,201 @@ async function handleExportAdminLogs(request, env, session) {
     headers: {
       "Content-Type": "text/csv; charset=utf-8",
       "Content-Disposition": 'attachment; filename="admin_logs_' + today + '.csv"',
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
+// ================= 訂單操作歷程 =================
+// 把「這張訂單被誰、什麼時候、做了什麼」依時間順序列出來。資料來源：
+//  1. admin_logs 裡 order_id 等於這張訂單的紀錄（v24 之後寫入的新紀錄）；
+//  2. 舊紀錄（order_id 是空的）用「摘要裡出現這個訂單編號」再比對一次，所以不用回填歷史資料；
+//  3. 如果某個重要時間點（建立、付款、結案…）在紀錄裡找不到，用訂單本身的時間欄位補上，標示為「系統推算」。
+const HISTORY_LIMIT = 500;
+const escLikeHistory = (v) => String(v).replace(/[\\%_]/g, (c) => "\\" + c); // LIKE 比對時，把 % _ \ 當一般字元
+const ORDER_ACTION_LABEL = {
+  "order.create": "結帳櫃檯建立訂單",
+  "self.order_create": "會員自助下單",
+  "guest.select_method": "客人選擇付款方式",
+  "guest.upload_proof": "客人上傳付款證明",
+  "order.upload_barcode": "上傳條碼",
+  "order.mark_paid": "標記已付款",
+  "order.cancel": "取消訂單",
+  "order.correct": "更正訂單",
+  "order.complete": "結案",
+  "order.uncomplete": "取消結案",
+  "order.update_note": "編輯備註",
+  "order.add_item": "新增品項",
+  "order.update_item": "更新品項",
+  "order.delete_item": "刪除品項",
+  "order.item_deliver": "交貨狀態",
+  "order.send_detail": "寄送明細信",
+  "order.export_history": "匯出訂單歷程",
+};
+const ORDER_DETAIL_LABEL = {
+  amount: "金額", payment_method: "付款方式", store_brand: "超商", member_id: "會員編號", member_name_snapshot: "客戶名稱",
+  non_member_name: "客戶名稱", platform: "平台", platform_account: "平台帳號", platform_password: "平台密碼", status: "狀態",
+  coupon_code: "優惠碼", name: "品名", qty: "數量", unit_price: "單價", note: "備註", admin_note: "備註", delivered: "已交貨",
+  email: "信箱", changes: "變更",
+};
+const ORDER_DIFF_COLUMNS = ["amount", "payment_method", "store_brand", "member_name_snapshot", "platform", "platform_account", "status"];
+
+// 更正訂單前後比較：只列出真的有變的欄位；平台密碼只標示「有修改」，不記內容
+function diffOrderRows(before, after) {
+  if (!before || !after) return null;
+  const out = {};
+  const short = (v) => (v === null || v === undefined ? null : String(v).slice(0, 60));
+  for (const c of ORDER_DIFF_COLUMNS) {
+    if (String(before[c] ?? "") !== String(after[c] ?? "")) out[c] = [short(before[c]), short(after[c])];
+  }
+  if (String(before.platform_password ?? "") !== String(after.platform_password ?? "")) out.platform_password = "(已修改，內容不紀錄)";
+  return out;
+}
+
+const PM_LABEL_ZH = { transfer: "轉帳", store_barcode: "超商條碼", taiwan_pay: "TWQR" };
+const STORE_LABEL_ZH = { seven: "7-11", family: "全家", hilife: "萊爾富" };
+const STATUS_LABEL_ZH = {
+  pending_method: "待選付款方式", awaiting_payment: "等待付款", awaiting_barcode: "待上傳條碼", ready_to_pay: "可付款",
+  paid: "已付款", expired: "已過期", cancelled: "已取消",
+};
+
+function historyValueText(key, v, platformNames) {
+  if (v === null || v === undefined || v === "") return "（空）";
+  if (key === "payment_method") return PM_LABEL_ZH[v] || String(v);
+  if (key === "store_brand") return STORE_LABEL_ZH[v] || String(v);
+  if (key === "status") return STATUS_LABEL_ZH[v] || String(v);
+  if (key === "platform") return platformNames[v] || String(v);
+  if (key === "amount") return "$" + v;
+  return String(v);
+}
+
+// 把紀錄的 detail（JSON 字串）整理成給人看的文字：「金額: $500 → $600；付款方式: 轉帳 → 超商條碼」
+function historyDetailText(raw, platformNames) {
+  if (!raw) return "";
+  let o;
+  try {
+    o = JSON.parse(raw);
+  } catch {
+    return String(raw);
+  }
+  if (!o || typeof o !== "object" || Array.isArray(o)) return String(raw);
+  const parts = [];
+  if (o.changes && typeof o.changes === "object") {
+    for (const [k, v] of Object.entries(o.changes)) {
+      const label = ORDER_DETAIL_LABEL[k] || k;
+      parts.push(Array.isArray(v) ? label + ": " + historyValueText(k, v[0], platformNames) + " → " + historyValueText(k, v[1], platformNames) : label + ": " + v);
+    }
+  }
+  for (const [k, v] of Object.entries(o)) {
+    if (k === "changes") continue;
+    if (o.changes && k in o.changes) continue; // 已經在變更裡列過了
+    const label = ORDER_DETAIL_LABEL[k] || k;
+    parts.push(label + ": " + (v !== null && typeof v === "object" ? JSON.stringify(v) : historyValueText(k, v, platformNames)));
+  }
+  return parts.join("；");
+}
+
+async function buildOrderHistory(env, orderId) {
+  const order = await env.DB.prepare(
+    "SELECT id, member_name_snapshot, amount, status, platform, payment_method, created_at, expires_at, method_selected_at, barcode_uploaded_at, proof_uploaded_at, paid_at, completed_at FROM orders WHERE id=?"
+  )
+    .bind(orderId)
+    .first();
+  if (!order) return null;
+  const orderNo = formatOrderNo(order.id);
+  const platformNames = {};
+  try {
+    for (const p of await getPlatforms(env.DB)) platformNames[p.key] = p.name;
+  } catch {
+    // 讀不到平台名稱就直接顯示代碼
+  }
+
+  // 舊紀錄（order_id 是空的）只可能發生在訂單建立之後，所以加上時間下限，避免掃整張紀錄表
+  const needle = "%" + escLikeHistory(orderNo) + "%";
+  let rows;
+  try {
+    rows = (
+      await env.DB.prepare(
+        "SELECT id, order_id, admin_username, action, summary, detail, ip, created_at FROM admin_logs " +
+          "WHERE created_at >= datetime(?, '-1 minute') AND (order_id = ? OR (order_id IS NULL AND summary LIKE ? ESCAPE '\\')) " +
+          "ORDER BY id ASC LIMIT ?"
+      )
+        .bind(order.created_at, order.id, needle, HISTORY_LIMIT + 1)
+        .all()
+    ).results;
+  } catch (err) {
+    if (!/no such column/i.test(String((err && err.message) || ""))) throw err;
+    // 還沒執行 migrate_v25.sql：沒有 order_id 欄位，只用訂單編號文字比對
+    rows = (
+      await env.DB.prepare(
+        "SELECT id, admin_username, action, summary, detail, ip, created_at FROM admin_logs " +
+          "WHERE created_at >= datetime(?, '-1 minute') AND summary LIKE ? ESCAPE '\\' ORDER BY id ASC LIMIT ?"
+      )
+        .bind(order.created_at, needle, HISTORY_LIMIT + 1)
+        .all()
+    ).results;
+  }
+  const noDigitAfter = new RegExp(orderNo + "(?!\\d)");
+  // 有記錄訂單編號的直接採用；舊紀錄（沒有 order_id）用文字比對，且編號後面不能緊接數字（避免 TW210003 比對到 TW2100031）
+  rows = rows.filter((r) => (r.order_id != null ? r.order_id === order.id : noDigitAfter.test(r.summary)));
+  const truncated = rows.length > HISTORY_LIMIT;
+  if (truncated) rows = rows.slice(0, HISTORY_LIMIT);
+
+  const events = rows.map((r) => ({
+    id: r.id,
+    time: r.created_at,
+    actor: r.admin_username,
+    action: r.action,
+    label: ORDER_ACTION_LABEL[r.action] || r.action,
+    summary: r.summary,
+    detail_text: historyDetailText(r.detail, platformNames),
+    ip: r.ip || "",
+    synthetic: false,
+  }));
+
+  // 紀錄裡找不到的重要時間點，用訂單本身的時間欄位補上（標示為系統推算）
+  const has = (...acts) => events.some((e) => acts.includes(e.action));
+  const synth = (time, label, summary) => events.push({ id: 0, time, actor: "（系統）", action: "", label, summary, detail_text: "", ip: "", synthetic: true });
+  if (order.created_at && !has("order.create", "self.order_create")) {
+    synth(order.created_at, "建立訂單", `訂單建立，客戶「${order.member_name_snapshot}」，金額 $${order.amount}`);
+  }
+  if (order.method_selected_at && !has("guest.select_method")) synth(order.method_selected_at, "選擇付款方式", "已選擇付款方式");
+  if (order.barcode_uploaded_at && !has("order.upload_barcode")) synth(order.barcode_uploaded_at, "上傳條碼", "已上傳條碼");
+  if (order.proof_uploaded_at && !has("guest.upload_proof")) synth(order.proof_uploaded_at, "客人上傳付款證明", "客人已上傳付款證明");
+  if (order.paid_at && !has("order.mark_paid")) synth(order.paid_at, "付款完成", "訂單已付款");
+  if (order.completed_at && !has("order.complete")) synth(order.completed_at, "結案", "訂單已結案");
+  if (order.status === "expired" && order.expires_at) synth(order.expires_at, "訂單過期", "超過付款時效，訂單已過期");
+  events.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : a.id - b.id));
+
+  return { order: { ...order, order_no: orderNo }, events, truncated };
+}
+
+async function handleOrderHistory(id, env) {
+  const h = await buildOrderHistory(env, parseInt(id, 10));
+  if (!h) return json({ error: "找不到訂單" }, 404);
+  return json(h);
+}
+
+async function handleExportOrderHistory(id, env, session, request) {
+  const h = await buildOrderHistory(env, parseInt(id, 10));
+  if (!h) return json({ error: "找不到訂單" }, 404);
+  const toTaipei = (dateStr) => {
+    const t = Date.parse(String(dateStr || "").replace(" ", "T") + "Z");
+    return Number.isNaN(t) ? String(dateStr || "") : new Date(t + 8 * 3600 * 1000).toISOString().slice(0, 19).replace("T", " ");
+  };
+  const header = ["時間（台灣時間）", "操作人員", "動作", "內容", "變更明細", "IP", "資料來源"];
+  const rows = h.events.map((e) => [toTaipei(e.time), e.actor, e.label, e.summary, e.detail_text, e.ip, e.synthetic ? "系統推算" : "操作紀錄"]);
+  const csv = "\uFEFF" + [header, ...rows].map((r) => r.map(csvCell).join(",")).join("\r\n");
+  await logAdminAction(env, session, request, {
+    action: "order.export_history",
+    orderId: h.order.id,
+    summary: "匯出訂單 " + h.order.order_no + " 的操作歷程（" + h.events.length + " 筆）",
+  });
+  return new Response(csv, {
+    status: 200,
+    headers: {
+      "Content-Type": "text/csv; charset=utf-8",
+      "Content-Disposition": 'attachment; filename="order_' + h.order.order_no + '_history.csv"',
       "Cache-Control": "no-store",
     },
   });
@@ -2976,7 +3178,7 @@ export async function onRequest(context) {
       const PM_NAME = { transfer: "轉帳", store_barcode: "超商條碼", taiwan_pay: "TWQR" };
       return alog(
         env, GUEST_ACTOR, request,
-        { action: "guest.select_method", summary: `客人在付款頁選擇付款方式「${PM_NAME[body.method] || body.method || ""}」：${ord ? `訂單 ${formatOrderNo(ord.id)}（${ord.member_name_snapshot}，$${ord.amount}）` : "未知訂單"}` },
+        { action: "guest.select_method", orderId: ord ? ord.id : null, summary: `客人在付款頁選擇付款方式「${PM_NAME[body.method] || body.method || ""}」：${ord ? `訂單 ${formatOrderNo(ord.id)}（${ord.member_name_snapshot}，$${ord.amount}）` : "未知訂單"}` },
         handleSelectMethod(selectMethodMatch[1], request, env)
       );
     }
@@ -2986,7 +3188,7 @@ export async function onRequest(context) {
       const ord = await env.DB.prepare("SELECT id, member_name_snapshot, amount FROM orders WHERE token=?").bind(proofMatch[1]).first().catch(() => null);
       return alog(
         env, GUEST_ACTOR, request,
-        { action: "guest.upload_proof", summary: `客人上傳付款證明：${ord ? `訂單 ${formatOrderNo(ord.id)}（${ord.member_name_snapshot}，$${ord.amount}）` : "未知訂單"}` },
+        { action: "guest.upload_proof", orderId: ord ? ord.id : null, summary: `客人上傳付款證明：${ord ? `訂單 ${formatOrderNo(ord.id)}（${ord.member_name_snapshot}，$${ord.amount}）` : "未知訂單"}` },
         handleUploadProof(proofMatch[1], request, env)
       );
     }
@@ -3003,6 +3205,7 @@ export async function onRequest(context) {
           env, memberActor(session), request,
           (r) => ({
             action: "self.order_create",
+            orderId: (r && r.order_no && parseOrderNo(r.order_no)) || null,
             summary: `會員「${session.account}」自助下單 ${(r && r.order_no) || ""}，金額 $${r && r.amount != null ? r.amount : body.amount}${r && r.points_used ? `（使用點數 ${r.points_used}）` : ""}${r && r.discount ? `（優惠碼折抵 $${r.discount}）` : ""}`,
             detail: sanitizeForLog({ platform: body.platform, amount: body.amount, coupon_code: body.coupon_code, use_points: body.use_points }),
           }),
@@ -3057,8 +3260,14 @@ export async function onRequest(context) {
       if (path === "/api/admin/me" && method === "GET") return handleMe(session, access);
 
       // 操作紀錄用的名稱（訂單編號、會員姓名、商品名…），在動手之前先查好
-      const L = await resolveLogLabels(env, path, method);
+      const L = await resolveLogLabels(env, path, method, request);
 
+      // 資料備份／還原（沒有列在權限對照表 → 預設只有管理員能用）
+      if (path === "/api/admin/backup/tables" && method === "GET") return handleBackupTables(env);
+      if (path === "/api/admin/backup/rows" && method === "GET") return handleBackupRows(request, env);
+      if (path === "/api/admin/backup/clear" && method === "POST") return handleBackupClear(request, env, session);
+      if (path === "/api/admin/backup/restore" && method === "POST") return handleBackupRestore(request, env, session);
+      if (path === "/api/admin/backup/finish" && method === "POST") return handleBackupFinish(request, env, session);
       if (path === "/api/admin/logs" && method === "GET") return handleListAdminLogs(request, env);
       if (path === "/api/admin/logs/export" && method === "GET") return handleExportAdminLogs(request, env, session);
 
@@ -3238,6 +3447,7 @@ export async function onRequest(context) {
           env, session, request,
           (resBody) => ({
             action: "order.create",
+            orderId: (resBody && resBody.order_no && parseOrderNo(resBody.order_no)) || null,
             summary: `結帳櫃檯建立訂單${resBody && resBody.order_no ? `（${resBody.order_no}）` : ""}，客戶「${(resBody && resBody.member_name) || "非會員"}」，金額 $${resBody && resBody.amount != null ? resBody.amount : (body.amount ?? "")}${resBody && resBody.discount ? `（優惠碼折抵 $${resBody.discount}）` : ""}${resBody && resBody.items_count ? `，品項 ${resBody.items_count} 項` : ""}`,
             detail: sanitizeForLog(body),
           }),
@@ -3245,6 +3455,14 @@ export async function onRequest(context) {
         );
       }
       if (path === "/api/admin/orders" && method === "GET") return handleListOrders(request, env);
+
+      // 訂單操作歷程（需要「訂單列表」權限）：GET /api/admin/orders/:id/history 與 .../history/export（CSV）
+      const historyMatch = path.match(/^\/api\/admin\/orders\/(\d+)\/history(\/export)?$/);
+      if (historyMatch && method === "GET") {
+        return historyMatch[2]
+          ? handleExportOrderHistory(historyMatch[1], env, session, request)
+          : handleOrderHistory(historyMatch[1], env);
+      }
 
       const barcodeMatch = path.match(/^\/api\/admin\/orders\/(\d+)\/barcode$/);
       if (barcodeMatch && method === "POST") {
@@ -3276,10 +3494,21 @@ export async function onRequest(context) {
       const correctMatch = path.match(/^\/api\/admin\/orders\/(\d+)$/);
       if (correctMatch && method === "PATCH") {
         const body = await request.clone().json().catch(() => ({}));
+        const beforeRow = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(correctMatch[1]).first().catch(() => null);
+        const correctRes = await handleCorrectOrder(correctMatch[1], request, env);
+        let changes = null;
+        if (correctRes.status < 400 && beforeRow) {
+          const afterRow = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(correctMatch[1]).first().catch(() => null);
+          changes = diffOrderRows(beforeRow, afterRow);
+        }
         return alog(
           env, session, request,
-          { action: "order.correct", summary: `更正${L.order}`, detail: sanitizeForLog(body) },
-          handleCorrectOrder(correctMatch[1], request, env)
+          {
+            action: "order.correct",
+            summary: `更正${L.order}`,
+            detail: { ...sanitizeForLog(body), ...(changes && Object.keys(changes).length ? { changes } : {}) },
+          },
+          Promise.resolve(correctRes)
         );
       }
       if (correctMatch && method === "DELETE") {
