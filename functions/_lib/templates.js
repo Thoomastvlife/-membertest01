@@ -361,12 +361,11 @@ ${THEME_CSS_ADMIN}
         </div>
         <input id="co_amount" type="number" min="1" step="1" />
         <label>品項明細（選填；建立訂單後會自動寫入訂單明細）</label>
-        <small class="hint" style="display:block;margin:0 0 6px;">單價可以填 0（贈品）或負數（折扣，例如 -20）；品項合計必須大於 0。</small>
         <div class="co-items-box">
           <div class="co-items-head"><span>品名</span><span>數量</span><span>單價</span><span style="text-align:right;">小計</span><span></span></div>
           <div id="co_items"></div>
           <div class="co-items-foot">
-            <span style="display:flex;gap:6px;flex-wrap:wrap;"><button type="button" class="btn secondary small" onclick="coAddItem()">＋ 新增品項</button><button type="button" class="btn secondary small" onclick="coAddDiscount()">＋ 新增折扣</button></span>
+            <button type="button" class="btn secondary small" onclick="coAddItem()">＋ 新增品項</button>
             <span>品項合計：<b id="co_items_total">$0</b></span>
           </div>
         </div>
@@ -1889,7 +1888,7 @@ async function previewCoupon(prefix){
 
 // ---- 結帳櫃檯：品項明細 ----
 function coRound2(n){ return Math.round((Number(n)||0) * 100) / 100; }
-function coFmt(n){ const v = coRound2(n); return (v < 0 ? '-' : '') + '$' + Math.abs(v).toLocaleString('zh-TW'); }
+function coFmt(n){ return '$' + coRound2(n).toLocaleString('zh-TW'); }
 
 function coAddItem(name, qty, price){
   const box = document.getElementById('co_items');
@@ -1897,7 +1896,7 @@ function coAddItem(name, qty, price){
   row.className = 'co-item-row';
   row.innerHTML = '<input class="ci-name" placeholder="品名" maxlength="100" />'
     + '<input class="ci-qty" type="number" min="0" step="any" placeholder="數量" />'
-    + '<input class="ci-price" type="number" step="any" placeholder="單價" title="折扣請填負數（例如 -20），贈品填 0" />'
+    + '<input class="ci-price" type="number" min="0" step="any" placeholder="單價" />'
     + '<span class="ci-sub">$0</span>'
     + '<button type="button" class="btn secondary small" title="移除這個品項">&times;</button>';
   row.querySelector('.ci-name').value = name || '';
@@ -1908,15 +1907,6 @@ function coAddItem(name, qty, price){
   box.appendChild(row);
   coSyncAmount();
   if (!name) row.querySelector('.ci-name').focus();
-}
-
-// 新增一列「折扣」：品名先填好，游標直接跳到單價，輸入負數即可
-function coAddDiscount(){
-  coAddItem('折扣', 1);
-  const rows = document.querySelectorAll('#co_items .co-item-row');
-  const price = rows[rows.length - 1].querySelector('.ci-price');
-  price.placeholder = '例如 -20';
-  price.focus();
 }
 
 // 讀取目前所有品項列；全空白的列略過，只填了數字沒填品名的列視為錯誤
@@ -1932,7 +1922,7 @@ function coCollectItems(){
     const qty = parseFloat(qtyRaw);
     const unit_price = parseFloat(priceRaw);
     if (!(qty > 0)) return { error: '「' + name + '」的數量必須大於 0' };
-    if (priceRaw === '' || !isFinite(unit_price)) return { error: '「' + name + '」請填寫單價（折扣填負數，免費填 0）' };
+    if (!(unit_price >= 0)) return { error: '「' + name + '」請填寫單價' };
     items.push({ name, qty, unit_price });
   }
   return { items };
@@ -1981,7 +1971,6 @@ async function createOrder(){
   const items = collected.items;
   if (amountMode === 'items'){
     if (!items.length){ msg.textContent='請至少填寫一個品項，或改用「手動輸入金額」'; msg.className='msg err'; return; }
-    if (!(coItemsTotal() > 0)){ msg.textContent='品項合計必須大於 0（折扣加總後不能是 0 或負數）'; msg.className='msg err'; return; }
     document.getElementById('co_amount').value = coItemsTotal();
   }
   const amount = parseFloat(document.getElementById('co_amount').value);
@@ -2265,17 +2254,15 @@ function renderOrderItems(orderId, items){
   const orderNo = o ? o.order_no : ('#' + orderId);
   const total = items.reduce(function(s, it){ return s + it.qty * it.unit_price; }, 0);
   const itemRows = items.length ? items.map(function(it){
-    const sub = it.qty * it.unit_price;
-    const dlBtn = it.unit_price < 0
-      ? '<span style="color:var(--muted);font-size:12px;">折扣</span>'
-      : it.is_delivered
+    const sub = (it.qty * it.unit_price).toLocaleString();
+    const dlBtn = it.is_delivered
       ? \`<button class="btn secondary small" style="font-size:11px;padding:3px 8px;" onclick="toggleDelivery(\${it.id}, \${orderId}, false)">✓ 已交貨</button>\`
       : \`<button class="btn small" style="font-size:11px;padding:3px 8px;background:#f59e0b;" onclick="toggleDelivery(\${it.id}, \${orderId}, true)">◎ 未交貨</button>\`;
     return \`<tr>
       <td style="padding:6px 8px;font-size:13px;">\${escapeHtml(it.name)}\${it.note ? '<br/><span style="color:var(--muted);font-size:11px;">' + escapeHtml(it.note) + '</span>' : ''}</td>
       <td style="padding:6px 8px;font-size:13px;text-align:right;">\${it.qty}</td>
-      <td style="padding:6px 8px;font-size:13px;text-align:right;">\${coFmt(it.unit_price)}</td>
-      <td style="padding:6px 8px;font-size:13px;text-align:right;font-weight:600;">\${coFmt(sub)}</td>
+      <td style="padding:6px 8px;font-size:13px;text-align:right;">$\${it.unit_price.toLocaleString()}</td>
+      <td style="padding:6px 8px;font-size:13px;text-align:right;font-weight:600;">$\${sub}</td>
       <td style="padding:6px 8px;font-size:13px;">\${dlBtn}</td>
       <td style="padding:6px 8px;font-size:13px;"><button class="btn danger small" style="font-size:11px;padding:3px 8px;" onclick="deleteOrderItem(\${it.id}, \${orderId})">刪除</button></td>
     </tr>\`;
@@ -2295,7 +2282,7 @@ function renderOrderItems(orderId, items){
         </tr>
       </thead>
       <tbody>\${itemRows}</tbody>
-      \${items.length ? \`<tfoot><tr style="background:var(--bg);"><td colspan="3" style="padding:6px 8px;font-weight:700;font-size:13px;">合計</td><td style="padding:6px 8px;font-weight:700;font-size:13px;text-align:right;">\${coFmt(total)}</td><td colspan="2"></td></tr></tfoot>\` : ''}
+      \${items.length ? \`<tfoot><tr style="background:var(--bg);"><td colspan="3" style="padding:6px 8px;font-weight:700;font-size:13px;">合計</td><td style="padding:6px 8px;font-weight:700;font-size:13px;text-align:right;">$\${total.toLocaleString()}</td><td colspan="2"></td></tr></tfoot>\` : ''}
     </table>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:8px;">
       <div>
@@ -2308,7 +2295,7 @@ function renderOrderItems(orderId, items){
       </div>
       <div>
         <div style="font-size:12px;color:var(--muted);margin-bottom:3px;">單價</div>
-        <input id="oi_price_\${orderId}" type="number" step="any" value="0" title="折扣請填負數（例如 -20）" style="width:90px;font-size:13px;padding:5px 8px;" />
+        <input id="oi_price_\${orderId}" type="number" min="0" step="any" value="0" style="width:90px;font-size:13px;padding:5px 8px;" />
       </div>
       <div>
         <div style="font-size:12px;color:var(--muted);margin-bottom:3px;">備註（選填）</div>

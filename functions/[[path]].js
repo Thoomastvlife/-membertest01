@@ -1,4 +1,5 @@
 import { handleDailyReportCron, handleDailyReportTest } from "./_lib/report.js";
+import { getBankAccounts, saveBankAccounts, chooseBank } from "./_lib/banks.js";
 import { adminHtml, payHtml, memberHtml, memberRegisterHtml } from "./_lib/templates.js";
 import {
   getPlatforms,
@@ -1221,7 +1222,6 @@ async function handleCreateOrder(request, env) {
   } else {
     amt = parseFloat(amount);
   }
-  if (body.amount_mode === "items" && !(amt > 0)) return json({ error: "品項合計必須大於 0（折扣加總後不能是 0 或負數）" }, 400);
   if (!amt || amt <= 0) return json({ error: "金額不正確" }, 400);
   if (payment_method && !PAYMENT_METHODS.has(payment_method)) return json({ error: "付款方式不正確" }, 400);
   if (storeBrand && !CVS_STORES[storeBrand]) return json({ error: "超商選擇不正確" }, 400);
@@ -1369,8 +1369,7 @@ function parseCheckoutItems(raw) {
     const qty = parseFloat(it.qty);
     const unit_price = parseFloat(it.unit_price);
     if (!(qty > 0) || qty > 1000000) return { error: `「${name}」的數量不正確` };
-    // 單價可以是 0（贈品）或負數（折扣）；只擋掉不是數字、或大得不合理的值
-    if (!Number.isFinite(unit_price) || Math.abs(unit_price) > 100000000) return { error: `「${name}」的單價不正確` };
+    if (!(unit_price >= 0) || unit_price > 100000000) return { error: `「${name}」的單價不正確` };
     items.push({ name, qty, unit_price, note: it.note ? String(it.note).slice(0, 200) : null });
   }
   return { items };
@@ -1658,8 +1657,7 @@ async function handleAddOrderItem(id, request, env) {
   const name = String(body.name || "").trim();
   if (!name) return json({ error: "品名不能為空" }, 400);
   const qty = parseFloat(body.qty) || 1;
-  const unit_price = body.unit_price === undefined || body.unit_price === null || body.unit_price === "" ? 0 : Number(body.unit_price);
-  if (!Number.isFinite(unit_price) || Math.abs(unit_price) > 100000000) return json({ error: "單價不正確" }, 400); // 0＝贈品、負數＝折扣都可以
+  const unit_price = parseFloat(body.unit_price) || 0;
   const note = body.note ? String(body.note).slice(0, 200) : null;
   const { meta } = await env.DB.prepare(
     "INSERT INTO order_items (order_id, name, qty, unit_price, note, sort_order, created_at) VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order),0)+1 FROM order_items WHERE order_id=?), datetime('now'))"
@@ -1676,11 +1674,7 @@ async function handleUpdateOrderItem(itemId, request, env) {
   const fields = [], binds = [];
   if (body.name !== undefined) { fields.push("name=?"); binds.push(String(body.name).trim() || item.name); }
   if (body.qty !== undefined) { fields.push("qty=?"); binds.push(parseFloat(body.qty) || 1); }
-  if (body.unit_price !== undefined) {
-    const up = body.unit_price === null || body.unit_price === "" ? 0 : Number(body.unit_price);
-    if (!Number.isFinite(up) || Math.abs(up) > 100000000) return json({ error: "單價不正確" }, 400); // 0＝贈品、負數＝折扣都可以
-    fields.push("unit_price=?"); binds.push(up);
-  }
+  if (body.unit_price !== undefined) { fields.push("unit_price=?"); binds.push(parseFloat(body.unit_price) || 0); }
   if (body.note !== undefined) { fields.push("note=?"); binds.push(body.note ? String(body.note).slice(0, 200) : null); }
   if (!fields.length) return json({ ok: true });
   await env.DB.prepare(`UPDATE order_items SET ${fields.join(",")} WHERE id=?`).bind(...binds, itemId).run();
@@ -1744,8 +1738,6 @@ async function sendOrderDetailEmail(env, order, opts = {}) {
   // ---- 計算品項小計 ----
   const itemsTotal = items.reduce((s, it) => s + it.qty * it.unit_price, 0);
   const hasItems = items.length > 0;
-  // 金額格式：負數（折扣）顯示成 -$20，不要變成 $-20
-  const money = (n) => { const v = Math.round((Number(n) || 0) * 100) / 100; return (v < 0 ? "-" : "") + "$" + Math.abs(v).toLocaleString(); };
 
   // ---- HTML ----
   const escM = (s) => String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
@@ -1765,16 +1757,14 @@ async function sendOrderDetailEmail(env, order, opts = {}) {
     const deliveredBg = "#f0fdf4";
     const undeliveredBg = "#fff";
     const rows = items.map((it, i) => {
-      const subNum = it.qty * it.unit_price;
-      const isDiscount = it.unit_price < 0;
-      const negStyle = isDiscount ? "color:#c0392b;" : "";
-      const dl = isDiscount ? '<span style="color:#9ca3af;">折扣</span>' : it.is_delivered ? '<span style="color:#1f9d55;font-weight:600;">✓ 已交貨</span>' : '<span style="color:#f59e0b;font-weight:600;">◎ 未交貨</span>';
+      const sub = (it.qty * it.unit_price).toLocaleString();
+      const dl = it.is_delivered ? '<span style="color:#1f9d55;font-weight:600;">✓ 已交貨</span>' : '<span style="color:#f59e0b;font-weight:600;">◎ 未交貨</span>';
       const bg = it.is_delivered ? deliveredBg : undeliveredBg;
       return `<tr style="background:${bg};">
         <td style="padding:7px 10px;border-bottom:1px solid #eee;font-size:13px;">${escM(it.name)}${it.note ? '<br/><span style="color:#9ca3af;font-size:12px;">' + escM(it.note) + '</span>' : ''}</td>
         <td style="padding:7px 10px;border-bottom:1px solid #eee;font-size:13px;text-align:right;">${it.qty}</td>
-        <td style="padding:7px 10px;border-bottom:1px solid #eee;font-size:13px;text-align:right;${negStyle}">${money(it.unit_price)}</td>
-        <td style="padding:7px 10px;border-bottom:1px solid #eee;font-size:13px;text-align:right;font-weight:600;${negStyle}">${money(subNum)}</td>
+        <td style="padding:7px 10px;border-bottom:1px solid #eee;font-size:13px;text-align:right;">$${it.unit_price.toLocaleString()}</td>
+        <td style="padding:7px 10px;border-bottom:1px solid #eee;font-size:13px;text-align:right;font-weight:600;">$${sub}</td>
         <td style="padding:7px 10px;border-bottom:1px solid #eee;font-size:13px;">${dl}</td>
       </tr>`;
     }).join("");
@@ -1790,13 +1780,13 @@ async function sendOrderDetailEmail(env, order, opts = {}) {
         <tbody>${rows}</tbody>
         <tfoot><tr style="background:#f8f9fb;">
           <td colspan="3" style="padding:7px 10px;font-weight:700;font-size:14px;">合計</td>
-          <td style="padding:7px 10px;font-weight:700;font-size:14px;text-align:right;">${money(itemsTotal)}</td>
+          <td style="padding:7px 10px;font-weight:700;font-size:14px;text-align:right;">$${itemsTotal.toLocaleString()}</td>
           <td></td>
         </tr></tfoot>
       </table>`;
     itemsText = "\n\n【訂單明細】\n" + items.map((it, i) =>
-      `  ${i+1}. ${it.name}　×${it.qty}　${money(it.unit_price)}　小計 ${money(it.qty * it.unit_price)}　${it.unit_price < 0 ? "折扣" : it.is_delivered ? "已交貨" : "未交貨"}` + (it.note ? `（${it.note}）` : "")
-    ).join("\n") + `\n合計：${money(itemsTotal)}`;
+      `  ${i+1}. ${it.name}　×${it.qty}　$${it.unit_price}　小計 $${(it.qty*it.unit_price).toFixed(0)}　${it.is_delivered ? "已交貨" : "未交貨"}` + (it.note ? `（${it.note}）` : "")
+    ).join("\n") + `\n合計：$${itemsTotal.toLocaleString()}`;
   }
 
   const subject = hasItems ? `【訂單明細】${orderNo}` : `【訂單資訊】${orderNo}`;
@@ -3721,7 +3711,7 @@ export async function onRequest(context) {
       if (orderItemsMatch && method === "POST") {
         const body = await request.clone().json().catch(() => ({}));
         return alog(env, session, request,
-          { action: "order.add_item", summary: `${L.order} 新增品項「${body.name || ""}」，數量 ${body.qty ?? 1}、單價 ${Number(body.unit_price ?? 0) < 0 ? "-" : ""}$${Math.abs(Number(body.unit_price ?? 0))}` },
+          { action: "order.add_item", summary: `${L.order} 新增品項「${body.name || ""}」，數量 ${body.qty ?? 1}、單價 $${body.unit_price ?? 0}` },
           handleAddOrderItem(orderItemsMatch[1], request, env));
       }
       const orderItemMatch = path.match(/^\/api\/admin\/order-items\/(\d+)$/);
