@@ -1369,8 +1369,8 @@ async function openPushPrefs(){
     const d = await api('/api/admin/push/prefs');
     box.innerHTML = d.types.map(function(t){
       return '<label style="display:flex;gap:8px;align-items:flex-start;margin:8px 0;cursor:pointer;">'
-        + '<input type="checkbox" class="pp_cb" data-key="'+escapeHtml(t.key)+'" '+(d.prefs[t.key] ? 'checked' : '')+' style="margin-top:3px;">'
-        + '<span><b>'+escapeHtml(t.label)+'</b><br><small class="hint">'+escapeHtml(t.hint)+'</small></span></label>';
+        + '<input type="checkbox" class="pp_cb" data-key="'+escapeHtml(t.key)+'" '+(d.prefs[t.key] ? 'checked' : '')+' style="width:auto;flex:none;margin:3px 0 0;">'
+        + '<span style="flex:1;min-width:0;text-align:left;"><b>'+escapeHtml(t.label)+'</b><br><small class="hint">'+escapeHtml(t.hint)+'</small></span></label>';
     }).join('');
     if (!d.ready){ msg.textContent = '資料庫還沒升級（需執行 migrate_v27.sql），現在改了也存不起來；通知目前是全部都收。'; msg.className = 'msg error'; }
   }catch(e){ box.innerHTML = ''; msg.textContent = e.message; msg.className = 'msg error'; }

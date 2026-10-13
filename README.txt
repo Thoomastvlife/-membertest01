@@ -548,3 +548,14 @@ functions/_lib/live.js、functions/_lib/templates.js、functions/[[path]].js
 - 上線步驟：wrangler d1 execute <你的資料庫名稱> --remote --file=./migrate_v27.sql 後重新部署。
   沒跑 migration 就先部署也不會壞：推播照舊全收，⚙ 畫面會提示先升級資料庫。
 異動檔案：migrate_v27.sql（新）、schema.sql、functions/_lib/helpers.js、functions/[[path]].js、functions/_lib/templates.js、README.txt
+
+
+==================================================
+v65 修正：「要收哪些通知？」對話框版面跑掉（手機、電腦都有）
+==================================================
+原因：頁面有全域規則 input{width:100%}，這個對話框的勾選框沒有覆寫寬度，被撐成整行寬，
+      文字就被擠到右邊。
+修法：勾選框加上 width:auto; flex:none，文字欄位加 flex:1; min-width:0; text-align:left。
+異動檔案：functions/_lib/templates.js（只改 openPushPrefs 裡產生勾選項目的那段）。
+不需要跑資料庫升級，重新部署即可。
+
