@@ -1,3 +1,5 @@
+# 手動啟動的直播留言監聽（不需要自己的電腦或主機）
+# 使用方式見 listener/README.md。GitHub 單次工作最長約 6 小時，所以這裡設 350 分鐘。
 name: TikTok 直播留言監聽
 
 on:
