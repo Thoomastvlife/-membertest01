@@ -84,6 +84,7 @@ export function requiredAdminPermission(path, method) {
     case "payment-methods":
       return "settings";
     case "platforms":
+    case "bank-accounts":
       return read ? { any: ["settings", "rates", "checkout", "order_list"] } : "settings";
     case "rates":
       return "rates";

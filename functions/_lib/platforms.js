@@ -103,11 +103,23 @@ export function rateGroupOf(list, key) {
 }
 
 // ---- 付款方式：是否開放顧客自行選擇 ----
+export const STORE_KEYS = ["seven", "family", "hilife"];
+
 export function normalizeMethodsConfig(raw) {
   const o = raw && typeof raw === "object" ? raw : {};
   const out = {};
   for (const k of PAYMENT_METHOD_KEYS) out[k] = o[k] !== false; // 預設全部開放
+  // 超商三家各自一個開關（store_seven / store_family / store_hilife）。
+  // 舊設定只有 store_barcode：true = 三家都開，false = 三家都關。
+  const legacyStore = o.store_barcode !== false;
+  for (const s of STORE_KEYS) out["store_" + s] = o["store_" + s] === undefined ? legacyStore : o["store_" + s] !== false;
+  // 「超商條碼」整體是否開放 = 至少有一家超商開著（自動算，不看傳進來的值）
+  out.store_barcode = STORE_KEYS.some((s) => out["store_" + s]);
   return out;
+}
+
+export function enabledStoreList(cfg) {
+  return STORE_KEYS.filter((s) => cfg["store_" + s]);
 }
 
 export async function getMethodsConfig(db) {

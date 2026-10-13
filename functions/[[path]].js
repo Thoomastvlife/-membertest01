@@ -10,6 +10,7 @@ import {
   getMethodsConfig,
   saveMethodsConfig,
   enabledMethodList,
+  enabledStoreList,
   RATE_GROUP_CHOICES,
 } from "./_lib/platforms.js";
 import { homeHtml } from "./_lib/home.js";
@@ -1220,6 +1221,7 @@ async function handleCreateOrder(request, env) {
   } else {
     amt = parseFloat(amount);
   }
+  if (body.amount_mode === "items" && !(amt > 0)) return json({ error: "品項合計必須大於 0（折扣加總後不能是 0 或負數）" }, 400);
   if (!amt || amt <= 0) return json({ error: "金額不正確" }, 400);
   if (payment_method && !PAYMENT_METHODS.has(payment_method)) return json({ error: "付款方式不正確" }, 400);
   if (storeBrand && !CVS_STORES[storeBrand]) return json({ error: "超商選擇不正確" }, 400);
@@ -1269,12 +1271,18 @@ async function handleCreateOrder(request, env) {
 
   if (payment_method === "transfer") {
     status = "awaiting_payment";
-    const settings = await getSettingsObj(env);
-    bankFields = {
-      bank_name: settings.bank_name || null,
-      bank_account_number: settings.bank_account_number || null,
-      bank_account_holder: settings.bank_account_holder || null,
-    };
+    const picked = chooseBank(await getBankAccounts(env.DB), body.bank_id, false);
+    if (picked.error) return json({ error: picked.error }, 400);
+    if (picked.fields) {
+      bankFields = picked.fields;
+    } else {
+      const settings = await getSettingsObj(env);
+      bankFields = {
+        bank_name: settings.bank_name || null,
+        bank_account_number: settings.bank_account_number || null,
+        bank_account_holder: settings.bank_account_holder || null,
+      };
+    }
   } else if (payment_method === "store_barcode" || payment_method === "taiwan_pay") {
     status = "awaiting_barcode";
   }
@@ -1361,7 +1369,8 @@ function parseCheckoutItems(raw) {
     const qty = parseFloat(it.qty);
     const unit_price = parseFloat(it.unit_price);
     if (!(qty > 0) || qty > 1000000) return { error: `「${name}」的數量不正確` };
-    if (!(unit_price >= 0) || unit_price > 100000000) return { error: `「${name}」的單價不正確` };
+    // 單價可以是 0（贈品）或負數（折扣）；只擋掉不是數字、或大得不合理的值
+    if (!Number.isFinite(unit_price) || Math.abs(unit_price) > 100000000) return { error: `「${name}」的單價不正確` };
     items.push({ name, qty, unit_price, note: it.note ? String(it.note).slice(0, 200) : null });
   }
   return { items };
@@ -1517,12 +1526,18 @@ async function handleCorrectOrder(id, request, env) {
           bank_account_holder: order.bank_account_holder,
         };
         if (newStatus === "awaiting_payment") {
-          const settings = await getSettingsObj(env);
-          bankFields = {
-            bank_name: settings.bank_name || null,
-            bank_account_number: settings.bank_account_number || null,
-            bank_account_holder: settings.bank_account_holder || null,
-          };
+          const picked = chooseBank(await getBankAccounts(env.DB), body.bank_id, false);
+          if (picked.error) return json({ error: picked.error }, 400);
+          if (picked.fields) {
+            bankFields = picked.fields;
+          } else {
+            const settings = await getSettingsObj(env);
+            bankFields = {
+              bank_name: settings.bank_name || null,
+              bank_account_number: settings.bank_account_number || null,
+              bank_account_holder: settings.bank_account_holder || null,
+            };
+          }
         }
         fields.push(
           "payment_method=?", "status=?", "method_selected_at=?",
@@ -1643,7 +1658,8 @@ async function handleAddOrderItem(id, request, env) {
   const name = String(body.name || "").trim();
   if (!name) return json({ error: "品名不能為空" }, 400);
   const qty = parseFloat(body.qty) || 1;
-  const unit_price = parseFloat(body.unit_price) || 0;
+  const unit_price = body.unit_price === undefined || body.unit_price === null || body.unit_price === "" ? 0 : Number(body.unit_price);
+  if (!Number.isFinite(unit_price) || Math.abs(unit_price) > 100000000) return json({ error: "單價不正確" }, 400); // 0＝贈品、負數＝折扣都可以
   const note = body.note ? String(body.note).slice(0, 200) : null;
   const { meta } = await env.DB.prepare(
     "INSERT INTO order_items (order_id, name, qty, unit_price, note, sort_order, created_at) VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order),0)+1 FROM order_items WHERE order_id=?), datetime('now'))"
@@ -1660,7 +1676,11 @@ async function handleUpdateOrderItem(itemId, request, env) {
   const fields = [], binds = [];
   if (body.name !== undefined) { fields.push("name=?"); binds.push(String(body.name).trim() || item.name); }
   if (body.qty !== undefined) { fields.push("qty=?"); binds.push(parseFloat(body.qty) || 1); }
-  if (body.unit_price !== undefined) { fields.push("unit_price=?"); binds.push(parseFloat(body.unit_price) || 0); }
+  if (body.unit_price !== undefined) {
+    const up = body.unit_price === null || body.unit_price === "" ? 0 : Number(body.unit_price);
+    if (!Number.isFinite(up) || Math.abs(up) > 100000000) return json({ error: "單價不正確" }, 400); // 0＝贈品、負數＝折扣都可以
+    fields.push("unit_price=?"); binds.push(up);
+  }
   if (body.note !== undefined) { fields.push("note=?"); binds.push(body.note ? String(body.note).slice(0, 200) : null); }
   if (!fields.length) return json({ ok: true });
   await env.DB.prepare(`UPDATE order_items SET ${fields.join(",")} WHERE id=?`).bind(...binds, itemId).run();
@@ -1724,6 +1744,8 @@ async function sendOrderDetailEmail(env, order, opts = {}) {
   // ---- 計算品項小計 ----
   const itemsTotal = items.reduce((s, it) => s + it.qty * it.unit_price, 0);
   const hasItems = items.length > 0;
+  // 金額格式：負數（折扣）顯示成 -$20，不要變成 $-20
+  const money = (n) => { const v = Math.round((Number(n) || 0) * 100) / 100; return (v < 0 ? "-" : "") + "$" + Math.abs(v).toLocaleString(); };
 
   // ---- HTML ----
   const escM = (s) => String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
@@ -1743,14 +1765,16 @@ async function sendOrderDetailEmail(env, order, opts = {}) {
     const deliveredBg = "#f0fdf4";
     const undeliveredBg = "#fff";
     const rows = items.map((it, i) => {
-      const sub = (it.qty * it.unit_price).toLocaleString();
-      const dl = it.is_delivered ? '<span style="color:#1f9d55;font-weight:600;">✓ 已交貨</span>' : '<span style="color:#f59e0b;font-weight:600;">◎ 未交貨</span>';
+      const subNum = it.qty * it.unit_price;
+      const isDiscount = it.unit_price < 0;
+      const negStyle = isDiscount ? "color:#c0392b;" : "";
+      const dl = isDiscount ? '<span style="color:#9ca3af;">折扣</span>' : it.is_delivered ? '<span style="color:#1f9d55;font-weight:600;">✓ 已交貨</span>' : '<span style="color:#f59e0b;font-weight:600;">◎ 未交貨</span>';
       const bg = it.is_delivered ? deliveredBg : undeliveredBg;
       return `<tr style="background:${bg};">
         <td style="padding:7px 10px;border-bottom:1px solid #eee;font-size:13px;">${escM(it.name)}${it.note ? '<br/><span style="color:#9ca3af;font-size:12px;">' + escM(it.note) + '</span>' : ''}</td>
         <td style="padding:7px 10px;border-bottom:1px solid #eee;font-size:13px;text-align:right;">${it.qty}</td>
-        <td style="padding:7px 10px;border-bottom:1px solid #eee;font-size:13px;text-align:right;">$${it.unit_price.toLocaleString()}</td>
-        <td style="padding:7px 10px;border-bottom:1px solid #eee;font-size:13px;text-align:right;font-weight:600;">$${sub}</td>
+        <td style="padding:7px 10px;border-bottom:1px solid #eee;font-size:13px;text-align:right;${negStyle}">${money(it.unit_price)}</td>
+        <td style="padding:7px 10px;border-bottom:1px solid #eee;font-size:13px;text-align:right;font-weight:600;${negStyle}">${money(subNum)}</td>
         <td style="padding:7px 10px;border-bottom:1px solid #eee;font-size:13px;">${dl}</td>
       </tr>`;
     }).join("");
@@ -1766,13 +1790,13 @@ async function sendOrderDetailEmail(env, order, opts = {}) {
         <tbody>${rows}</tbody>
         <tfoot><tr style="background:#f8f9fb;">
           <td colspan="3" style="padding:7px 10px;font-weight:700;font-size:14px;">合計</td>
-          <td style="padding:7px 10px;font-weight:700;font-size:14px;text-align:right;">$${itemsTotal.toLocaleString()}</td>
+          <td style="padding:7px 10px;font-weight:700;font-size:14px;text-align:right;">${money(itemsTotal)}</td>
           <td></td>
         </tr></tfoot>
       </table>`;
     itemsText = "\n\n【訂單明細】\n" + items.map((it, i) =>
-      `  ${i+1}. ${it.name}　×${it.qty}　$${it.unit_price}　小計 $${(it.qty*it.unit_price).toFixed(0)}　${it.is_delivered ? "已交貨" : "未交貨"}` + (it.note ? `（${it.note}）` : "")
-    ).join("\n") + `\n合計：$${itemsTotal.toLocaleString()}`;
+      `  ${i+1}. ${it.name}　×${it.qty}　${money(it.unit_price)}　小計 ${money(it.qty * it.unit_price)}　${it.unit_price < 0 ? "折扣" : it.is_delivered ? "已交貨" : "未交貨"}` + (it.note ? `（${it.note}）` : "")
+    ).join("\n") + `\n合計：${money(itemsTotal)}`;
   }
 
   const subject = hasItems ? `【訂單明細】${orderNo}` : `【訂單資訊】${orderNo}`;
@@ -2094,7 +2118,17 @@ async function handleDashboard(env) {
 // 付款頁用的訂單資料：訂單本身 + 目前開放給顧客選的付款方式
 async function payViewJson(env, order) {
   const cfg = await getMethodsConfig(env.DB);
-  return json({ ...publicOrderView(order), methods_enabled: enabledMethodList(cfg) });
+  const banks = await getBankAccounts(env.DB);
+  const enabledBanks = banks.filter((b) => b.enabled);
+  let methods = enabledMethodList(cfg);
+  // 有設定銀行、但全部都關閉：顧客不能選轉帳
+  if (banks.length && !enabledBanks.length) methods = methods.filter((m) => m !== "transfer");
+  return json({
+    ...publicOrderView(order),
+    methods_enabled: methods,
+    stores_enabled: enabledStoreList(cfg),
+    banks_enabled: enabledBanks.map((b) => ({ id: b.id, bank_name: b.bank_name })),
+  });
 }
 
 // ================= 後台：儲值平台 / 付款方式開放設定 =================
@@ -2189,6 +2223,20 @@ async function handleAdminSaveMethods(request, env) {
   return json({ ok: true, methods: saved });
 }
 
+async function handleAdminGetBanks(env) {
+  return json({ banks: await getBankAccounts(env.DB) });
+}
+
+async function handleAdminSaveBanks(request, env) {
+  const body = await request.json().catch(() => ({}));
+  try {
+    const saved = await saveBankAccounts(env.DB, body.banks);
+    return json({ ok: true, banks: saved });
+  } catch (e) {
+    return json({ error: e.message || "儲存失敗" }, 400);
+  }
+}
+
 async function handleGetOrderPublic(token, env) {
   let order = await env.DB.prepare("SELECT * FROM orders WHERE token=?").bind(token).first();
   if (!order) return json({ error: "找不到此訂單，連結可能有誤" }, 404);
@@ -2208,6 +2256,7 @@ async function handleSelectMethod(token, request, env) {
   if (!methodsCfg[method]) return json({ error: "此付款方式目前未開放，請選擇其他付款方式，或聯繫客服" }, 400);
   const store = method === "store_barcode" ? String(body.store || "") : null;
   if (method === "store_barcode" && !CVS_STORES[store]) return json({ error: "請先選擇超商（7-11、全家或萊爾富）" }, 400);
+  if (method === "store_barcode" && !methodsCfg["store_" + store]) return json({ error: "此超商目前未開放，請選擇其他超商或付款方式" }, 400);
 
   let order = await env.DB.prepare("SELECT * FROM orders WHERE token=?").bind(token).first();
   if (!order) return json({ error: "找不到此訂單" }, 404);
@@ -2230,12 +2279,18 @@ async function handleSelectMethod(token, request, env) {
   };
   if (method === "transfer") {
     newStatus = "awaiting_payment";
-    const settings = await getSettingsObj(env);
-    bankFields = {
-      bank_name: settings.bank_name || null,
-      bank_account_number: settings.bank_account_number || null,
-      bank_account_holder: settings.bank_account_holder || null,
-    };
+    const picked = chooseBank(await getBankAccounts(env.DB), body.bank_id, true);
+    if (picked.error) return json({ error: picked.error }, 400);
+    if (picked.fields) {
+      bankFields = picked.fields;
+    } else {
+      const settings = await getSettingsObj(env);
+      bankFields = {
+        bank_name: settings.bank_name || null,
+        bank_account_number: settings.bank_account_number || null,
+        bank_account_holder: settings.bank_account_holder || null,
+      };
+    }
   }
 
   const methodRes = await env.DB.prepare(
@@ -3666,7 +3721,7 @@ export async function onRequest(context) {
       if (orderItemsMatch && method === "POST") {
         const body = await request.clone().json().catch(() => ({}));
         return alog(env, session, request,
-          { action: "order.add_item", summary: `${L.order} 新增品項「${body.name || ""}」，數量 ${body.qty ?? 1}、單價 $${body.unit_price ?? 0}` },
+          { action: "order.add_item", summary: `${L.order} 新增品項「${body.name || ""}」，數量 ${body.qty ?? 1}、單價 ${Number(body.unit_price ?? 0) < 0 ? "-" : ""}$${Math.abs(Number(body.unit_price ?? 0))}` },
           handleAddOrderItem(orderItemsMatch[1], request, env));
       }
       const orderItemMatch = path.match(/^\/api\/admin\/order-items\/(\d+)$/);
@@ -3724,6 +3779,15 @@ export async function onRequest(context) {
           env, session, request,
           { action: "platform.delete", summary: `刪除儲值平台「${platformMatch[1]}」` },
           handleAdminDeletePlatform(platformMatch[1], env)
+        );
+      }
+      if (path === "/api/admin/bank-accounts" && method === "GET") return handleAdminGetBanks(env);
+      if (path === "/api/admin/bank-accounts" && method === "PUT") {
+        const body = await request.clone().json().catch(() => ({}));
+        return alog(
+          env, session, request,
+          { action: "settings.bank_accounts", summary: "更新轉帳銀行帳戶（" + (Array.isArray(body.banks) ? body.banks.length : 0) + " 家）", detail: sanitizeForLog(body) },
+          handleAdminSaveBanks(request, env)
         );
       }
       if (path === "/api/admin/payment-methods" && method === "GET") return handleAdminGetMethods(env);

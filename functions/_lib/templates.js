@@ -361,11 +361,12 @@ ${THEME_CSS_ADMIN}
         </div>
         <input id="co_amount" type="number" min="1" step="1" />
         <label>品項明細（選填；建立訂單後會自動寫入訂單明細）</label>
+        <small class="hint" style="display:block;margin:0 0 6px;">單價可以填 0（贈品）或負數（折扣，例如 -20）；品項合計必須大於 0。</small>
         <div class="co-items-box">
           <div class="co-items-head"><span>品名</span><span>數量</span><span>單價</span><span style="text-align:right;">小計</span><span></span></div>
           <div id="co_items"></div>
           <div class="co-items-foot">
-            <button type="button" class="btn secondary small" onclick="coAddItem()">＋ 新增品項</button>
+            <span style="display:flex;gap:6px;flex-wrap:wrap;"><button type="button" class="btn secondary small" onclick="coAddItem()">＋ 新增品項</button><button type="button" class="btn secondary small" onclick="coAddDiscount()">＋ 新增折扣</button></span>
             <span>品項合計：<b id="co_items_total">$0</b></span>
           </div>
         </div>
@@ -387,7 +388,7 @@ ${THEME_CSS_ADMIN}
           ${platOptionsHtml(platforms, { markClosed: true })}
         </select>
         <label>付款方式（選填，不指定則由前台客人自行選擇）</label>
-        <select id="co_method" onchange="document.getElementById('co_store_wrap').classList.toggle('hidden', this.value!=='store_barcode')">
+        <select id="co_method" onchange="coMethodChanged(this.value)">
           <option value="">-- 不指定 --</option>
           <option value="transfer">轉帳</option>
           <option value="store_barcode">超商條碼</option>
@@ -401,6 +402,10 @@ ${THEME_CSS_ADMIN}
             <option value="family">全家</option>
             <option value="hilife">萊爾富</option>
           </select>
+        </div>
+        <div id="co_bank_wrap" class="hidden">
+          <label>轉入銀行（有多家時才需要選；不指定＝用第一家開放中的）</label>
+          <select id="co_bank"></select>
         </div>
         <label>優惠碼（選填）</label>
         <div style="display:flex;gap:8px;">
@@ -683,10 +688,10 @@ ${THEME_CSS_ADMIN}
     <section id="tab-settings" class="tab hidden">
       <div class="card">
         <h2>轉帳帳戶設定（客人選「轉帳」時顯示）</h2>
-        <label>銀行名稱</label><input id="set_bank_name" />
-        <label>帳號</label><input id="set_bank_account" />
-        <label>戶名</label><input id="set_bank_holder" />
-        <button class="btn" onclick="saveSettings()">儲存</button>
+        <small class="hint">可以設定多家銀行。<b>只開放一家</b>時，客人選「轉帳」就直接顯示這家；<b>開放兩家以上</b>時，客人要先選銀行才會看到帳號。取消「開放客人選擇」＝客人看不到這家（後台建單仍可指定）。客人選好後，訂單會記下當時的帳號，之後再改設定不影響舊訂單。</small>
+        <div id="bank_rows"></div>
+        <button class="btn secondary" type="button" onclick="addBankRow()">＋ 新增銀行</button>
+        <button class="btn" type="button" onclick="saveBanksAdmin()">儲存</button>
         <div id="set_msg" class="msg"></div>
       </div>
 
@@ -695,7 +700,9 @@ ${THEME_CSS_ADMIN}
         <small class="hint">勾選＝顧客在付款頁可以自己選這個付款方式；取消勾選＝顧客看不到、也不能選。<b>後台「建立訂單」與「更正訂單」仍然可以指定任何付款方式。</b>已經選好付款方式的訂單不受影響。</small>
         <div style="margin-top:12px;">
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:8px 0;"><input type="checkbox" id="pm_transfer" style="width:auto;margin:0;" /> 轉帳</label>
-          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:8px 0;"><input type="checkbox" id="pm_store_barcode" style="width:auto;margin:0;" /> 超商條碼（7-11 / 全家 / 萊爾富）</label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:8px 0;"><input type="checkbox" id="pm_store_seven" style="width:auto;margin:0;" /> 超商條碼－7-11</label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:8px 0;"><input type="checkbox" id="pm_store_family" style="width:auto;margin:0;" /> 超商條碼－全家</label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:8px 0;"><input type="checkbox" id="pm_store_hilife" style="width:auto;margin:0;" /> 超商條碼－萊爾富</label>
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:8px 0;"><input type="checkbox" id="pm_taiwan_pay" style="width:auto;margin:0;" /> TWQR</label>
         </div>
         <button class="btn" onclick="saveMethodsAdmin()">儲存</button>
@@ -1369,8 +1376,8 @@ async function openPushPrefs(){
     const d = await api('/api/admin/push/prefs');
     box.innerHTML = d.types.map(function(t){
       return '<label style="display:flex;gap:8px;align-items:flex-start;margin:8px 0;cursor:pointer;">'
-        + '<input type="checkbox" class="pp_cb" data-key="'+escapeHtml(t.key)+'" '+(d.prefs[t.key] ? 'checked' : '')+' style="width:auto;flex:none;margin:3px 0 0;">'
-        + '<span style="flex:1;min-width:0;text-align:left;"><b>'+escapeHtml(t.label)+'</b><br><small class="hint">'+escapeHtml(t.hint)+'</small></span></label>';
+        + '<input type="checkbox" class="pp_cb" data-key="'+escapeHtml(t.key)+'" '+(d.prefs[t.key] ? 'checked' : '')+' style="margin-top:3px;">'
+        + '<span><b>'+escapeHtml(t.label)+'</b><br><small class="hint">'+escapeHtml(t.hint)+'</small></span></label>';
     }).join('');
     if (!d.ready){ msg.textContent = '資料庫還沒升級（需執行 migrate_v27.sql），現在改了也存不起來；通知目前是全部都收。'; msg.className = 'msg error'; }
   }catch(e){ box.innerHTML = ''; msg.textContent = e.message; msg.className = 'msg error'; }
@@ -1882,7 +1889,7 @@ async function previewCoupon(prefix){
 
 // ---- 結帳櫃檯：品項明細 ----
 function coRound2(n){ return Math.round((Number(n)||0) * 100) / 100; }
-function coFmt(n){ return '$' + coRound2(n).toLocaleString('zh-TW'); }
+function coFmt(n){ const v = coRound2(n); return (v < 0 ? '-' : '') + '$' + Math.abs(v).toLocaleString('zh-TW'); }
 
 function coAddItem(name, qty, price){
   const box = document.getElementById('co_items');
@@ -1890,7 +1897,7 @@ function coAddItem(name, qty, price){
   row.className = 'co-item-row';
   row.innerHTML = '<input class="ci-name" placeholder="品名" maxlength="100" />'
     + '<input class="ci-qty" type="number" min="0" step="any" placeholder="數量" />'
-    + '<input class="ci-price" type="number" min="0" step="any" placeholder="單價" />'
+    + '<input class="ci-price" type="number" step="any" placeholder="單價" title="折扣請填負數（例如 -20），贈品填 0" />'
     + '<span class="ci-sub">$0</span>'
     + '<button type="button" class="btn secondary small" title="移除這個品項">&times;</button>';
   row.querySelector('.ci-name').value = name || '';
@@ -1901,6 +1908,15 @@ function coAddItem(name, qty, price){
   box.appendChild(row);
   coSyncAmount();
   if (!name) row.querySelector('.ci-name').focus();
+}
+
+// 新增一列「折扣」：品名先填好，游標直接跳到單價，輸入負數即可
+function coAddDiscount(){
+  coAddItem('折扣', 1);
+  const rows = document.querySelectorAll('#co_items .co-item-row');
+  const price = rows[rows.length - 1].querySelector('.ci-price');
+  price.placeholder = '例如 -20';
+  price.focus();
 }
 
 // 讀取目前所有品項列；全空白的列略過，只填了數字沒填品名的列視為錯誤
@@ -1916,7 +1932,7 @@ function coCollectItems(){
     const qty = parseFloat(qtyRaw);
     const unit_price = parseFloat(priceRaw);
     if (!(qty > 0)) return { error: '「' + name + '」的數量必須大於 0' };
-    if (!(unit_price >= 0)) return { error: '「' + name + '」請填寫單價' };
+    if (priceRaw === '' || !isFinite(unit_price)) return { error: '「' + name + '」請填寫單價（折扣填負數，免費填 0）' };
     items.push({ name, qty, unit_price });
   }
   return { items };
@@ -1965,6 +1981,7 @@ async function createOrder(){
   const items = collected.items;
   if (amountMode === 'items'){
     if (!items.length){ msg.textContent='請至少填寫一個品項，或改用「手動輸入金額」'; msg.className='msg err'; return; }
+    if (!(coItemsTotal() > 0)){ msg.textContent='品項合計必須大於 0（折扣加總後不能是 0 或負數）'; msg.className='msg err'; return; }
     document.getElementById('co_amount').value = coItemsTotal();
   }
   const amount = parseFloat(document.getElementById('co_amount').value);
@@ -1973,10 +1990,11 @@ async function createOrder(){
   const platform = document.getElementById('co_platform').value || null;
   const payment_method = document.getElementById('co_method').value || null;
   const store_brand = payment_method === 'store_barcode' ? (document.getElementById('co_store').value || null) : null;
+  const bank_id = payment_method === 'transfer' ? (document.getElementById('co_bank').value || null) : null;
   const coupon_code = document.getElementById('co_coupon').value.trim() || null;
   if (!amount || amount<=0){ msg.textContent='請輸入正確金額'; msg.className='msg err'; return; }
   try{
-    const r = await api('/api/admin/orders', {method:'POST', body: JSON.stringify({amount, amount_mode: amountMode, items, member_id, non_member_name, platform, payment_method, store_brand, coupon_code})});
+    const r = await api('/api/admin/orders', {method:'POST', body: JSON.stringify({amount, amount_mode: amountMode, items, member_id, non_member_name, platform, payment_method, store_brand, bank_id, coupon_code})});
     document.getElementById('co_result').classList.remove('hidden');
     document.getElementById('co_link').value = r.link;
     document.getElementById('co_coupon').value = '';
@@ -2247,15 +2265,17 @@ function renderOrderItems(orderId, items){
   const orderNo = o ? o.order_no : ('#' + orderId);
   const total = items.reduce(function(s, it){ return s + it.qty * it.unit_price; }, 0);
   const itemRows = items.length ? items.map(function(it){
-    const sub = (it.qty * it.unit_price).toLocaleString();
-    const dlBtn = it.is_delivered
+    const sub = it.qty * it.unit_price;
+    const dlBtn = it.unit_price < 0
+      ? '<span style="color:var(--muted);font-size:12px;">折扣</span>'
+      : it.is_delivered
       ? \`<button class="btn secondary small" style="font-size:11px;padding:3px 8px;" onclick="toggleDelivery(\${it.id}, \${orderId}, false)">✓ 已交貨</button>\`
       : \`<button class="btn small" style="font-size:11px;padding:3px 8px;background:#f59e0b;" onclick="toggleDelivery(\${it.id}, \${orderId}, true)">◎ 未交貨</button>\`;
     return \`<tr>
       <td style="padding:6px 8px;font-size:13px;">\${escapeHtml(it.name)}\${it.note ? '<br/><span style="color:var(--muted);font-size:11px;">' + escapeHtml(it.note) + '</span>' : ''}</td>
       <td style="padding:6px 8px;font-size:13px;text-align:right;">\${it.qty}</td>
-      <td style="padding:6px 8px;font-size:13px;text-align:right;">$\${it.unit_price.toLocaleString()}</td>
-      <td style="padding:6px 8px;font-size:13px;text-align:right;font-weight:600;">$\${sub}</td>
+      <td style="padding:6px 8px;font-size:13px;text-align:right;">\${coFmt(it.unit_price)}</td>
+      <td style="padding:6px 8px;font-size:13px;text-align:right;font-weight:600;">\${coFmt(sub)}</td>
       <td style="padding:6px 8px;font-size:13px;">\${dlBtn}</td>
       <td style="padding:6px 8px;font-size:13px;"><button class="btn danger small" style="font-size:11px;padding:3px 8px;" onclick="deleteOrderItem(\${it.id}, \${orderId})">刪除</button></td>
     </tr>\`;
@@ -2275,7 +2295,7 @@ function renderOrderItems(orderId, items){
         </tr>
       </thead>
       <tbody>\${itemRows}</tbody>
-      \${items.length ? \`<tfoot><tr style="background:var(--bg);"><td colspan="3" style="padding:6px 8px;font-weight:700;font-size:13px;">合計</td><td style="padding:6px 8px;font-weight:700;font-size:13px;text-align:right;">$\${total.toLocaleString()}</td><td colspan="2"></td></tr></tfoot>\` : ''}
+      \${items.length ? \`<tfoot><tr style="background:var(--bg);"><td colspan="3" style="padding:6px 8px;font-weight:700;font-size:13px;">合計</td><td style="padding:6px 8px;font-weight:700;font-size:13px;text-align:right;">\${coFmt(total)}</td><td colspan="2"></td></tr></tfoot>\` : ''}
     </table>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:8px;">
       <div>
@@ -2288,7 +2308,7 @@ function renderOrderItems(orderId, items){
       </div>
       <div>
         <div style="font-size:12px;color:var(--muted);margin-bottom:3px;">單價</div>
-        <input id="oi_price_\${orderId}" type="number" min="0" step="any" value="0" style="width:90px;font-size:13px;padding:5px 8px;" />
+        <input id="oi_price_\${orderId}" type="number" step="any" value="0" title="折扣請填負數（例如 -20）" style="width:90px;font-size:13px;padding:5px 8px;" />
       </div>
       <div>
         <div style="font-size:12px;color:var(--muted);margin-bottom:3px;">備註（選填）</div>
@@ -3920,10 +3940,24 @@ async function addPlatformAdmin(){
   }catch(e){ platMsg(e.message, false); }
 }
 
+async function coMethodChanged(v){
+  document.getElementById('co_store_wrap').classList.toggle('hidden', v!=='store_barcode');
+  const wrap = document.getElementById('co_bank_wrap');
+  if (v !== 'transfer'){ wrap.classList.add('hidden'); return; }
+  try{
+    const d = await api('/api/admin/bank-accounts');
+    const list = d.banks || [];
+    if (list.length < 2){ wrap.classList.add('hidden'); return; }
+    document.getElementById('co_bank').innerHTML = '<option value="">-- 不指定（第一家開放中的） --</option>'
+      + list.map(function(b){ return '<option value="'+escapeHtml(b.id)+'">'+escapeHtml(b.bank_name)+(b.enabled ? '' : '（未開放給客人）')+'</option>'; }).join('');
+    wrap.classList.remove('hidden');
+  }catch(e){ wrap.classList.add('hidden'); }
+}
+
 async function loadMethodsAdmin(){
   try{
     const d = await api('/api/admin/payment-methods');
-    ['transfer','store_barcode','taiwan_pay'].forEach(function(k){
+    ['transfer','taiwan_pay','store_seven','store_family','store_hilife'].forEach(function(k){
       document.getElementById('pm_' + k).checked = !!d.methods[k];
     });
   }catch(e){
@@ -3934,32 +3968,65 @@ async function loadMethodsAdmin(){
 async function saveMethodsAdmin(){
   const m = document.getElementById('pm_msg');
   const body = {};
-  ['transfer','store_barcode','taiwan_pay'].forEach(function(k){ body[k] = document.getElementById('pm_' + k).checked; });
+  ['transfer','taiwan_pay','store_seven','store_family','store_hilife'].forEach(function(k){ body[k] = document.getElementById('pm_' + k).checked; });
+  body.store_barcode = body.store_seven || body.store_family || body.store_hilife;
   if (!body.transfer && !body.store_barcode && !body.taiwan_pay &&
-      !confirm('三種付款方式都關閉後，顧客無法自己選付款方式，必須由後台指定。確定要全部關閉？')) return;
+      !confirm('所有付款方式都關閉後，顧客無法自己選付款方式，必須由後台指定。確定要全部關閉？')) return;
   try{
     await api('/api/admin/payment-methods', {method:'POST', body: JSON.stringify(body)});
     m.textContent = '已儲存，顧客付款頁會在幾秒內更新'; m.className = 'msg ok';
   }catch(e){ m.textContent = e.message; m.className = 'msg err'; }
 }
 
-async function loadSettings(){
-  const s = await api('/api/admin/settings');
-  document.getElementById('set_bank_name').value = s.bank_name || '';
-  document.getElementById('set_bank_account').value = s.bank_account_number || '';
-  document.getElementById('set_bank_holder').value = s.bank_account_holder || '';
+// ---- 轉帳銀行帳戶（多家） ----
+let bankRows = [];
+
+function renderBankRows(){
+  const box = document.getElementById('bank_rows');
+  if (!bankRows.length){
+    box.innerHTML = '<small class="hint">還沒有銀行帳戶，請按下方「新增銀行」。</small>';
+    return;
+  }
+  box.innerHTML = bankRows.map(function(b, i){
+    return '<div style="border:1px solid rgba(128,128,128,.4);border-radius:8px;padding:10px 12px;margin:10px 0;">'
+      + '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0 0 6px;"><input type="checkbox" '+(b.enabled ? 'checked' : '')+' onchange="bankRows['+i+'].enabled=this.checked" style="width:auto;margin:0;" /> 開放客人選擇</label>'
+      + '<label>銀行名稱</label><input value="'+escapeHtml(b.bank_name)+'" maxlength="40" oninput="bankRows['+i+'].bank_name=this.value" />'
+      + '<label>帳號</label><input value="'+escapeHtml(b.account_number)+'" maxlength="40" oninput="bankRows['+i+'].account_number=this.value" />'
+      + '<label>戶名</label><input value="'+escapeHtml(b.account_holder)+'" maxlength="40" oninput="bankRows['+i+'].account_holder=this.value" />'
+      + '<button class="btn secondary" type="button" style="margin-top:8px;" onclick="removeBankRow('+i+')">刪除這家</button>'
+      + '</div>';
+  }).join('');
 }
 
-async function saveSettings(){
+function addBankRow(){
+  if (bankRows.length >= 10){ alert('最多 10 家銀行'); return; }
+  bankRows.push({id:'', bank_name:'', account_number:'', account_holder:'', enabled:true});
+  renderBankRows();
+}
+
+function removeBankRow(i){
+  if (!confirm('確定刪除「'+(bankRows[i].bank_name || '這家銀行')+'」？已經用它下的舊訂單不受影響。')) return;
+  bankRows.splice(i, 1);
+  renderBankRows();
+}
+
+async function loadSettings(){
   const msg = document.getElementById('set_msg');
   try{
-    await api('/api/admin/settings', {method:'POST', body: JSON.stringify({
-      bank_name: document.getElementById('set_bank_name').value.trim(),
-      bank_account_number: document.getElementById('set_bank_account').value.trim(),
-      bank_account_holder: document.getElementById('set_bank_holder').value.trim(),
-    })});
-    msg.textContent='已儲存'; msg.className='msg ok';
-  }catch(e){ msg.textContent=e.message; msg.className='msg err'; }
+    const d = await api('/api/admin/bank-accounts');
+    bankRows = d.banks || [];
+    renderBankRows();
+  }catch(e){ msg.textContent = e.message; msg.className = 'msg err'; }
+}
+
+async function saveBanksAdmin(){
+  const msg = document.getElementById('set_msg');
+  try{
+    const d = await api('/api/admin/bank-accounts', {method:'PUT', body: JSON.stringify({banks: bankRows})});
+    bankRows = d.banks || bankRows;
+    renderBankRows();
+    msg.textContent = '已儲存'; msg.className = 'msg ok';
+  }catch(e){ msg.textContent = e.message; msg.className = 'msg err'; }
 }
 
 // ---- 系統公告 ----
@@ -5082,6 +5149,7 @@ const CVS_STORES = {seven:'7-11', family:'全家', hilife:'萊爾富'};
 const CVS_LIMIT = 10000;
 const CVS_FEE = 15;
 let storePickOpen = false;
+let bankPickOpen = false;
 let lastOrder = null;
 let pollTimer=null;
 
@@ -5095,6 +5163,16 @@ function toTaipeiTime(dateStr) {
 
 function openStorePick(){ storePickOpen = true; if (lastOrder) render(lastOrder); }
 function closeStorePick(){ storePickOpen = false; if (lastOrder) render(lastOrder); }
+function openBankPick(){ bankPickOpen = true; if (lastOrder) render(lastOrder); }
+function closeBankPick(){ bankPickOpen = false; if (lastOrder) render(lastOrder); }
+function escB(x){ return String(x == null ? '' : x).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+document.addEventListener('click', function(ev){
+  const el = ev.target && ev.target.closest ? ev.target.closest('[data-pick]') : null;
+  if (!el) return;
+  const kind = el.getAttribute('data-pick');
+  if (kind === 'store') selectMethod('store_barcode', el.getAttribute('data-v'));
+  else if (kind === 'bank') selectMethod('transfer', null, el.getAttribute('data-v'));
+});
 
 let lastOrderJson = null;
 
@@ -5183,26 +5261,29 @@ function renderOrderView(o){
     const me = Array.isArray(o.methods_enabled) ? o.methods_enabled : ['transfer','store_barcode','taiwan_pay'];
     const pm = function(k){ return me.indexOf(k) >= 0; };
     const feeNote = '<div class=\"info-box\" style=\"margin-top:12px;\">使用超商條碼需<b>自付 $'+CVS_FEE+' 超商手續費</b>，繳費時請於超商另行支付。</div>';
+    const storeNames = {seven:'7-11', family:'全家', hilife:'萊爾富'};
+    const stores = (Array.isArray(o.stores_enabled) ? o.stores_enabled : ['seven','family','hilife']).filter(function(k){ return storeNames[k]; });
+    const banks = Array.isArray(o.banks_enabled) ? o.banks_enabled : [];
     if (storePickOpen && !overLimit && pm('store_barcode')) {
-      html += '<div class=\"muted\" style=\"margin-top:14px;\">請選擇要繳費的超商（選擇後將無法變更）</div>';
-      html += '<div class=\"methods\">'+
-        '<button onclick=\"selectMethod(\\'store_barcode\\',\\'seven\\')\">7-11</button>'+
-        '<button onclick=\"selectMethod(\\'store_barcode\\',\\'family\\')\">全家</button>'+
-        '<button onclick=\"selectMethod(\\'store_barcode\\',\\'hilife\\')\">萊爾富</button>'+
-      '</div>';
+      html += '<div class="muted" style="margin-top:14px;">請選擇要繳費的超商（選擇後將無法變更）</div>';
+      html += '<div class="methods">' + stores.map(function(k){ return '<button data-pick="store" data-v="'+k+'">'+storeNames[k]+'</button>'; }).join('') + '</div>';
       html += feeNote;
-      html += '<div class=\"center\" style=\"margin-top:12px;\"><a href=\"#\" onclick=\"closeStorePick();return false;\" style=\"color:#6b7280;font-size:14px;\">‹ 返回選擇付款方式</a></div>';
+      html += '<div class="center" style="margin-top:12px;"><a href="#" onclick="closeStorePick();return false;" style="color:#6b7280;font-size:14px;">‹ 返回選擇付款方式</a></div>';
+    } else if (bankPickOpen && pm('transfer') && banks.length > 1) {
+      html += '<div class="muted" style="margin-top:14px;">請選擇要轉入的銀行（選擇後將無法變更）</div>';
+      html += '<div class="methods">' + banks.map(function(b){ return '<button data-pick="bank" data-v="'+escB(b.id)+'">'+escB(b.bank_name)+'</button>'; }).join('') + '</div>';
+      html += '<div class="center" style="margin-top:12px;"><a href="#" onclick="closeBankPick();return false;" style="color:#6b7280;font-size:14px;">‹ 返回選擇付款方式</a></div>';
     } else {
-      if (me.length) html += '<div class=\"muted\" style=\"margin-top:14px;\">請選擇付款方式（選擇後將無法變更）</div>';
-      html += '<div class=\"methods\">'+
-        (pm('transfer') ? '<button onclick=\"selectMethod(\\'transfer\\')\">轉帳</button>' : '')+
+      if (me.length) html += '<div class="muted" style="margin-top:14px;">請選擇付款方式（選擇後將無法變更）</div>';
+      html += '<div class="methods">'+
+        (pm('transfer') ? (banks.length > 1 ? '<button onclick="openBankPick()">轉帳</button>' : '<button onclick="selectMethod(\\'transfer\\')">轉帳</button>') : '')+
         (pm('store_barcode') ? (overLimit
-          ? '<button disabled style=\"opacity:.45;cursor:not-allowed;\">超商條碼</button>'
-          : '<button onclick=\"openStorePick()\">超商條碼</button>') : '')+
-        (pm('taiwan_pay') ? '<button onclick=\"selectMethod(\\'taiwan_pay\\')\">TWQR</button>' : '')+
+          ? '<button disabled style="opacity:.45;cursor:not-allowed;">超商條碼</button>'
+          : '<button onclick="openStorePick()">超商條碼</button>') : '')+
+        (pm('taiwan_pay') ? '<button onclick="selectMethod(\\'taiwan_pay\\')">TWQR</button>' : '')+
       '</div>';
       if (overLimit && pm('store_barcode')) {
-        html += '<div style=\"color:#e0453c;font-size:14px;margin-top:12px;text-align:center;\">超過 $'+CVS_LIMIT.toLocaleString()+' 無法使用超商條碼，請分筆訂單</div>';
+        html += '<div style="color:#e0453c;font-size:14px;margin-top:12px;text-align:center;">超過 $'+CVS_LIMIT.toLocaleString()+' 無法使用超商條碼，請分筆訂單</div>';
       }
     }
     app.innerHTML = html;
@@ -5327,14 +5408,15 @@ function compressImage(file, maxDim, quality){
 }
 
 
-async function selectMethod(method, store){
+async function selectMethod(method, store, bankId){
   try{
     const res = await fetch('/api/order/'+token+'/select-method', {
-      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({method, store})
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({method, store, bank_id: bankId || null})
     });
     const d = await res.json();
     if (!res.ok){ alert(d.error||'發生錯誤'); return; }
     storePickOpen = false;
+    bankPickOpen = false;
     render(d);
   }catch(e){ alert('發生錯誤，請重新整理再試一次'); }
 }
