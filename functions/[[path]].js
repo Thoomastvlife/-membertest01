@@ -1,4 +1,4 @@
-import { handleDailyReportCron } from "./_lib/report.js";
+import { handleDailyReportCron, handleDailyReportTest } from "./_lib/report.js";
 import { adminHtml, payHtml, memberHtml, memberRegisterHtml } from "./_lib/templates.js";
 import {
   getPlatforms,
@@ -3088,6 +3088,17 @@ export async function onRequest(context) {
             detail: { permissions: (resBody && resBody.permissions) || normalizePermissions(body.permissions) },
           }),
           handleSetStaffPermissions(staffPermMatch[1], request, env)
+        );
+      }
+
+      if (path === "/api/admin/daily-report/test" && method === "POST") {
+        return alog(
+          env, session, request,
+          (resBody) => ({
+            action: "staff.report_test",
+            summary: `寄出測試日報給自己（${(resBody && resBody.to) || ""}）`,
+          }),
+          handleDailyReportTest(request, env, session)
         );
       }
 

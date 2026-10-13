@@ -705,6 +705,12 @@ ${THEME_CSS_ADMIN}
           <tbody></tbody>
         </table>
       </div>
+      <div class="card">
+        <h2>每日營運日報</h2>
+        <small class="hint">日報會寄給「有填信箱的管理員」（以及設定檔裡額外指定的收件人）。按下面的按鈕，會把昨天的日報<b>只寄給你自己</b>（用你帳號上的信箱），不會影響正式排程。</small>
+        <button class="btn" id="dr_btn" onclick="sendTestDailyReport()">寄一封測試日報給我</button>
+        <div id="dr_msg" class="msg"></div>
+      </div>
     </section>
 
     <section id="tab-noaccess" class="tab hidden">
@@ -2608,6 +2614,24 @@ async function loadStaff(){
         '<button class="btn danger small" '+((isSelf||isOwner)?'disabled':'')+' onclick="deleteStaff('+s.id+')">刪除</button>'+
       '</td></tr>';
   }).join('') || '<tr><td colspan="7">尚無帳號</td></tr>';
+}
+
+async function sendTestDailyReport(){
+  const btn = document.getElementById('dr_btn');
+  const msg = document.getElementById('dr_msg');
+  btn.disabled = true;
+  msg.textContent = '寄送中…'; msg.className = 'msg';
+  try{
+    const r = await api('/api/admin/daily-report/test', {method:'POST', body: JSON.stringify({})});
+    const rec = (r.recipients && r.recipients.length) ? r.recipients.map(escapeHtml).join('、') : '（目前沒有任何收件人）';
+    msg.innerHTML = '已寄出測試日報（統計日期 ' + escapeHtml(r.date) + '）到 ' + escapeHtml(r.to) + '，請到信箱確認（沒看到也看一下垃圾信）。' +
+      '<br>寄件人：' + escapeHtml(r.sender || '未設定') + '<br>正式日報會寄給：' + rec;
+    msg.className = 'msg ok';
+  }catch(e){
+    msg.textContent = e.message; msg.className = 'msg err';
+  }finally{
+    btn.disabled = false;
+  }
 }
 
 async function setStaffEmail(id){

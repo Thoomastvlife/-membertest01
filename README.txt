@@ -410,12 +410,21 @@ v61 管理員信箱欄位（資料庫部分，日報收件人改讀資料庫的�
   - ?dry=1 預覽現在也會回傳 "to"（這次實際會寄給誰），先用它確認再正式寄。
   - 寄信沿用現有 Resend（RESEND_API_KEY、EMAIL_FROM；寄件人可用 EMAIL_FROM_REPORT 指定）。
 
+【後台「寄一封測試日報」按鈕（已完成）】
+  - 後台 → 員工帳號 → 最下面「每日營運日報」卡片 → 「寄一封測試日報給我」。
+  - 把「昨天」的日報只寄給目前登入的管理員自己（用他帳號上填的信箱），主旨前面加「【測試】」。
+  - 不會寫入「今天已寄過」的紀錄，不影響正式排程；也不會寄給其他收件人。
+  - 畫面會顯示：寄到哪個信箱、統計日期、寄件人，以及「正式日報會寄給誰」。
+  - 失敗時會直接顯示原因：自己沒填信箱／寄信服務沒設定（RESEND_API_KEY、EMAIL_FROM）／Resend 回報的錯誤（例如網域未驗證）。
+  - API：POST /api/admin/daily-report/test（只有管理員）；會寫入操作紀錄（staff.report_test）。
+
 【v61 上線步驟】
   1. wrangler d1 execute test2 --remote --file=./migrate_v24.sql
   2. 重新部署（wrangler.toml 的 DAILY_REPORT_TO 可以繼續保持註解）。
   3. 後台 → 員工帳號 → 管理員帳號按「設定信箱」。
   4. 預覽：curl -X POST -H "X-Cron-Key: 你的金鑰" "https://member.ytgp168.com/api/cron/daily-report?dry=1"
-     確認回傳的 "to" 有你的信箱；再到 GitHub Actions 按 Run workflow 正式測一次。
+     確認回傳的 "to" 有你的信箱；也可以直接按後台的「寄一封測試日報給我」。
+     最後到 GitHub Actions 按 Run workflow 正式測一次（排程是否正常）。
 
-異動檔案：migrate_v24.sql（新）、schema.sql、functions/[[path]].js、functions/_lib/templates.js、functions/_lib/report.js、wrangler.toml、README.txt
+異動檔案：migrate_v24.sql（新）、schema.sql、functions/[[path]].js、functions/_lib/templates.js、functions/_lib/report.js、wrangler.toml、.github/workflows/daily-report.yml、README.txt
 

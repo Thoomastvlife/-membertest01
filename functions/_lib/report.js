@@ -251,6 +251,57 @@ ${r.oldest.length ? `<div style="font-size:13px;color:#555;margin-top:8px">等�
 //   ?date=YYYY-MM-DD   指定要統計的日期（預設昨天）
 //   ?dry=1             只回傳預覽（JSON），不寄信也不記錄
 //   ?force=1           同一天已經寄過也再寄一次
+async function loadPlatformNames(env) {
+  const names = {};
+  try {
+    for (const p of await getPlatforms(env.DB)) names[p.key] = p.name;
+  } catch (e) {
+    /* 平台名稱查不到就用代碼顯示 */
+  }
+  return names;
+}
+
+// 後台「寄一封測試日報」：把「昨天」的日報只寄給目前登入的管理員自己（用他帳號上填的信箱）。
+// 不會寫入「今天已寄過」的紀錄，所以不影響正式排程；也不會寄給其他收件人。
+// 權限由 API 入口統一擋（/api/admin/daily-report/... 預設只有管理員）。
+export async function handleDailyReportTest(request, env, session) {
+  let me;
+  try {
+    me = await env.DB.prepare("SELECT username, email FROM admins WHERE id=?").bind(session.adminId).first();
+  } catch (e) {
+    if (/no such column/i.test(String(e && e.message))) return json({ error: "資料庫尚未升級，請先執行 migrate_v24.sql" }, 400);
+    throw e;
+  }
+  const email = String((me && me.email) || "").trim();
+  if (!email || !MAIL_RE.test(email)) {
+    return json({ error: "你的帳號還沒有設定信箱：請先在「帳號列表」按自己那一列的「設定信箱」，再寄測試日報" }, 400);
+  }
+
+  const report = await buildDailyReport(env, null);
+  const mail = renderDailyReport(report, await loadPlatformNames(env));
+  const sender = env.EMAIL_FROM_REPORT || env.EMAIL_FROM_ORDER || env.EMAIL_FROM;
+  const subject = "【測試】" + mail.subject;
+  const note = "（這是從後台寄出的測試信，只寄給你自己；正式日報不受影響。）";
+
+  try {
+    await sendEmail(env, {
+      to: email,
+      from: sender,
+      subject,
+      html: `<p style="color:#888;font-size:12px;">${esc(note)}</p>` + mail.html,
+      text: note + "\n\n" + mail.text,
+    });
+  } catch (e) {
+    const msg = String(e && e.message ? e.message : e);
+    if (msg === "EMAIL_NOT_CONFIGURED") {
+      return json({ error: "寄信服務還沒設定好：需要 RESEND_API_KEY（secret）和 EMAIL_FROM（或 EMAIL_FROM_REPORT）" }, 400);
+    }
+    return json({ error: "寄信失敗：" + msg.replace(/^EMAIL_SEND_FAILED:/, "").slice(0, 200) }, 502);
+  }
+
+  return json({ ok: true, to: email, date: report.date, sender: sender || "", recipients: await reportRecipients(env) });
+}
+
 export async function handleDailyReportCron(request, env) {
   const key = env.CRON_SECRET || "";
   const given = request.headers.get("x-cron-key") || "";
@@ -263,13 +314,7 @@ export async function handleDailyReportCron(request, env) {
 
   const report = await buildDailyReport(env, url.searchParams.get("date"));
 
-  let platformNames = {};
-  try {
-    for (const p of await getPlatforms(env.DB)) platformNames[p.key] = p.name;
-  } catch (e) {
-    platformNames = {};
-  }
-  const mail = renderDailyReport(report, platformNames);
+  const mail = renderDailyReport(report, await loadPlatformNames(env));
 
   const to = await reportRecipients(env);
   if (dry) return json({ ok: true, dry: true, to, report, subject: mail.subject, text: mail.text });
