@@ -247,10 +247,6 @@ ${r.oldest.length ? `<div style="font-size:13px;color:#555;margin-top:8px">等�
   return { subject, html, text };
 }
 
-// POST /api/cron/daily-report   標頭 X-Cron-Key: <CRON_SECRET>
-//   ?date=YYYY-MM-DD   指定要統計的日期（預設昨天）
-//   ?dry=1             只回傳預覽（JSON），不寄信也不記錄
-//   ?force=1           同一天已經寄過也再寄一次
 async function loadPlatformNames(env) {
   const names = {};
   try {
@@ -302,10 +298,28 @@ export async function handleDailyReportTest(request, env, session) {
   return json({ ok: true, to: email, date: report.date, sender: sender || "", recipients: await reportRecipients(env) });
 }
 
+// POST /api/cron/daily-report   標頭 X-Cron-Key: <CRON_SECRET>
+//   ?date=YYYY-MM-DD   指定要統計的日期（預設昨天）
+//   ?dry=1             只回傳預覽（JSON），不寄信也不記錄
+//   ?force=1           同一天已經寄過也再寄一次
+// 排錯用：金鑰的長度＋SHA-256 前 6 碼。64 字元亂數金鑰的指紋無法反推原文，可以安全顯示。
+async function keyFingerprint(v) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(v));
+  const hex = [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `長度${v.length}/指紋${hex.slice(0, 6)}`;
+}
+
 export async function handleDailyReportCron(request, env) {
-  const key = env.CRON_SECRET || "";
-  const given = request.headers.get("x-cron-key") || "";
-  if (!key || !safeEqual(key, given)) return json({ error: "金鑰不正確" }, 401);
+  // 兩邊都先去掉前後空白／換行（貼上密碼時常會多帶一個換行）
+  const key = String(env.CRON_SECRET || "").trim();
+  const given = String(request.headers.get("x-cron-key") || "").trim();
+  if (!key) return json({ error: "網站還沒有讀到 CRON_SECRET：請確認 Cloudflare Pages 的 Production 已新增這個 Secret，並且新增後重新部署過" }, 401);
+  if (!safeEqual(key, given)) {
+    return json(
+      { error: `金鑰不正確（網站上的：${await keyFingerprint(key)}；GitHub 送來的：${await keyFingerprint(given)}）。兩邊要一模一樣` },
+      401
+    );
+  }
   if (request.method !== "POST") return json({ error: "請用 POST" }, 405);
 
   const url = new URL(request.url);

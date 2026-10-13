@@ -418,6 +418,13 @@ v61 管理員信箱欄位（資料庫部分，日報收件人改讀資料庫的�
   - 失敗時會直接顯示原因：自己沒填信箱／寄信服務沒設定（RESEND_API_KEY、EMAIL_FROM）／Resend 回報的錯誤（例如網域未驗證）。
   - API：POST /api/admin/daily-report/test（只有管理員）；會寫入操作紀錄（staff.report_test）。
 
+【金鑰（CRON_SECRET）排錯】
+  - 回「網站還沒有讀到 CRON_SECRET」：Cloudflare Pages 的 Production 沒有這個 Secret，或新增後還沒重新部署。
+  - 回「金鑰不正確：GitHub 的 CRON_SECRET 和 Cloudflare 的不一樣」：兩邊的值不同，重新貼一次。
+  - 「金鑰不正確（網站上的：長度N/指紋xxxxxx；GitHub 送來的：長度N/指紋xxxxxx）」：兩組指紋不同就是值不同。
+    64 字元金鑰的長度應該是 64；哪一邊的長度或指紋跟預期不同，就重貼那一邊。
+  - 網站和 GitHub 兩邊都會自動去掉金鑰前後的空白／換行，貼上時多帶換行不會再造成失敗。
+
 【v61 上線步驟】
   1. wrangler d1 execute test2 --remote --file=./migrate_v24.sql
   2. 重新部署（wrangler.toml 的 DAILY_REPORT_TO 可以繼續保持註解）。
