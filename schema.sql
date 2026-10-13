@@ -26,6 +26,11 @@ CREATE TABLE IF NOT EXISTS members (
   note TEXT,
   referral_code TEXT UNIQUE,    -- 專屬推薦碼，供他人透過隱藏註冊連結自行加入時填寫
   referred_by INTEGER,          -- 透過哪位會員的推薦碼註冊（自行註冊才會有值）
+  tags TEXT,                    -- 標籤（JSON 陣列，例如 ["VIP","老客戶"]）
+  is_blocked INTEGER NOT NULL DEFAULT 0,   -- 1 = 封鎖下單
+  blocked_reason TEXT,          -- 封鎖原因（只有後台看得到）
+  blocked_at TEXT,              -- 封鎖時間（UTC）
+  blocked_by TEXT,              -- 誰封鎖的（帳號名稱）
   created_at TEXT DEFAULT (datetime('now')),
   FOREIGN KEY (referred_by) REFERENCES members(id)
 );
@@ -248,3 +253,13 @@ CREATE TABLE IF NOT EXISTS order_items (
   FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id);
+
+-- ===== v26：會員備註紀錄 =====
+CREATE TABLE IF NOT EXISTS member_notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  member_id INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  admin_username TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_member_notes_member ON member_notes(member_id, id);

@@ -47,6 +47,14 @@ import {
   handleLiveGetIngestKey,
   handleLiveResetIngestKey,
 } from "./_lib/live.js";
+import {
+  handleMemberDetail,
+  handleMemberSetTags,
+  handleMemberSetBlock,
+  handleMemberAddNote,
+  handleMemberDeleteNote,
+  parseTags,
+} from "./_lib/memberdetail.js";
 import { PERMISSIONS, DEFAULT_STAFF_PERMISSIONS, normalizePermissions, requiredAdminPermission, getAdminAccess, canAccess, accessSummary } from "./_lib/access.js";
 import { getRateRules, saveRateRules, getAllRateRules, getRateGroupForPlatform, RATE_GROUPS, DEFAULT_RATE_RULES, MIN_QUOTE_AMOUNT, calcCoins, isCustomRateGroup } from "./_lib/rates.js";
 
@@ -732,12 +740,28 @@ async function handleDeleteStaff(id, session, env) {
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 async function handleListMembers(env) {
-  const { results } = await env.DB.prepare(
-    `SELECT m.id, m.name, m.account, m.phone, m.email, m.email_verified_at, m.tiktok_id, m.note, m.created_at, m.referral_code,
-            r.name as referred_by_name
-     FROM members m LEFT JOIN members r ON r.id = m.referred_by
-     ORDER BY m.created_at DESC`
-  ).all();
+  let results;
+  try {
+    ({ results } = await env.DB.prepare(
+      `SELECT m.id, m.name, m.account, m.phone, m.email, m.email_verified_at, m.tiktok_id, m.note, m.created_at, m.referral_code,
+              m.tags, m.is_blocked, r.name as referred_by_name
+       FROM members m LEFT JOIN members r ON r.id = m.referred_by
+       ORDER BY m.created_at DESC`
+    ).all());
+  } catch (e) {
+    if (!/no such column/i.test(String(e && e.message))) throw e;
+    // 還沒執行 migrate_v26.sql：用舊欄位查
+    ({ results } = await env.DB.prepare(
+      `SELECT m.id, m.name, m.account, m.phone, m.email, m.email_verified_at, m.tiktok_id, m.note, m.created_at, m.referral_code,
+              r.name as referred_by_name
+       FROM members m LEFT JOIN members r ON r.id = m.referred_by
+       ORDER BY m.created_at DESC`
+    ).all());
+  }
+  for (const m of results) {
+    m.tags = parseTags(m.tags);
+    m.is_blocked = !!m.is_blocked;
+  }
   // 相容舊資料：還沒有推薦碼的會員，第一次查看時懶惰補上
   for (const m of results) {
     if (!m.referral_code) m.referral_code = await ensureMemberReferralCode(env, m);
@@ -791,6 +815,11 @@ async function handleDeleteMember(id, env) {
   await env.DB.prepare("DELETE FROM members WHERE id=?").bind(id).run();
   await env.DB.prepare("DELETE FROM points_ledger WHERE member_id=?").bind(id).run();
   await env.DB.prepare("DELETE FROM points_redemptions WHERE member_id=?").bind(id).run();
+  try {
+    await env.DB.prepare("DELETE FROM member_notes WHERE member_id=?").bind(id).run();
+  } catch (e) {
+    if (!/no such table/i.test(String(e && e.message))) throw e;
+  }
   return json({ ok: true });
 }
 
@@ -1199,6 +1228,9 @@ async function handleCreateOrder(request, env) {
   if (member_id) {
     const m = await env.DB.prepare("SELECT * FROM members WHERE id=?").bind(member_id).first();
     if (!m) return json({ error: "找不到指定會員" }, 400);
+    if (m.is_blocked) {
+      return json({ error: `會員「${m.name}」已被封鎖下單${m.blocked_reason ? "（原因：" + m.blocked_reason + "）" : ""}，請先到會員詳細頁解除封鎖`, code: "member_blocked" }, 409);
+    }
     memberId = m.id;
     memberNameSnapshot = m.name;
   }
@@ -2285,6 +2317,12 @@ async function handleMemberMe(session, env) {
   if (!member) return json({ error: "會員不存在，請重新登入" }, 401, { "Set-Cookie": clearCookieHeader("member_session") });
   if (!member.referral_code) member.referral_code = await ensureMemberReferralCode(env, member);
   member.email_verify = emailVerifyEnabled(env);
+  try {
+    const b = await env.DB.prepare("SELECT is_blocked FROM members WHERE id=?").bind(session.memberId).first();
+    member.blocked = !!(b && b.is_blocked);
+  } catch {
+    member.blocked = false; // 還沒執行 migrate_v26.sql
+  }
   return json(member);
 }
 
@@ -2615,6 +2653,7 @@ async function handleMemberCreateOrder(session, request, env) {
 
   const member = await env.DB.prepare("SELECT * FROM members WHERE id=?").bind(session.memberId).first();
   if (!member) return json({ error: "會員不存在，請重新登入" }, 404);
+  if (member.is_blocked) return json({ error: "您的帳號目前無法下單，如有疑問請聯絡客服", code: "member_blocked" }, 403);
 
   let finalAmount = amt;
   let couponResult = null;
@@ -3381,6 +3420,49 @@ export async function onRequest(context) {
           env, session, request,
           { action: "member.update", summary: `編輯${L.member}資料`, detail: sanitizeForLog(body) },
           handleUpdateMember(memberDeleteMatch[1], request, env)
+        );
+      }
+
+      // ---- 會員詳細頁 ----
+      const memberSub = path.match(/^\/api\/admin\/members\/(\d+)\/(detail|tags|block|notes)$/);
+      if (memberSub) {
+        const mid = memberSub[1];
+        if (memberSub[2] === "detail" && method === "GET") return handleMemberDetail(mid, env);
+        if (memberSub[2] === "tags" && method === "PATCH") {
+          return alog(
+            env, session, request,
+            (resBody) => ({
+              action: "member.tags",
+              summary: `設定${L.member}的標籤：${(resBody && resBody.tags && resBody.tags.length ? resBody.tags.join("、") : "（清空）")}`,
+              detail: { tags: (resBody && resBody.tags) || [] },
+            }),
+            handleMemberSetTags(mid, request, env)
+          );
+        }
+        if (memberSub[2] === "block" && method === "POST") {
+          const body = await request.clone().json().catch(() => ({}));
+          return alog(
+            env, session, request,
+            (resBody) => body.blocked
+              ? { action: "member.block", summary: `封鎖${L.member}下單${resBody && resBody.reason ? "（原因：" + resBody.reason + "）" : ""}`, detail: { reason: (resBody && resBody.reason) || "" } }
+              : { action: "member.unblock", summary: `解除${L.member}的下單封鎖` },
+            handleMemberSetBlock(mid, request, env, session)
+          );
+        }
+        if (memberSub[2] === "notes" && method === "POST") {
+          return alog(
+            env, session, request,
+            (resBody) => ({ action: "member.note_add", summary: `新增${L.member}的備註`, detail: { content: (resBody && resBody.content) || "" } }),
+            handleMemberAddNote(mid, request, env, session)
+          );
+        }
+      }
+      const memberNoteDel = path.match(/^\/api\/admin\/members\/(\d+)\/notes\/(\d+)$/);
+      if (memberNoteDel && method === "DELETE") {
+        return alog(
+          env, session, request,
+          (resBody) => ({ action: "member.note_delete", summary: `刪除${L.member}的一則備註`, detail: { content: (resBody && resBody.content) || "" } }),
+          handleMemberDeleteNote(memberNoteDel[1], memberNoteDel[2], env)
         );
       }
 

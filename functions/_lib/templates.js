@@ -101,6 +101,22 @@ ${THEME_HEAD}
   .perm-item b{display:block;font-weight:600;}
   .perm-item small{display:block;color:var(--muted);font-size:12px;margin-top:2px;line-height:1.4;}
   .perm-actions{display:flex;gap:8px;margin:6px 0 10px;}
+  .tag{display:inline-block;padding:1px 9px;border-radius:999px;font-size:12px;line-height:1.7;border:1px solid var(--border);margin:0 4px 4px 0;white-space:nowrap;}
+  .tag.vip{background:rgba(245,166,35,.18);border-color:rgba(245,166,35,.65);}
+  .tag.bad{background:rgba(229,100,107,.18);border-color:rgba(229,100,107,.65);}
+  .tag .x{cursor:pointer;margin-left:6px;opacity:.7;}
+  .tag-blocked{display:inline-block;padding:1px 9px;border-radius:999px;font-size:12px;line-height:1.7;background:#E5646B;color:#fff;margin:0 4px 4px 0;white-space:nowrap;}
+  .md-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+  .md-head h2{margin:0;}
+  .md-info{display:grid;grid-template-columns:1fr 1fr;gap:8px 18px;font-size:14px;margin-top:12px;}
+  .md-info .k{color:var(--muted);font-size:12px;display:block;}
+  .md-info .v{word-break:break-all;}
+  .md-block{border:1px solid rgba(229,100,107,.65);background:rgba(229,100,107,.12);border-radius:8px;padding:10px 12px;margin-top:12px;}
+  .md-note{border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin:8px 0;}
+  .md-note .meta{color:var(--muted);font-size:12px;display:flex;justify-content:space-between;gap:8px;align-items:center;}
+  .md-note .body{white-space:pre-wrap;word-break:break-word;margin-top:4px;}
+  .tag-presets{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0;}
+  @media (max-width:700px){ .md-info{grid-template-columns:1fr;} }
   body.no-orders_delete .need-orders_delete, body.no-members_delete .need-members_delete{display:none !important;}
   .modal-box h2{margin-top:0;font-size:16px;}
   img.proof-thumb{max-width:56px;max-height:40px;border-radius:4px;border:1px solid var(--border);cursor:pointer;display:block;}
@@ -530,6 +546,7 @@ ${THEME_CSS_ADMIN}
     </section>
 
     <section id="tab-members" class="tab hidden">
+      <div id="memListView">
       <div class="card">
         <h2>新增會員</h2>
         <div class="grid2">
@@ -555,13 +572,72 @@ ${THEME_CSS_ADMIN}
           <span class="arrow">▼</span>
         </div>
         <div id="membersPanel">
-          <input id="mem_search" placeholder="搜尋會員（姓名、帳號、電話、信箱、備註）" oninput="onMemberSearch()" autocomplete="off" style="margin-top:14px;" />
+          <input id="mem_search" placeholder="搜尋會員（姓名、帳號、電話、信箱、備註、標籤；輸入「已封鎖」可找出被封鎖的會員）" oninput="onMemberSearch()" autocomplete="off" style="margin-top:14px;" />
           <div id="mem_count" class="msg" style="color:var(--muted);"></div>
           <table id="mem_table">
             <thead><tr><th>ID</th><th>姓名</th><th>帳號</th><th>TikTok</th><th>電話</th><th>電子信箱</th><th>備註</th><th>推薦碼</th><th>推薦人</th><th>操作</th></tr></thead>
             <tbody></tbody>
           </table>
           <div id="mem_pager" class="pager"></div>
+        </div>
+      </div>
+      </div>
+      <div id="memDetailView" class="hidden">
+        <div class="card">
+          <div class="md-head">
+            <button class="btn secondary small" onclick="closeMemberDetail()">← 返回會員列表</button>
+            <h2 id="md_name"></h2>
+            <span id="md_badges"></span>
+          </div>
+          <div id="md_msg" class="msg"></div>
+          <div id="md_blockbanner"></div>
+          <div id="md_info" class="md-info"></div>
+          <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn secondary small" onclick="mdEdit()">編輯基本資料</button>
+            <button class="btn secondary small" onclick="mdResetPassword()">設定密碼</button>
+          </div>
+        </div>
+        <div class="card">
+          <h2>消費總覽</h2>
+          <div id="md_kpis" class="stat-kpis"></div>
+        </div>
+        <div class="card">
+          <h2>標籤</h2>
+          <div id="md_tags_cur"></div>
+          <div class="tag-presets" id="md_tag_presets"></div>
+          <div style="display:flex;gap:8px;">
+            <input id="md_tag_input" placeholder="自訂標籤（最多 12 個字）" maxlength="12" autocomplete="off" onkeydown="if(event.key==='Enter'){mdAddTag();}" />
+            <button class="btn secondary" style="margin-top:0;white-space:nowrap;" onclick="mdAddTag()">加入</button>
+          </div>
+          <button class="btn" id="md_tag_save" onclick="mdSaveTags()" disabled>儲存標籤</button>
+          <div id="md_tag_msg" class="msg"></div>
+        </div>
+        <div class="card">
+          <h2>下單封鎖</h2>
+          <div id="md_block_ctl"></div>
+          <div id="md_block_msg" class="msg"></div>
+        </div>
+        <div class="card">
+          <h2>備註紀錄</h2>
+          <textarea id="md_note_text" rows="3" maxlength="500" placeholder="寫下這位會員的備註（例如：客人要求晚上才處理）"></textarea>
+          <button class="btn" onclick="mdAddNote()">新增備註</button>
+          <div id="md_note_msg" class="msg"></div>
+          <div id="md_notes"></div>
+        </div>
+        <div class="card">
+          <h2>訂單歷史（最近 50 筆）</h2>
+          <table id="md_orders">
+            <thead><tr><th>訂單編號</th><th>建立時間</th><th>平台</th><th>金額</th><th>付款方式</th><th>狀態</th><th>操作</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="card">
+          <h2>點數紀錄（最近 30 筆）</h2>
+          <div id="md_points_sum" class="msg" style="color:var(--muted);"></div>
+          <table id="md_ledger">
+            <thead><tr><th>時間</th><th>異動</th><th>類型</th><th>備註</th></tr></thead>
+            <tbody></tbody>
+          </table>
         </div>
       </div>
     </section>
@@ -1271,7 +1347,7 @@ async function togglePush(){
 
 // ---- 直播下單 ----
 let liveRounds = [], liveRoundId = null, liveData = null, liveBindCommentId = null, liveLastLinks = [];
-const LIVE_ST = {ok:['已歸戶','b-ready'], guest:['非會員','b-pending'], unbound:['未綁定','b-await'], waitlist:['候補','b-cancel'], invalid:['無效','b-expired'], ordered:['已建單','b-paid']};
+const LIVE_ST = {ok:['已歸戶','b-ready'], guest:['非會員','b-pending'], unbound:['未綁定','b-await'], waitlist:['候補','b-cancel'], invalid:['無效','b-expired'], ordered:['已建單','b-paid'], blocked:['已封鎖','b-cancel']};
 
 function liveMsg(id, text, ok){
   const el = document.getElementById(id);
@@ -1443,7 +1519,7 @@ async function liveSubmitText(){
     const r = await api('/api/admin/live/rounds/'+liveRoundId+'/comments', {method:'POST', body: JSON.stringify({text})});
     const s = r.summary;
     document.getElementById('lc_text').value = '';
-    liveMsg('lc_msg', '已加入 '+r.rows+' 筆（已歸戶 '+s.ok+'、未綁定 '+s.unbound+'、候補 '+s.waitlist+'、無效 '+s.invalid+'）', true);
+    liveMsg('lc_msg', '已加入 '+r.rows+' 筆（已歸戶 '+s.ok+'、未綁定 '+s.unbound+'、候補 '+s.waitlist+'、無效 '+s.invalid+(s.blocked ? '、已封鎖 '+s.blocked : '')+'）', true);
     await loadLiveRound();
   }catch(e){ liveMsg('lc_msg', e.message, false); }
   btn.disabled = liveData && liveData.round.status === 'closed';
@@ -1513,8 +1589,8 @@ async function liveCreateOrders(){
   const n = (counts.ok||0) + (counts.guest||0);
   if (!n) return;
   let tip = '將為「已歸戶」與「非會員」的 '+n+' 筆留言建立訂單（同一人合併成一張）。';
-  const skip = (counts.unbound||0) + (counts.waitlist||0);
-  if (skip) tip += '\\n另有 '+skip+' 筆未綁定／候補不會建立。';
+  const skip = (counts.unbound||0) + (counts.waitlist||0) + (counts.blocked||0);
+  if (skip) tip += '\\n另有 '+skip+' 筆未綁定／候補／已封鎖不會建立。';
   if (!confirm(tip + '\\n\\n確定建立？')) return;
   const btn = document.getElementById('lc_order_btn');
   btn.disabled = true;
@@ -2461,6 +2537,222 @@ function toggleTodoPanel(){
   if (c) applyTodoCollapsed(true);
 })();
 
+// ---- 會員詳細頁 ----
+const TAG_PRESETS = ['VIP', '老客戶', '需注意', '黑名單'];
+const LEDGER_TYPE = {earn:'付款回饋', spend:'訂單折抵', redeem:'商城兌換', refund:'兌換退回', admin:'後台調整'};
+const MD_PAY = {transfer:'轉帳', store_barcode:'超商條碼', taiwan_pay:'TWQR'};
+let mdId = null, mdData = null, mdTags = [], mdSavedTags = [];
+
+function tagClass(t){
+  const k = String(t).toLowerCase();
+  if (k === 'vip') return 'tag vip';
+  if (t === '黑名單') return 'tag bad';
+  return 'tag';
+}
+function tagBadges(tags){
+  return (tags || []).map(function(t){ return '<span class="' + tagClass(t) + '">' + escapeHtml(t) + '</span>'; }).join('');
+}
+function mdSay(id, text, ok){
+  const el = document.getElementById(id);
+  el.textContent = text || '';
+  el.className = 'msg' + (text ? (ok ? ' ok' : ' err') : '');
+}
+
+async function openMemberDetail(id){
+  mdId = id;
+  document.getElementById('memListView').classList.add('hidden');
+  document.getElementById('memDetailView').classList.remove('hidden');
+  window.scrollTo(0, 0);
+  mdSay('md_msg', '載入中…', true);
+  try{
+    mdData = await api('/api/admin/members/' + id + '/detail');
+    mdSay('md_msg', mdData.migrated ? '' : '資料庫還沒升級（請在 D1 執行 migrate_v26.sql），標籤、備註、封鎖下單要升級後才能使用。', false);
+    renderMemberDetail();
+  }catch(e){ mdSay('md_msg', e.message, false); }
+}
+
+function closeMemberDetail(){
+  document.getElementById('memDetailView').classList.add('hidden');
+  document.getElementById('memListView').classList.remove('hidden');
+  mdId = null;
+  loadMembers();
+}
+
+function mdEdit(){ const id = mdId; closeMemberDetail(); editMember(id); }
+function mdResetPassword(){ if (mdId) resetPassword(mdId); }
+
+function mdInfoItem(k, v){ return '<div><span class="k">' + k + '</span><span class="v">' + (v || '-') + '</span></div>'; }
+
+function renderMemberDetail(){
+  const d = mdData, m = d.member, st = d.stats, pt = d.points;
+  document.getElementById('md_name').textContent = m.name;
+  mdTags = m.tags.slice();
+  mdSavedTags = m.tags.slice();
+
+  document.getElementById('md_badges').innerHTML = (m.is_blocked ? '<span class="tag-blocked">已封鎖下單</span>' : '') + tagBadges(m.tags);
+  document.getElementById('md_blockbanner').innerHTML = m.is_blocked
+    ? '<div class="md-block"><b>此會員已被封鎖下單</b>' + (m.blocked_reason ? '<div>原因：' + escapeHtml(m.blocked_reason) + '</div>' : '') +
+      '<div style="color:var(--muted);font-size:12px;">' + (m.blocked_at ? toTaipeiTime(m.blocked_at) : '') + (m.blocked_by ? '　操作人：' + escapeHtml(m.blocked_by) : '') + '</div></div>'
+    : '';
+
+  document.getElementById('md_info').innerHTML =
+    mdInfoItem('帳號', escapeHtml(m.account || '')) +
+    mdInfoItem('TikTok', m.tiktok_id ? '@' + escapeHtml(m.tiktok_id) : '') +
+    mdInfoItem('電話', escapeHtml(m.phone || '')) +
+    mdInfoItem('電子信箱', escapeHtml(m.email || '') + (m.email && m.email_verified_at ? ' <span title="已通過信箱驗證" style="color:#1E7A56">✓</span>' : '')) +
+    mdInfoItem('推薦碼', m.referral_code ? '<code>' + escapeHtml(m.referral_code) + '</code>' : '') +
+    mdInfoItem('推薦人', escapeHtml(m.referred_by_name || '')) +
+    mdInfoItem('已推薦人數', String(d.referred_count)) +
+    mdInfoItem('加入時間', toTaipeiTime(m.created_at)) +
+    mdInfoItem('備註（基本資料）', escapeHtml(m.note || ''));
+
+  const kpi = function(l, v){ return '<div class="stat-kpi"><div class="l">' + l + '</div><div class="v">' + v + '</div></div>'; };
+  document.getElementById('md_kpis').innerHTML =
+    kpi('累計消費（已付款）', dMoney(st.paid_total)) +
+    kpi('已付款筆數', st.paid_count) +
+    kpi('平均每筆', dMoney(st.avg_paid)) +
+    kpi('本月消費', dMoney(st.month_total)) +
+    kpi('最近一次下單', st.last_order_at ? toTaipeiTime(st.last_order_at).split(' ')[0] : '-') +
+    kpi('進行中訂單', st.open_count) +
+    kpi('逾期／取消', st.dead_count) +
+    kpi('點數餘額', Number(pt.balance).toLocaleString('en-US'));
+
+  mdRenderTags();
+  mdRenderBlock();
+  mdRenderNotes();
+
+  document.querySelector('#md_orders tbody').innerHTML = d.orders.map(function(o){
+    const sl = STATUS_LABEL[o.status] || [o.status, 'b-pending'];
+    return '<tr>' +
+      '<td data-label="訂單編號">' + escapeHtml(o.order_no) + '</td>' +
+      '<td data-label="建立時間">' + toTaipeiTime(o.created_at) + '</td>' +
+      '<td data-label="平台">' + escapeHtml(PLATFORM_LABEL[o.platform] || o.platform || '-') + '</td>' +
+      '<td data-label="金額">' + dMoney(o.amount) + '</td>' +
+      '<td data-label="付款方式">' + escapeHtml(MD_PAY[o.payment_method] || '-') + '</td>' +
+      '<td data-label="狀態"><span class="badge ' + sl[1] + '">' + sl[0] + '</span>' + (o.is_completed ? ' 已結案' : '') + '</td>' +
+      '<td data-label="操作">' + (canUse('order_list') ? '<button class="btn secondary small" onclick="mdOpenOrder(\\'' + o.order_no + '\\')">查看</button>' : '-') + '</td></tr>';
+  }).join('') || '<tr><td colspan="7">這位會員還沒有訂單</td></tr>';
+
+  document.getElementById('md_points_sum').textContent = '目前餘額 ' + Number(pt.balance).toLocaleString('en-US') + ' 點　累計獲得 ' + Number(pt.earned).toLocaleString('en-US') + ' 點　累計使用 ' + Number(pt.spent).toLocaleString('en-US') + ' 點';
+  document.querySelector('#md_ledger tbody').innerHTML = pt.ledger.map(function(r){
+    return '<tr><td data-label="時間">' + toTaipeiTime(r.created_at) + '</td>' +
+      '<td data-label="異動"><b style="color:' + (r.delta >= 0 ? '#1E7A56' : 'var(--danger)') + '">' + (r.delta > 0 ? '+' : '') + r.delta + '</b></td>' +
+      '<td data-label="類型">' + escapeHtml(LEDGER_TYPE[r.type] || r.type) + '</td>' +
+      '<td data-label="備註">' + escapeHtml(r.note || '') + '</td></tr>';
+  }).join('') || '<tr><td colspan="4">沒有點數紀錄</td></tr>';
+}
+
+async function mdOpenOrder(orderNo){
+  if (!canUse('order_list')) return;
+  resetOrderSearchFields();
+  document.getElementById('ord_search').value = orderNo;
+  await runOrderSearch(collectOrderSearchQs());   // 先搜尋，切到訂單分頁時就會保留這個搜尋結果
+  showTab('orders');
+}
+
+// ---- 標籤 ----
+function mdTagsDirty(){ return JSON.stringify(mdTags) !== JSON.stringify(mdSavedTags); }
+
+function mdRenderTags(){
+  document.getElementById('md_tags_cur').innerHTML = mdTags.length
+    ? mdTags.map(function(t, i){ return '<span class="' + tagClass(t) + '">' + escapeHtml(t) + '<span class="x" title="移除" onclick="mdRemoveTag(' + i + ')">✕</span></span>'; }).join('')
+    : '<span style="color:var(--muted);font-size:13px;">還沒有標籤</span>';
+  document.getElementById('md_tag_presets').innerHTML = TAG_PRESETS.map(function(t){
+    const on = mdTags.some(function(x){ return x.toLowerCase() === t.toLowerCase(); });
+    return '<button type="button" class="btn secondary small" onclick="mdTogglePreset(\\'' + t + '\\')">' + (on ? '✓ ' : '+ ') + t + '</button>';
+  }).join('');
+  document.getElementById('md_tag_save').disabled = !mdTagsDirty();
+}
+function mdTogglePreset(t){
+  const i = mdTags.findIndex(function(x){ return x.toLowerCase() === t.toLowerCase(); });
+  if (i >= 0) mdTags.splice(i, 1);
+  else if (mdTags.length >= 10) { mdSay('md_tag_msg', '最多 10 個標籤', false); return; }
+  else mdTags.push(t);
+  mdSay('md_tag_msg', '', true);
+  mdRenderTags();
+}
+function mdRemoveTag(i){ mdTags.splice(i, 1); mdRenderTags(); }
+function mdAddTag(){
+  const inp = document.getElementById('md_tag_input');
+  const t = inp.value.replace(/\\s+/g, ' ').trim();
+  if (!t) return;
+  if (mdTags.some(function(x){ return x.toLowerCase() === t.toLowerCase(); })) { inp.value = ''; return; }
+  if (mdTags.length >= 10) { mdSay('md_tag_msg', '最多 10 個標籤', false); return; }
+  mdTags.push(t);
+  inp.value = '';
+  mdSay('md_tag_msg', '', true);
+  mdRenderTags();
+}
+async function mdSaveTags(){
+  try{
+    const r = await api('/api/admin/members/' + mdId + '/tags', {method:'PATCH', body: JSON.stringify({tags: mdTags})});
+    mdData.member.tags = r.tags;
+    mdTags = r.tags.slice();
+    mdSavedTags = r.tags.slice();
+    document.getElementById('md_badges').innerHTML = (mdData.member.is_blocked ? '<span class="tag-blocked">已封鎖下單</span>' : '') + tagBadges(r.tags);
+    mdRenderTags();
+    mdSay('md_tag_msg', '已儲存標籤', true);
+  }catch(e){ mdSay('md_tag_msg', e.message, false); }
+}
+
+// ---- 封鎖下單 ----
+function mdRenderBlock(){
+  const m = mdData.member;
+  const box = document.getElementById('md_block_ctl');
+  if (!canUse('members_block')) {
+    box.innerHTML = '<small class="hint">' + (m.is_blocked ? '這位會員目前被封鎖下單。' : '目前沒有封鎖。') + '你沒有封鎖或解除封鎖的權限。</small>';
+    return;
+  }
+  box.innerHTML = m.is_blocked
+    ? '<small class="hint">解除封鎖後，這位會員就可以再自助下單。</small><button class="btn secondary" onclick="mdSetBlock(false)">解除封鎖</button>'
+    : '<small class="hint">封鎖後，這位會員無法自助下單，後台結帳櫃檯和直播下單也不能替他建立訂單（直播留言只會記錄、不佔庫存）；已經建立的訂單不受影響。</small>' +
+      '<label>封鎖原因（只有後台看得到）</label><input id="md_block_reason" maxlength="200" placeholder="例如：多次下單未付款" autocomplete="off" />' +
+      '<button class="btn danger" onclick="mdSetBlock(true)">封鎖下單</button>';
+}
+async function mdSetBlock(blocked){
+  const m = mdData.member;
+  let reason = '';
+  if (blocked) {
+    reason = document.getElementById('md_block_reason').value.trim();
+    if (!confirm('確定封鎖「' + m.name + '」下單嗎？')) return;
+  } else if (!confirm('確定解除「' + m.name + '」的下單封鎖嗎？')) return;
+  try{
+    await api('/api/admin/members/' + mdId + '/block', {method:'POST', body: JSON.stringify({blocked: blocked, reason: reason})});
+    await openMemberDetail(mdId);
+    mdSay('md_block_msg', blocked ? '已封鎖下單' : '已解除封鎖', true);
+  }catch(e){ mdSay('md_block_msg', e.message, false); }
+}
+
+// ---- 備註紀錄 ----
+function mdRenderNotes(){
+  document.getElementById('md_notes').innerHTML = mdData.notes.map(function(n){
+    return '<div class="md-note"><div class="meta"><span>' + toTaipeiTime(n.created_at) + '　' + escapeHtml(n.admin_username) + '</span>' +
+      '<button class="btn danger small" onclick="mdDeleteNote(' + n.id + ')">刪除</button></div>' +
+      '<div class="body">' + escapeHtml(n.content) + '</div></div>';
+  }).join('') || '<div style="color:var(--muted);font-size:13px;margin-top:8px;">還沒有備註紀錄</div>';
+}
+async function mdAddNote(){
+  const ta = document.getElementById('md_note_text');
+  const content = ta.value.trim();
+  if (!content) { mdSay('md_note_msg', '請輸入備註內容', false); return; }
+  try{
+    const r = await api('/api/admin/members/' + mdId + '/notes', {method:'POST', body: JSON.stringify({content: content})});
+    mdData.notes.unshift(r.note);
+    ta.value = '';
+    mdRenderNotes();
+    mdSay('md_note_msg', '已新增備註', true);
+  }catch(e){ mdSay('md_note_msg', e.message, false); }
+}
+async function mdDeleteNote(noteId){
+  if (!confirm('確定刪除這則備註嗎？')) return;
+  try{
+    await api('/api/admin/members/' + mdId + '/notes/' + noteId, {method:'DELETE'});
+    mdData.notes = mdData.notes.filter(function(n){ return n.id !== noteId; });
+    mdRenderNotes();
+    mdSay('md_note_msg', '已刪除備註', true);
+  }catch(e){ mdSay('md_note_msg', e.message, false); }
+}
+
 function toggleMembersPanel(){
   document.getElementById('membersToggle').classList.toggle('open');
   document.getElementById('membersPanel').classList.toggle('hidden');
@@ -2470,7 +2762,7 @@ function memFilteredList(){
   const q = document.getElementById('mem_search').value.trim().toLowerCase();
   if (!q) return membersCache;
   return membersCache.filter(m=>
-    [m.name, m.account, m.tiktok_id, m.phone, m.email, m.note].some(v=> v && String(v).toLowerCase().indexOf(q) >= 0)
+    [m.name, m.account, m.tiktok_id, m.phone, m.email, m.note, (m.tags || []).join(' '), m.is_blocked ? '已封鎖 封鎖下單' : ''].some(v=> v && String(v).toLowerCase().indexOf(q) >= 0)
   );
 }
 
@@ -2485,16 +2777,25 @@ function renderMembersTable(){
   const shown = list.slice((memPage - 1) * MEM_PAGE_SIZE, memPage * MEM_PAGE_SIZE);
 
   const tbody = document.querySelector('#mem_table tbody');
-  tbody.innerHTML = shown.map(m=>\`<tr>
-    <td data-label="ID">\${m.id}</td><td data-label="姓名">\${m.name}</td><td data-label="帳號">\${m.account||''}</td><td data-label="TikTok">\${m.tiktok_id?'@'+m.tiktok_id:''}</td><td data-label="電話">\${m.phone||''}</td><td data-label="電子信箱">\${m.email||''}\${m.email && m.email_verified_at ? ' <span title="已通過信箱驗證" style="color:#1E7A56">✓</span>' : ''}</td><td data-label="備註">\${m.note||''}</td>
-    <td data-label="推薦碼"><code>\${m.referral_code||''}</code> <button class="btn secondary small" onclick="copyReferralLink('\${m.referral_code}')">複製邀請連結</button></td>
-    <td data-label="推薦人">\${m.referred_by_name||'-'}</td>
-    <td data-label="操作">
-      <button class="btn secondary small" onclick="editMember(\${m.id})">編輯</button>
-      <button class="btn secondary small" onclick="resetPassword(\${m.id})">設定密碼</button>
-      <button class="btn danger small need-members_delete" onclick="deleteMember(\${m.id})">刪除</button>
-    </td>
-  </tr>\`).join('') || '<tr><td colspan="10">'+(membersCache.length ? '找不到符合的會員' : '尚無會員')+'</td></tr>';
+  tbody.innerHTML = shown.map(function(m){
+    const flags = (m.is_blocked ? '<span class="tag-blocked">已封鎖下單</span>' : '') + tagBadges(m.tags);
+    return '<tr>' +
+      '<td data-label="ID">' + m.id + '</td>' +
+      '<td data-label="姓名"><a href="#" style="font-weight:600;" onclick="openMemberDetail(' + m.id + ');return false;">' + escapeHtml(m.name) + '</a>' + (flags ? '<div>' + flags + '</div>' : '') + '</td>' +
+      '<td data-label="帳號">' + escapeHtml(m.account || '') + '</td>' +
+      '<td data-label="TikTok">' + (m.tiktok_id ? '@' + escapeHtml(m.tiktok_id) : '') + '</td>' +
+      '<td data-label="電話">' + escapeHtml(m.phone || '') + '</td>' +
+      '<td data-label="電子信箱">' + escapeHtml(m.email || '') + (m.email && m.email_verified_at ? ' <span title="已通過信箱驗證" style="color:#1E7A56">✓</span>' : '') + '</td>' +
+      '<td data-label="備註">' + escapeHtml(m.note || '') + '</td>' +
+      '<td data-label="推薦碼"><code>' + escapeHtml(m.referral_code || '') + '</code> <button class="btn secondary small" onclick="copyReferralLink(\\'' + escapeHtml(m.referral_code || '') + '\\')">複製邀請連結</button></td>' +
+      '<td data-label="推薦人">' + escapeHtml(m.referred_by_name || '-') + '</td>' +
+      '<td data-label="操作">' +
+        '<button class="btn small" onclick="openMemberDetail(' + m.id + ')">詳細</button> ' +
+        '<button class="btn secondary small" onclick="editMember(' + m.id + ')">編輯</button> ' +
+        '<button class="btn secondary small" onclick="resetPassword(' + m.id + ')">設定密碼</button> ' +
+        '<button class="btn danger small need-members_delete" onclick="deleteMember(' + m.id + ')">刪除</button>' +
+      '</td></tr>';
+  }).join('') || '<tr><td colspan="10">' + (membersCache.length ? '找不到符合的會員' : '尚無會員') + '</td></tr>';
 
   const q = document.getElementById('mem_search').value.trim();
   document.getElementById('mem_count').textContent = q
@@ -5654,12 +5955,23 @@ async function api(path, opts={}) {
   return data;
 }
 
+// 被店家封鎖下單的會員：不能建立訂單，其餘功能（看訂單、點數）照常
+function applyBlockedNotice(blocked){
+  window.memberBlocked = !!blocked;
+  if (!blocked) return;
+  const btn = document.getElementById('newOrderBtn');
+  if (btn) btn.disabled = true;
+  const m = document.getElementById('newOrderMsg');
+  if (m) { m.textContent = '您的帳號目前無法下單，如有疑問請聯絡客服。'; m.className = 'msg err'; }
+}
+
 async function checkSession(){
   try{
     const me = await api('/api/member/me');
     document.getElementById('whoami').textContent = me.name + '（' + me.account + '）';
     document.getElementById('myReferralCode').textContent = me.referral_code || '------';
     renderProfile(me);
+    applyBlockedNotice(me.blocked);
     document.getElementById('loginView').classList.add('hidden');
     document.getElementById('appView').classList.remove('hidden');
     await loadRates();

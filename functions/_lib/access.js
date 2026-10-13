@@ -11,6 +11,7 @@ export const PERMISSIONS = [
   { key: "orders_delete", label: "永久刪除訂單", desc: "危險操作，刪除後無法復原", requires: "order_list" },
   { key: "members", label: "會員管理", desc: "新增、編輯會員，重設會員密碼" },
   { key: "members_delete", label: "刪除會員", desc: "危險操作，刪除後無法復原", requires: "members" },
+  { key: "members_block", label: "封鎖／解除封鎖會員下單", desc: "封鎖後該會員無法自助下單，後台也不能替他建立訂單", requires: "members" },
   { key: "stats", label: "儲值統計／資料匯出", desc: "查看每月儲值統計、下載匯出檔" },
   { key: "settings", label: "付款設定／系統公告", desc: "付款方式、儲值平台、銀行資料、公告" },
   { key: "rates", label: "費率設定", desc: "修改各平台的費率" },
@@ -67,7 +68,13 @@ export function requiredAdminPermission(path, method) {
     case "order-items": // 訂單的品項（修改、刪除、標記交貨）屬於訂單列表
       return "order_list";
     case "members":
-      if (m === "DELETE") return "members_delete";
+      if (m === "DELETE") {
+        // 刪除「備註紀錄」只需要會員管理權限；刪除整個會員才是危險操作
+        if (/\/members\/\d+\/notes\/\d+\/?$/.test(String(path))) return "members";
+        return "members_delete";
+      }
+      if (m === "POST" && /\/members\/\d+\/block\/?$/.test(String(path))) return "members_block";
+      if (read && /\/members\/\d+\/detail\/?$/.test(String(path))) return "members"; // 詳細頁含消費、點數、備註，需要會員管理權限
       return read ? { any: ["members", "checkout", "order_list", "live", "points"] } : "members"; // 結帳櫃檯、直播、點數都要挑會員
     case "stats":
     case "export":

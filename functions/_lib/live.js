@@ -237,7 +237,7 @@ async function queryIn(env, sqlBefore, fixedBinds, values, sqlAfter = "") {
 // 把解析好的留言寫進 live_comments：手動貼上與自動抓取共用同一套歸戶、庫存、候補規則。
 // parsed 的每一筆可帶 source（留言編號），有的話用「編號:第幾個商品」去重，重送不會重複寫入。
 async function insertParsed(env, roundId, parsed) {
-  const summary = { ok: 0, unbound: 0, waitlist: 0, invalid: 0, duplicate: 0 };
+  const summary = { ok: 0, unbound: 0, waitlist: 0, invalid: 0, duplicate: 0, blocked: 0 };
 
   // 先排除已經寫過的留言（只查每則留言的第 0 個商品；同一則留言的列是一起寫入的）
   const firstKeys = parsed.filter((p) => p.source).map((p) => p.source + ":0");
@@ -270,7 +270,7 @@ async function insertParsed(env, roundId, parsed) {
   const ids = [...new Set(todo.filter((p) => !p.error && p.tiktok_id).map((p) => p.tiktok_id))];
   const memberByTiktok = new Map();
   if (ids.length) {
-    const rows = await queryIn(env, "SELECT id, tiktok_id FROM members WHERE tiktok_id IN ", [], ids);
+    const rows = await queryIn(env, "SELECT * FROM members WHERE tiktok_id IN ", [], ids);
     rows.forEach((m) => memberByTiktok.set(m.tiktok_id, m));
   }
 
@@ -297,6 +297,12 @@ async function insertParsed(env, roundId, parsed) {
       if (!(it.qty > 0)) {
         batch.push(insert.bind(roundId, p.tiktok_id, p.raw, it.code, it.qty, null, "invalid", "數量必須大於 0", src(idx)));
         summary.invalid++;
+        return;
+      }
+      // 被封鎖下單的會員：留言只記錄、不佔庫存、不會建單
+      if (member && member.is_blocked) {
+        batch.push(insert.bind(roundId, p.tiktok_id, p.raw, it.code, it.qty, member.id, "blocked", "此會員已被封鎖下單", src(idx)));
+        summary.blocked++;
         return;
       }
       let status = member ? "ok" : "unbound";
@@ -404,8 +410,11 @@ export async function handleLiveBindComment(id, request, env) {
   if (!c) return json({ error: "找不到此留言" }, 404);
   if (c.status === "ordered") return json({ error: "此留言已建立訂單" }, 400);
   const body = await request.json().catch(() => ({}));
-  const member = await env.DB.prepare("SELECT id, tiktok_id FROM members WHERE id=?").bind(body.member_id).first();
+  const member = await env.DB.prepare("SELECT * FROM members WHERE id=?").bind(body.member_id).first();
   if (!member) return json({ error: "找不到指定會員" }, 400);
+  const blockedMember = !!member.is_blocked;
+  const okStatus = blockedMember ? "blocked" : "ok";
+  const blockedErr = blockedMember ? "此會員已被封鎖下單" : null;
 
   let bound = 0;
   if (body.save_binding && c.tiktok_id) {
@@ -416,15 +425,15 @@ export async function handleLiveBindComment(id, request, env) {
     if (other) return json({ error: "此 TikTok 帳號已綁定其他會員" }, 400);
     await env.DB.prepare("UPDATE members SET tiktok_id=? WHERE id=?").bind(c.tiktok_id, member.id).run();
     const r = await env.DB.prepare(
-      "UPDATE live_comments SET member_id=?, status='ok' WHERE tiktok_id=? AND status IN ('unbound','guest')"
+      "UPDATE live_comments SET member_id=?, status=?, error=? WHERE tiktok_id=? AND status IN ('unbound','guest')"
     )
-      .bind(member.id, c.tiktok_id)
+      .bind(member.id, okStatus, blockedErr, c.tiktok_id)
       .run();
     bound = r.meta.changes || 0;
   }
   // 不論有沒有記住，這一筆一定歸給該會員（候補維持候補）
-  const newStatus = c.status === "waitlist" ? "waitlist" : "ok";
-  await env.DB.prepare("UPDATE live_comments SET member_id=?, status=? WHERE id=?").bind(member.id, newStatus, id).run();
+  const newStatus = blockedMember ? "blocked" : c.status === "waitlist" ? "waitlist" : "ok";
+  await env.DB.prepare("UPDATE live_comments SET member_id=?, status=?, error=COALESCE(?, error) WHERE id=?").bind(member.id, newStatus, blockedErr, id).run();
   return json({ ok: true, bound });
 }
 
@@ -443,7 +452,8 @@ export async function handleLivePromoteComment(id, env) {
   const c = await getComment(env, id);
   if (!c) return json({ error: "找不到此留言" }, 404);
   if (c.status !== "waitlist") return json({ error: "只有「候補」的留言可以改為正式" }, 400);
-  const member = c.tiktok_id ? await env.DB.prepare("SELECT id FROM members WHERE tiktok_id=?").bind(c.tiktok_id).first() : null;
+  const member = c.tiktok_id ? await env.DB.prepare("SELECT * FROM members WHERE tiktok_id=?").bind(c.tiktok_id).first() : null;
+  if (member && member.is_blocked) return json({ error: "此會員已被封鎖下單，不能改為正式" }, 400);
   await env.DB.prepare("UPDATE live_comments SET status=?, member_id=? WHERE id=?")
     .bind(member ? "ok" : "unbound", member ? member.id : null, id)
     .run();
@@ -460,6 +470,20 @@ export async function handleLiveDeleteComment(id, env) {
 
 // 重新比對：會員資料補上 TikTok 帳號之後，把未綁定的留言歸戶
 export async function handleLiveRematch(roundId, env) {
+  let blockedCount = 0;
+  try {
+    const b = await env.DB.prepare(
+      `UPDATE live_comments SET status='blocked', error='此會員已被封鎖下單',
+         member_id=(SELECT m.id FROM members m WHERE m.tiktok_id = live_comments.tiktok_id)
+       WHERE round_id=? AND status='unbound'
+         AND EXISTS (SELECT 1 FROM members m WHERE m.tiktok_id = live_comments.tiktok_id AND m.is_blocked = 1)`
+    )
+      .bind(roundId)
+      .run();
+    blockedCount = b.meta.changes || 0;
+  } catch (e) {
+    if (!/no such column/i.test(String(e && e.message))) throw e; // 還沒執行 migrate_v26.sql
+  }
   const r = await env.DB.prepare(
     `UPDATE live_comments SET status='ok',
        member_id=(SELECT m.id FROM members m WHERE m.tiktok_id = live_comments.tiktok_id)
@@ -468,7 +492,7 @@ export async function handleLiveRematch(roundId, env) {
   )
     .bind(roundId)
     .run();
-  return json({ ok: true, matched: r.meta.changes || 0 });
+  return json({ ok: true, matched: (r.meta.changes || 0) + blockedCount, blocked: blockedCount });
 }
 
 // 建立訂單：待建單（會員）與非會員的留言，同一人合併成一張訂單；沿用原本的建單邏輯與 3 小時連結
@@ -525,7 +549,7 @@ export async function handleLiveCreateOrders(roundId, request, env, createOrderF
     }
   }
   const skipped = await env.DB.prepare(
-    "SELECT COUNT(*) AS n FROM live_comments WHERE round_id=? AND status IN ('unbound','waitlist')"
+    "SELECT COUNT(*) AS n FROM live_comments WHERE round_id=? AND status IN ('unbound','waitlist','blocked')"
   )
     .bind(roundId)
     .first();
