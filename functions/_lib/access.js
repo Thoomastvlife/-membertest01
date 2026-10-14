@@ -53,6 +53,7 @@ export function requiredAdminPermission(path, method) {
   switch (seg) {
     case "me":
     case "push":
+    case "2fa": // 兩步驟驗證：每個登入帳號都只能管理「自己」的，伺服器端用 session.adminId，不吃網址參數
       return null;
     case "staff":
       return read ? { any: ["OWNER", "logs"] } : "OWNER"; // 操作紀錄的帳號篩選要讀帳號名稱
@@ -112,21 +113,30 @@ export function parsePermissions(raw) {
 // 讀出目前登入帳號的角色與權限。回傳 null 代表這個帳號已經不存在（被刪除），要請他重新登入。
 export async function getAdminAccess(env, session) {
   let row;
+  let totpColumnMissing = false;
   try {
-    row = await env.DB.prepare("SELECT id, username, role, permissions FROM admins WHERE id=?").bind(session.adminId).first();
+    row = await env.DB.prepare("SELECT id, username, role, permissions, totp_enabled FROM admins WHERE id=?").bind(session.adminId).first();
   } catch (e) {
-    if (/no such column/i.test(String(e && e.message))) {
-      // 資料庫還沒執行 migrate_v22.sql：維持舊行為（所有帳號都是管理員），不要讓整個後台壞掉
-      return { id: session.adminId, username: session.username, owner: true, legacy: true, configured: true, perms: new Set(PERMISSION_KEYS) };
+    if (!/no such column/i.test(String(e && e.message))) throw e;
+    totpColumnMissing = true; // 還沒執行 migrate_v28.sql，降級查詢，繼續往下走
+  }
+  if (totpColumnMissing) {
+    try {
+      row = await env.DB.prepare("SELECT id, username, role, permissions FROM admins WHERE id=?").bind(session.adminId).first();
+    } catch (e) {
+      if (/no such column/i.test(String(e && e.message))) {
+        // 資料庫還沒執行 migrate_v22.sql：維持舊行為（所有帳號都是管理員），不要讓整個後台壞掉
+        return { id: session.adminId, username: session.username, owner: true, legacy: true, configured: true, perms: new Set(PERMISSION_KEYS), totpEnabled: false };
+      }
+      throw e;
     }
-    throw e;
   }
   if (!row) return null;
   const owner = row.role === "owner";
   const parsed = owner ? null : parsePermissions(row.permissions);
   const configured = owner || parsed !== null;
   const perms = new Set(owner || parsed === null ? PERMISSION_KEYS : parsed);
-  return { id: row.id, username: row.username, owner, legacy: false, configured, perms };
+  return { id: row.id, username: row.username, owner, legacy: false, configured, perms, totpEnabled: !!row.totp_enabled };
 }
 
 export function canAccess(access, need) {
@@ -144,5 +154,6 @@ export function accessSummary(access) {
     configured: access.configured,
     permissions: PERMISSION_KEYS.filter((k) => access.perms.has(k)),
     catalog: PERMISSIONS,
+    totp_enabled: !!access.totpEnabled,
   };
 }

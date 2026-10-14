@@ -1,5 +1,4 @@
 import { handleDailyReportCron, handleDailyReportTest } from "./_lib/report.js";
-import { getBankAccounts, saveBankAccounts, chooseBank } from "./_lib/banks.js";
 import { adminHtml, payHtml, memberHtml, memberRegisterHtml } from "./_lib/templates.js";
 import {
   getPlatforms,
@@ -59,6 +58,14 @@ import {
   parseTags,
 } from "./_lib/memberdetail.js";
 import { PERMISSIONS, DEFAULT_STAFF_PERMISSIONS, normalizePermissions, requiredAdminPermission, getAdminAccess, canAccess, accessSummary } from "./_lib/access.js";
+import {
+  handleTotpSetup,
+  handleTotpConfirm,
+  handleTotpDisable,
+  handleTotpRegenerateBackupCodes,
+  handleTotpAdminReset,
+  handleUnlockLogin,
+} from "./_lib/twofa.js";
 import { getRateRules, saveRateRules, getAllRateRules, getRateGroupForPlatform, RATE_GROUPS, DEFAULT_RATE_RULES, MIN_QUOTE_AMOUNT, calcCoins, isCustomRateGroup } from "./_lib/rates.js";
 
 // 會員自助下單的最低金額，跟查價系統的最低查詢金額保持一致
@@ -88,6 +95,11 @@ import {
   notifyAdminsOfNewOrder,
   notifyAdminsOfPendingVerify,
   notifyAdminsOfPendingBarcode,
+  loginLockoutConfig,
+  bumpFailedLogin,
+  clearFailedLogin,
+  verifyTotpCode,
+  consumeBackupCode,
   generateReferralCode,
   ensureMemberReferralCode,
   applyCouponToAmount,
@@ -612,11 +624,54 @@ async function handleSetupAdmin(request, env) {
 
 async function handleLogin(request, env) {
   const body = await request.json().catch(() => ({}));
-  const { username, password } = body;
-  const admin = await env.DB.prepare("SELECT * FROM admins WHERE username=?").bind(username).first();
+  const { username, password, totp_code } = body;
+  if (!username || !password) return json({ error: "帳號或密碼錯誤" }, 401);
+  const { maxAttempts, lockoutMinutes } = loginLockoutConfig(env);
+
+  let admin;
+  try {
+    admin = await env.DB.prepare(
+      `SELECT *, (locked_until IS NOT NULL AND locked_until > datetime('now')) AS is_locked FROM admins WHERE username=?`
+    ).bind(username).first();
+  } catch (e) {
+    if (!/no such column/i.test(String(e && e.message))) throw e;
+    admin = await env.DB.prepare("SELECT * FROM admins WHERE username=?").bind(username).first(); // 還沒執行 migrate_v28.sql
+  }
   if (!admin) return json({ error: "帳號或密碼錯誤" }, 401);
+
+  if (admin.is_locked) {
+    return json({ error: `登入失敗次數過多，帳號已暫時鎖定，請 ${lockoutMinutes} 分鐘後再試` }, 429);
+  }
+
   const valid = await verifyPassword(password, admin.password_hash);
-  if (!valid) return json({ error: "帳號或密碼錯誤" }, 401);
+  if (!valid) {
+    await bumpFailedLogin(env, "admins", admin.id, admin.failed_attempts, maxAttempts, lockoutMinutes);
+    return json({ error: "帳號或密碼錯誤" }, 401);
+  }
+
+  // 密碼正確之後，才檢查這個帳號有沒有啟用兩步驟驗證（選用功能，大多數帳號不會有）
+  if (admin.totp_enabled) {
+    if (!totp_code) {
+      return json({ error: "請輸入驗證器 App 顯示的 6 位數驗證碼", need_totp: true }, 401);
+    }
+    let ok = await verifyTotpCode(admin.totp_secret, totp_code);
+    if (!ok) {
+      const consumed = await consumeBackupCode(admin.totp_backup_codes, totp_code);
+      if (consumed.ok) {
+        ok = true;
+        await env.DB.prepare("UPDATE admins SET totp_backup_codes=? WHERE id=?")
+          .bind(JSON.stringify(consumed.remaining), admin.id).run();
+      }
+    }
+    if (!ok) {
+      // 驗證碼錯誤也算一次失敗，避免有人密碼猜對後繼續狂試六位數驗證碼
+      await bumpFailedLogin(env, "admins", admin.id, admin.failed_attempts, maxAttempts, lockoutMinutes);
+      return json({ error: "驗證碼不正確", need_totp: true }, 401);
+    }
+  }
+
+  await clearFailedLogin(env, "admins", admin.id);
+
   const ttlHours = parseInt(env.SESSION_TTL_HOURS || "12", 10);
   const session = await signSession(
     { adminId: admin.id, username: admin.username, exp: Date.now() + ttlHours * 3600 * 1000 },
@@ -648,17 +703,30 @@ async function handleListStaff(env, access) {
   } else {
     let r;
     try {
-      r = await env.DB.prepare("SELECT id, username, role, permissions, email, created_at FROM admins ORDER BY created_at ASC").all();
+      r = await env.DB.prepare(
+        `SELECT id, username, role, permissions, email, created_at, totp_enabled,
+                (locked_until IS NOT NULL AND locked_until > datetime('now')) AS is_locked
+           FROM admins ORDER BY created_at ASC`
+      ).all();
     } catch (e) {
       if (!/no such column/i.test(String(e && e.message))) throw e;
-      r = await env.DB.prepare("SELECT id, username, role, permissions, created_at FROM admins ORDER BY created_at ASC").all(); // 還沒執行 migrate_v24.sql
+      try {
+        r = await env.DB.prepare("SELECT id, username, role, permissions, email, created_at FROM admins ORDER BY created_at ASC").all(); // 還沒執行 migrate_v28.sql
+      } catch (e2) {
+        if (!/no such column/i.test(String(e2 && e2.message))) throw e2;
+        r = await env.DB.prepare("SELECT id, username, role, permissions, created_at FROM admins ORDER BY created_at ASC").all(); // 還沒執行 migrate_v24.sql
+      }
     }
     rows = r.results.map((x) => {
       let perms = null;
       if (x.role !== "owner" && x.permissions != null && x.permissions !== "") {
         try { perms = normalizePermissions(JSON.parse(x.permissions)); } catch { perms = []; }
       }
-      return { id: x.id, username: x.username, role: x.role === "owner" ? "owner" : "staff", permissions: perms, email: x.email || "", created_at: x.created_at };
+      return {
+        id: x.id, username: x.username, role: x.role === "owner" ? "owner" : "staff", permissions: perms,
+        email: x.email || "", created_at: x.created_at,
+        totp_enabled: !!x.totp_enabled, is_locked: !!x.is_locked,
+      };
     });
   }
   return json(rows);
@@ -1222,6 +1290,7 @@ async function handleCreateOrder(request, env) {
   } else {
     amt = parseFloat(amount);
   }
+  if (body.amount_mode === "items" && !(amt > 0)) return json({ error: "品項合計必須大於 0（折扣加總後不能是 0 或負數）" }, 400);
   if (!amt || amt <= 0) return json({ error: "金額不正確" }, 400);
   if (payment_method && !PAYMENT_METHODS.has(payment_method)) return json({ error: "付款方式不正確" }, 400);
   if (storeBrand && !CVS_STORES[storeBrand]) return json({ error: "超商選擇不正確" }, 400);
@@ -1369,7 +1438,8 @@ function parseCheckoutItems(raw) {
     const qty = parseFloat(it.qty);
     const unit_price = parseFloat(it.unit_price);
     if (!(qty > 0) || qty > 1000000) return { error: `「${name}」的數量不正確` };
-    if (!(unit_price >= 0) || unit_price > 100000000) return { error: `「${name}」的單價不正確` };
+    // 單價可以是 0（贈品）或負數（折扣）；只擋掉不是數字、或大得不合理的值
+    if (!Number.isFinite(unit_price) || Math.abs(unit_price) > 100000000) return { error: `「${name}」的單價不正確` };
     items.push({ name, qty, unit_price, note: it.note ? String(it.note).slice(0, 200) : null });
   }
   return { items };
@@ -1463,7 +1533,8 @@ async function handleCorrectOrder(id, request, env) {
   let correctedAmount = order.amount;
   if (body.amount !== undefined && body.amount !== null && String(body.amount).trim() !== "") {
     const amt = parseFloat(body.amount);
-    if (!amt || amt <= 0) return json({ error: "金額不正確" }, 400);
+    // 更正金額允許 0 或負數：事後補登折扣／退款用，跟訂單品項的單價一樣（0＝贈品、負數＝折扣／退款）
+    if (!Number.isFinite(amt) || Math.abs(amt) > 100000000) return json({ error: "金額不正確" }, 400);
     fields.push("amount=?");
     binds.push(amt);
     correctedAmount = amt;
@@ -1657,7 +1728,8 @@ async function handleAddOrderItem(id, request, env) {
   const name = String(body.name || "").trim();
   if (!name) return json({ error: "品名不能為空" }, 400);
   const qty = parseFloat(body.qty) || 1;
-  const unit_price = parseFloat(body.unit_price) || 0;
+  const unit_price = body.unit_price === undefined || body.unit_price === null || body.unit_price === "" ? 0 : Number(body.unit_price);
+  if (!Number.isFinite(unit_price) || Math.abs(unit_price) > 100000000) return json({ error: "單價不正確" }, 400); // 0＝贈品、負數＝折扣都可以
   const note = body.note ? String(body.note).slice(0, 200) : null;
   const { meta } = await env.DB.prepare(
     "INSERT INTO order_items (order_id, name, qty, unit_price, note, sort_order, created_at) VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order),0)+1 FROM order_items WHERE order_id=?), datetime('now'))"
@@ -1674,7 +1746,11 @@ async function handleUpdateOrderItem(itemId, request, env) {
   const fields = [], binds = [];
   if (body.name !== undefined) { fields.push("name=?"); binds.push(String(body.name).trim() || item.name); }
   if (body.qty !== undefined) { fields.push("qty=?"); binds.push(parseFloat(body.qty) || 1); }
-  if (body.unit_price !== undefined) { fields.push("unit_price=?"); binds.push(parseFloat(body.unit_price) || 0); }
+  if (body.unit_price !== undefined) {
+    const up = body.unit_price === null || body.unit_price === "" ? 0 : Number(body.unit_price);
+    if (!Number.isFinite(up) || Math.abs(up) > 100000000) return json({ error: "單價不正確" }, 400); // 0＝贈品、負數＝折扣都可以
+    fields.push("unit_price=?"); binds.push(up);
+  }
   if (body.note !== undefined) { fields.push("note=?"); binds.push(body.note ? String(body.note).slice(0, 200) : null); }
   if (!fields.length) return json({ ok: true });
   await env.DB.prepare(`UPDATE order_items SET ${fields.join(",")} WHERE id=?`).bind(...binds, itemId).run();
@@ -1738,6 +1814,8 @@ async function sendOrderDetailEmail(env, order, opts = {}) {
   // ---- 計算品項小計 ----
   const itemsTotal = items.reduce((s, it) => s + it.qty * it.unit_price, 0);
   const hasItems = items.length > 0;
+  // 金額格式：負數（折扣）顯示成 -$20，不要變成 $-20
+  const money = (n) => { const v = Math.round((Number(n) || 0) * 100) / 100; return (v < 0 ? "-" : "") + "$" + Math.abs(v).toLocaleString(); };
 
   // ---- HTML ----
   const escM = (s) => String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
@@ -1745,7 +1823,7 @@ async function sendOrderDetailEmail(env, order, opts = {}) {
     ["訂單編號", orderNo],
     ["儲值平台", platformLabel],
     ["付款方式", payMethod],
-    ["訂單金額", "$" + order.amount.toLocaleString()],
+    ["訂單金額", money(order.amount) + (order.amount < 0 ? "（折扣／退款）" : "")],
     ["付款狀態", paidLabel + (paidAt ? "（" + paidAt + "）" : "")],
     ["結案狀態", completedLabel],
   ].map(r => `<tr><td style="padding:5px 14px 5px 0;color:#767B8C;white-space:nowrap;font-size:14px;">${escM(r[0])}</td><td style="padding:5px 0;font-weight:600;font-size:14px;">${escM(r[1])}</td></tr>`).join("");
@@ -1757,14 +1835,16 @@ async function sendOrderDetailEmail(env, order, opts = {}) {
     const deliveredBg = "#f0fdf4";
     const undeliveredBg = "#fff";
     const rows = items.map((it, i) => {
-      const sub = (it.qty * it.unit_price).toLocaleString();
-      const dl = it.is_delivered ? '<span style="color:#1f9d55;font-weight:600;">✓ 已交貨</span>' : '<span style="color:#f59e0b;font-weight:600;">◎ 未交貨</span>';
+      const subNum = it.qty * it.unit_price;
+      const isDiscount = it.unit_price < 0;
+      const negStyle = isDiscount ? "color:#c0392b;" : "";
+      const dl = isDiscount ? '<span style="color:#9ca3af;">折扣</span>' : it.is_delivered ? '<span style="color:#1f9d55;font-weight:600;">✓ 已交貨</span>' : '<span style="color:#f59e0b;font-weight:600;">◎ 未交貨</span>';
       const bg = it.is_delivered ? deliveredBg : undeliveredBg;
       return `<tr style="background:${bg};">
         <td style="padding:7px 10px;border-bottom:1px solid #eee;font-size:13px;">${escM(it.name)}${it.note ? '<br/><span style="color:#9ca3af;font-size:12px;">' + escM(it.note) + '</span>' : ''}</td>
         <td style="padding:7px 10px;border-bottom:1px solid #eee;font-size:13px;text-align:right;">${it.qty}</td>
-        <td style="padding:7px 10px;border-bottom:1px solid #eee;font-size:13px;text-align:right;">$${it.unit_price.toLocaleString()}</td>
-        <td style="padding:7px 10px;border-bottom:1px solid #eee;font-size:13px;text-align:right;font-weight:600;">$${sub}</td>
+        <td style="padding:7px 10px;border-bottom:1px solid #eee;font-size:13px;text-align:right;${negStyle}">${money(it.unit_price)}</td>
+        <td style="padding:7px 10px;border-bottom:1px solid #eee;font-size:13px;text-align:right;font-weight:600;${negStyle}">${money(subNum)}</td>
         <td style="padding:7px 10px;border-bottom:1px solid #eee;font-size:13px;">${dl}</td>
       </tr>`;
     }).join("");
@@ -1780,13 +1860,13 @@ async function sendOrderDetailEmail(env, order, opts = {}) {
         <tbody>${rows}</tbody>
         <tfoot><tr style="background:#f8f9fb;">
           <td colspan="3" style="padding:7px 10px;font-weight:700;font-size:14px;">合計</td>
-          <td style="padding:7px 10px;font-weight:700;font-size:14px;text-align:right;">$${itemsTotal.toLocaleString()}</td>
+          <td style="padding:7px 10px;font-weight:700;font-size:14px;text-align:right;">${money(itemsTotal)}</td>
           <td></td>
         </tr></tfoot>
       </table>`;
     itemsText = "\n\n【訂單明細】\n" + items.map((it, i) =>
-      `  ${i+1}. ${it.name}　×${it.qty}　$${it.unit_price}　小計 $${(it.qty*it.unit_price).toFixed(0)}　${it.is_delivered ? "已交貨" : "未交貨"}` + (it.note ? `（${it.note}）` : "")
-    ).join("\n") + `\n合計：$${itemsTotal.toLocaleString()}`;
+      `  ${i+1}. ${it.name}　×${it.qty}　${money(it.unit_price)}　小計 ${money(it.qty * it.unit_price)}　${it.unit_price < 0 ? "折扣" : it.is_delivered ? "已交貨" : "未交貨"}` + (it.note ? `（${it.note}）` : "")
+    ).join("\n") + `\n合計：${money(itemsTotal)}`;
   }
 
   const subject = hasItems ? `【訂單明細】${orderNo}` : `【訂單資訊】${orderNo}`;
@@ -1797,7 +1877,7 @@ async function sendOrderDetailEmail(env, order, opts = {}) {
     ${itemsHtml}
     <p style="color:#9ca3af;font-size:12px;margin-top:20px;">這是系統寄送的訂單通知，如有疑問請直接聯絡店家。</p>
   </div>`;
-  const textBody = `${name} 您好，以下是您的訂單資訊：\n\n訂單編號：${orderNo}\n儲值平台：${platformLabel}\n付款方式：${payMethod}\n訂單金額：$${order.amount.toLocaleString()}\n付款狀態：${paidLabel}${paidAt ? "（" + paidAt + "）" : ""}\n結案狀態：${completedLabel}${itemsText}`;
+  const textBody = `${name} 您好，以下是您的訂單資訊：\n\n訂單編號：${orderNo}\n儲值平台：${platformLabel}\n付款方式：${payMethod}\n訂單金額：${money(order.amount)}${order.amount < 0 ? "（折扣／退款）" : ""}\n付款狀態：${paidLabel}${paidAt ? "（" + paidAt + "）" : ""}\n結案狀態：${completedLabel}${itemsText}`;
 
   try {
     await sendEmail(env, { to: toAddr, from: orderSender, subject, html: htmlBody, text: textBody });
@@ -2342,12 +2422,29 @@ async function handleMemberLogin(request, env) {
   const body = await request.json().catch(() => ({}));
   const { account, password } = body;
   if (!account || !password) return json({ error: "請輸入帳號與密碼" }, 400);
-  const member = await env.DB.prepare("SELECT * FROM members WHERE account=?").bind(account.trim()).first();
+  const { maxAttempts, lockoutMinutes } = loginLockoutConfig(env);
+
+  let member;
+  try {
+    member = await env.DB.prepare(
+      `SELECT *, (locked_until IS NOT NULL AND locked_until > datetime('now')) AS is_locked FROM members WHERE account=?`
+    ).bind(account.trim()).first();
+  } catch (e) {
+    if (!/no such column/i.test(String(e && e.message))) throw e;
+    member = await env.DB.prepare("SELECT * FROM members WHERE account=?").bind(account.trim()).first(); // 還沒執行 migrate_v28.sql
+  }
   if (!member || !member.password_hash) {
     return json({ error: "帳號或密碼錯誤，或此帳號尚未開通登入功能，請洽店家" }, 401);
   }
+  if (member.is_locked) {
+    return json({ error: `登入失敗次數過多，請 ${lockoutMinutes} 分鐘後再試` }, 429);
+  }
   const valid = await verifyPassword(password, member.password_hash);
-  if (!valid) return json({ error: "帳號或密碼錯誤" }, 401);
+  if (!valid) {
+    await bumpFailedLogin(env, "members", member.id, member.failed_attempts, maxAttempts, lockoutMinutes);
+    return json({ error: "帳號或密碼錯誤" }, 401);
+  }
+  await clearFailedLogin(env, "members", member.id);
   const ttlHours = parseInt(env.SESSION_TTL_HOURS || "12", 10);
   const session = await signSession(
     { memberId: member.id, account: member.account, exp: Date.now() + ttlHours * 3600 * 1000 },
@@ -3386,6 +3483,30 @@ export async function onRequest(context) {
       if (path === "/api/admin/logs" && method === "GET") return handleListAdminLogs(request, env);
       if (path === "/api/admin/logs/export" && method === "GET") return handleExportAdminLogs(request, env, session);
 
+      // ---- 兩步驟驗證（每個帳號管理自己的，不吃網址參數，伺服器端一律用 session.adminId）----
+      if (path === "/api/admin/2fa/setup" && method === "POST") return handleTotpSetup(session, env);
+      if (path === "/api/admin/2fa/confirm" && method === "POST") {
+        return alog(
+          env, session, request,
+          { action: "self.2fa_enable", summary: `啟用自己帳號（${session.username}）的兩步驟驗證` },
+          handleTotpConfirm(session, request, env)
+        );
+      }
+      if (path === "/api/admin/2fa/disable" && method === "POST") {
+        return alog(
+          env, session, request,
+          { action: "self.2fa_disable", summary: `關閉自己帳號（${session.username}）的兩步驟驗證` },
+          handleTotpDisable(session, request, env)
+        );
+      }
+      if (path === "/api/admin/2fa/backup-codes" && method === "POST") {
+        return alog(
+          env, session, request,
+          { action: "self.2fa_backup_codes", summary: `重新產生自己帳號（${session.username}）的兩步驟驗證備援碼` },
+          handleTotpRegenerateBackupCodes(session, request, env)
+        );
+      }
+
       if (path === "/api/admin/staff" && method === "GET") return handleListStaff(env, access);
       if (path === "/api/admin/staff" && method === "POST") {
         const body = await request.clone().json().catch(() => ({}));
@@ -3449,6 +3570,26 @@ export async function onRequest(context) {
         );
       }
 
+      // 救援用：員工手機弄丟、備援碼也找不到時，管理員可以幫他關掉兩步驟驗證，讓他先用密碼登入
+      const staffTotpResetMatch = path.match(/^\/api\/admin\/staff\/(\d+)\/2fa-reset$/);
+      if (staffTotpResetMatch && method === "POST") {
+        return alog(
+          env, session, request,
+          { action: "staff.2fa_reset", summary: `關閉${L.staff}的兩步驟驗證（救援）` },
+          handleTotpAdminReset(staffTotpResetMatch[1], env)
+        );
+      }
+
+      // 提早解除「連續登入失敗鎖定」，不用等鎖定時間過
+      const staffUnlockMatch = path.match(/^\/api\/admin\/staff\/(\d+)\/unlock$/);
+      if (staffUnlockMatch && method === "POST") {
+        return alog(
+          env, session, request,
+          { action: "staff.unlock", summary: `提早解除${L.staff}的登入鎖定` },
+          handleUnlockLogin("admins", staffUnlockMatch[1], env)
+        );
+      }
+
       const staffDeleteMatch = path.match(/^\/api\/admin\/staff\/(\d+)$/);
       if (staffDeleteMatch && method === "DELETE") {
         return alog(
@@ -3487,6 +3628,15 @@ export async function onRequest(context) {
           env, session, request,
           { action: "member.set_password", summary: `重設${L.member}的登入密碼` },
           handleSetMemberPassword(memberPasswordMatch[1], request, env)
+        );
+      }
+
+      const memberUnlockMatch = path.match(/^\/api\/admin\/members\/(\d+)\/unlock$/);
+      if (memberUnlockMatch && method === "POST") {
+        return alog(
+          env, session, request,
+          { action: "member.unlock", summary: `提早解除${L.member}的登入鎖定` },
+          handleUnlockLogin("members", memberUnlockMatch[1], env)
         );
       }
 
@@ -3711,7 +3861,7 @@ export async function onRequest(context) {
       if (orderItemsMatch && method === "POST") {
         const body = await request.clone().json().catch(() => ({}));
         return alog(env, session, request,
-          { action: "order.add_item", summary: `${L.order} 新增品項「${body.name || ""}」，數量 ${body.qty ?? 1}、單價 $${body.unit_price ?? 0}` },
+          { action: "order.add_item", summary: `${L.order} 新增品項「${body.name || ""}」，數量 ${body.qty ?? 1}、單價 ${Number(body.unit_price ?? 0) < 0 ? "-" : ""}$${Math.abs(Number(body.unit_price ?? 0))}` },
           handleAddOrderItem(orderItemsMatch[1], request, env));
       }
       const orderItemMatch = path.match(/^\/api\/admin\/order-items\/(\d+)$/);

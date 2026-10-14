@@ -12,6 +12,12 @@ CREATE TABLE IF NOT EXISTS admins (
   permissions TEXT,                      -- 員工可用的功能（JSON 陣列）；NULL = 還沒設定過
   email TEXT,                            -- 信箱（選填）；role = owner 且有填的帳號會收到每日營運日報。既有資料庫用 migrate_v24.sql 加上
   push_prefs TEXT,                       -- 推播類型偏好（JSON，例如 {"new_order":false}）；NULL = 全部都收。既有資料庫用 migrate_v27.sql 加上
+  failed_attempts INTEGER NOT NULL DEFAULT 0,  -- 連續登入失敗次數，登入成功就歸零。既有資料庫用 migrate_v28.sql 加上
+  locked_until TEXT,                     -- 鎖定到期時間（UTC）；NULL 或已過期 = 沒被鎖
+  totp_secret TEXT,                      -- 已啟用的兩步驟驗證密鑰（base32）；NULL = 未啟用
+  totp_pending_secret TEXT,              -- 啟用流程中暫存的密鑰，掃完 QR 並驗證成功才會正式生效，尚未生效前不會拿來擋登入
+  totp_enabled INTEGER NOT NULL DEFAULT 0,
+  totp_backup_codes TEXT,                -- JSON 陣列，備援碼的雜湊值；一次性使用，用掉就從陣列移除
   created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -32,6 +38,8 @@ CREATE TABLE IF NOT EXISTS members (
   blocked_reason TEXT,          -- 封鎖原因（只有後台看得到）
   blocked_at TEXT,              -- 封鎖時間（UTC）
   blocked_by TEXT,              -- 誰封鎖的（帳號名稱）
+  failed_attempts INTEGER NOT NULL DEFAULT 0,  -- 連續登入失敗次數。既有資料庫用 migrate_v28.sql 加上
+  locked_until TEXT,            -- 鎖定到期時間（UTC）；NULL 或已過期 = 沒被鎖
   created_at TEXT DEFAULT (datetime('now')),
   FOREIGN KEY (referred_by) REFERENCES members(id)
 );

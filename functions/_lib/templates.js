@@ -250,6 +250,7 @@ ${THEME_CSS_ADMIN}
   .stat-row-clickable.selected td{background:#eef3ff;}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 </head>
 <body>
 
@@ -260,6 +261,11 @@ ${THEME_CSS_ADMIN}
   <input id="loginUser" />
   <label>密碼</label>
   <input id="loginPass" type="password" />
+  <div id="loginTotpRow" class="hidden">
+    <label>驗證碼</label>
+    <input id="loginTotp" autocomplete="one-time-code" inputmode="numeric" placeholder="6 位數驗證碼，或備援碼" />
+    <small class="hint">這個帳號已啟用兩步驟驗證，請輸入驗證器 App 顯示的 6 位數驗證碼；手機不在身邊可以用備援碼登入一次。</small>
+  </div>
   <button class="btn" id="loginBtn" onclick="doLogin()">登入</button>
   <div id="loginMsg" class="msg"></div>
 </div>
@@ -270,6 +276,7 @@ ${THEME_CSS_ADMIN}
     <div><span id="whoami" style="margin-right:12px;color:var(--muted);font-size:13px;"></span>
       <button class="btn secondary" id="pushBtn" onclick="togglePush()" style="margin-right:8px;" aria-label="開啟通知" title="開啟通知"><span class="pb-ic">🔕</span><span class="pb-lb"> 開啟通知</span></button>
       <button class="btn secondary" onclick="openPushPrefs()" style="margin-right:8px;" aria-label="通知類型設定" title="選擇要收哪些通知">⚙</button>
+      <button class="btn secondary" id="securityBtn" onclick="openSecurityModal()" style="margin-right:8px;" aria-label="帳號安全" title="帳號安全（兩步驟驗證）">🔐</button>
       ${THEME_HEADER_BTN.replace('class="btn secondary', 'style="margin-right:8px;" class="btn secondary')}
       <button class="btn secondary" onclick="doLogout()">登出</button></div>
   </header>
@@ -361,11 +368,12 @@ ${THEME_CSS_ADMIN}
         </div>
         <input id="co_amount" type="number" min="1" step="1" />
         <label>品項明細（選填；建立訂單後會自動寫入訂單明細）</label>
+        <small class="hint" style="display:block;margin:0 0 6px;">單價可以填 0（贈品）或負數（折扣，例如 -20）；品項合計必須大於 0。</small>
         <div class="co-items-box">
           <div class="co-items-head"><span>品名</span><span>數量</span><span>單價</span><span style="text-align:right;">小計</span><span></span></div>
           <div id="co_items"></div>
           <div class="co-items-foot">
-            <button type="button" class="btn secondary small" onclick="coAddItem()">＋ 新增品項</button>
+            <span style="display:flex;gap:6px;flex-wrap:wrap;"><button type="button" class="btn secondary small" onclick="coAddItem()">＋ 新增品項</button><button type="button" class="btn secondary small" onclick="coAddDiscount()">＋ 新增折扣</button></span>
             <span>品項合計：<b id="co_items_total">$0</b></span>
           </div>
         </div>
@@ -794,7 +802,7 @@ ${THEME_CSS_ADMIN}
         <h2>帳號列表</h2>
         <small class="hint">「尚未設定」的員工目前可以使用全部功能（員工帳號管理除外），建議按「設定權限」確認一次。<br>管理員帳號可以按「設定信箱」填入信箱；每日營運日報會寄給有填信箱的管理員。</small>
         <table id="staff_table">
-          <thead><tr><th>ID</th><th>帳號</th><th>角色</th><th>信箱</th><th>可使用的功能</th><th>建立時間</th><th>操作</th></tr></thead>
+          <thead><tr><th>ID</th><th>帳號</th><th>角色</th><th>信箱</th><th>可使用的功能</th><th>登入保護</th><th>建立時間</th><th>操作</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -1059,6 +1067,58 @@ ${THEME_CSS_ADMIN}
   </div>
 </div>
 
+<div id="securityModal" class="modal-overlay hidden" onclick="if(event.target===this)closeSecurityModal()">
+  <div class="modal-box">
+    <h2>帳號安全</h2>
+    <div id="sec_msg" class="msg"></div>
+
+    <div id="sec_step_status">
+      <p><strong>兩步驟驗證：</strong><span id="sec_status_text">-</span></p>
+      <small class="hint">啟用後，登入時除了密碼，還需要輸入手機驗證器 App（例如 Google Authenticator、Microsoft Authenticator、Authy，都免費）顯示的 6 位數驗證碼。這是選用功能，不開也不影響原本登入方式。</small>
+      <div style="margin-top:12px;">
+        <button class="btn" id="sec_enable_btn" onclick="start2faSetup()">啟用兩步驟驗證</button>
+        <button class="btn secondary hidden" id="sec_backup_btn" onclick="showRegenBackupForm()">重新產生備援碼</button>
+        <button class="btn danger hidden" id="sec_disable_btn" onclick="showDisable2faForm()">關閉兩步驟驗證</button>
+      </div>
+    </div>
+
+    <div id="sec_step_setup" class="hidden" style="margin-top:14px;">
+      <p>用手機驗證器 App 掃描這個 QR code：</p>
+      <div id="sec_qr" style="display:flex;justify-content:center;margin:12px 0;"></div>
+      <p><small class="hint">手機掃不到的話，也可以手動輸入這組密鑰：</small></p>
+      <p><code id="sec_secret_text" style="word-break:break-all;"></code></p>
+      <label>驗證器 App 顯示的 6 位數驗證碼</label>
+      <input id="sec_confirm_code" inputmode="numeric" placeholder="123456" />
+      <div style="margin-top:10px;">
+        <button class="btn" onclick="confirm2faSetup()">確認啟用</button>
+        <button class="btn secondary" onclick="cancelSecurityStep()">取消</button>
+      </div>
+    </div>
+
+    <div id="sec_step_backup" class="hidden" style="margin-top:14px;">
+      <p><strong>請保存這組備援碼，只會顯示這一次</strong>：手機遺失或換機時，可以用其中一組代替驗證碼登入一次。</p>
+      <div id="sec_backup_list" style="font-family:monospace;font-size:15px;line-height:1.8;background:var(--bg-alt,rgba(127,127,127,.08));border-radius:8px;padding:10px;"></div>
+      <div style="margin-top:10px;">
+        <button class="btn" onclick="closeSecurityModal()">我已保存，關閉</button>
+      </div>
+    </div>
+
+    <div id="sec_step_password_confirm" class="hidden" style="margin-top:14px;">
+      <p id="sec_password_confirm_label"></p>
+      <label>請輸入目前密碼確認</label>
+      <input id="sec_password_confirm_input" type="password" />
+      <div style="margin-top:10px;">
+        <button class="btn danger" id="sec_password_confirm_btn" onclick="submitPasswordConfirm()">確認</button>
+        <button class="btn secondary" onclick="cancelSecurityStep()">取消</button>
+      </div>
+    </div>
+
+    <div style="margin-top:14px;text-align:right;">
+      <button class="btn secondary" onclick="closeSecurityModal()">關閉視窗</button>
+    </div>
+  </div>
+</div>
+
 <div id="orderHistoryModal" class="modal-overlay hidden" onclick="if(event.target===this)closeOrderHistory()">
   <div class="modal-box wide">
     <h2 id="oh_title">訂單操作歷程</h2>
@@ -1178,7 +1238,8 @@ ${THEME_CSS_ADMIN}
   <div class="modal-box">
     <h2>更正訂單 <span id="cor_id"></span></h2>
     <label>金額</label>
-    <input id="cor_amount" type="number" min="1" step="1" />
+    <input id="cor_amount" type="number" step="1" />
+    <small class="hint">可以輸入 0 或負數（例如事後補登折扣／部分退款），明細與信件會自動標示「折扣／退款」。</small>
     <label>會員</label>
     <div class="member-picker" id="cor_member_picker">
       <input type="text" id="cor_member_search" class="member-picker-input" placeholder="輸入姓名／帳號／電話搜尋，留空表示非會員" autocomplete="off" />
@@ -1247,7 +1308,11 @@ function toTaipeiTime(dateStr) {
 async function api(path, opts={}) {
   const res = await fetch(path, {credentials:'include', headers:{'Content-Type':'application/json'}, ...opts});
   const data = await res.json().catch(()=>({}));
-  if (!res.ok) throw new Error(data.error || ('錯誤: '+res.status));
+  if (!res.ok) {
+    const err = new Error(data.error || ('錯誤: '+res.status));
+    err.status = res.status; err.data = data; // 讓呼叫端可以看 need_totp 之類的額外欄位
+    throw err;
+  }
   return data;
 }
 
@@ -1276,6 +1341,7 @@ async function checkSession(){
 async function doLogin(){
   const username = document.getElementById('loginUser').value.trim();
   const password = document.getElementById('loginPass').value;
+  const totp_code = document.getElementById('loginTotp').value.trim();
   const msg = document.getElementById('loginMsg');
   msg.textContent=''; msg.className='msg';
   try{
@@ -1283,15 +1349,109 @@ async function doLogin(){
     if (setupNoticeVisible) {
       await api('/api/setup-admin', {method:'POST', body: JSON.stringify({username,password})});
     }
-    await api('/api/admin/login', {method:'POST', body: JSON.stringify({username,password})});
+    const payload = {username,password};
+    if (totp_code) payload.totp_code = totp_code;
+    await api('/api/admin/login', {method:'POST', body: JSON.stringify(payload)});
     checkSession();
-  }catch(e){ msg.textContent = e.message; msg.className='msg err'; }
+  }catch(e){
+    msg.textContent = e.message; msg.className='msg err';
+    if (e.data && e.data.need_totp) {
+      document.getElementById('loginTotpRow').classList.remove('hidden');
+      document.getElementById('loginTotp').focus();
+    }
+  }
 }
 
 async function doLogout(){
   stopOrdersPolling();
   await api('/api/admin/logout', {method:'POST'});
   location.reload();
+}
+
+// ---- 帳號安全（兩步驟驗證）----
+let sec_pendingAction = null; // 目前「輸入密碼確認」要執行哪個動作：'disable' | 'regen'
+
+function sec_showStep(id){
+  ['sec_step_status','sec_step_setup','sec_step_backup','sec_step_password_confirm'].forEach(function(s){
+    document.getElementById(s).classList.toggle('hidden', s !== id);
+  });
+}
+
+function openSecurityModal(){
+  const m = document.getElementById('sec_msg'); m.textContent=''; m.className='msg';
+  document.getElementById('sec_confirm_code').value = '';
+  document.getElementById('sec_password_confirm_input').value = '';
+  sec_pendingAction = null;
+  sec_showStep('sec_step_status');
+  const enabled = !!(adminMe && adminMe.totp_enabled);
+  document.getElementById('sec_status_text').textContent = enabled ? '已啟用' : '未啟用';
+  document.getElementById('sec_enable_btn').classList.toggle('hidden', enabled);
+  document.getElementById('sec_backup_btn').classList.toggle('hidden', !enabled);
+  document.getElementById('sec_disable_btn').classList.toggle('hidden', !enabled);
+  document.getElementById('securityModal').classList.remove('hidden');
+}
+function closeSecurityModal(){
+  document.getElementById('securityModal').classList.add('hidden');
+}
+function cancelSecurityStep(){
+  sec_showStep('sec_step_status');
+}
+
+async function start2faSetup(){
+  const m = document.getElementById('sec_msg'); m.textContent=''; m.className='msg';
+  try{
+    const r = await api('/api/admin/2fa/setup', {method:'POST'});
+    document.getElementById('sec_secret_text').textContent = r.secret;
+    const qrBox = document.getElementById('sec_qr');
+    qrBox.innerHTML = '';
+    new QRCode(qrBox, { text: r.otpauth_url, width: 180, height: 180 });
+    sec_showStep('sec_step_setup');
+  }catch(e){ m.textContent = e.message; m.className='msg err'; }
+}
+
+async function confirm2faSetup(){
+  const m = document.getElementById('sec_msg'); m.textContent=''; m.className='msg';
+  const code = document.getElementById('sec_confirm_code').value.trim();
+  if (!code) { m.textContent='請輸入驗證碼'; m.className='msg err'; return; }
+  try{
+    const r = await api('/api/admin/2fa/confirm', {method:'POST', body: JSON.stringify({code})});
+    adminMe.totp_enabled = true;
+    sec_renderBackupCodes(r.backup_codes);
+  }catch(e){ m.textContent = e.message; m.className='msg err'; }
+}
+
+function sec_renderBackupCodes(codes){
+  document.getElementById('sec_backup_list').innerHTML = (codes||[]).map(function(c){ return escapeHtml(c); }).join('<br>');
+  sec_showStep('sec_step_backup');
+}
+
+function showRegenBackupForm(){
+  sec_pendingAction = 'regen';
+  document.getElementById('sec_password_confirm_label').textContent = '重新產生備援碼後，舊的備援碼會全部失效。';
+  document.getElementById('sec_password_confirm_input').value = '';
+  sec_showStep('sec_step_password_confirm');
+}
+function showDisable2faForm(){
+  sec_pendingAction = 'disable';
+  document.getElementById('sec_password_confirm_label').textContent = '關閉兩步驟驗證後，登入只需要密碼。';
+  document.getElementById('sec_password_confirm_input').value = '';
+  sec_showStep('sec_step_password_confirm');
+}
+
+async function submitPasswordConfirm(){
+  const m = document.getElementById('sec_msg'); m.textContent=''; m.className='msg';
+  const password = document.getElementById('sec_password_confirm_input').value;
+  if (!password) { m.textContent='請輸入密碼'; m.className='msg err'; return; }
+  try{
+    if (sec_pendingAction === 'disable') {
+      await api('/api/admin/2fa/disable', {method:'POST', body: JSON.stringify({password})});
+      adminMe.totp_enabled = false;
+      closeSecurityModal();
+    } else if (sec_pendingAction === 'regen') {
+      const r = await api('/api/admin/2fa/backup-codes', {method:'POST', body: JSON.stringify({password})});
+      sec_renderBackupCodes(r.backup_codes);
+    }
+  }catch(e){ m.textContent = e.message; m.className='msg err'; }
 }
 
 // ---- 推播通知（Web Push） ----
@@ -1888,7 +2048,7 @@ async function previewCoupon(prefix){
 
 // ---- 結帳櫃檯：品項明細 ----
 function coRound2(n){ return Math.round((Number(n)||0) * 100) / 100; }
-function coFmt(n){ return '$' + coRound2(n).toLocaleString('zh-TW'); }
+function coFmt(n){ const v = coRound2(n); return (v < 0 ? '-' : '') + '$' + Math.abs(v).toLocaleString('zh-TW'); }
 
 function coAddItem(name, qty, price){
   const box = document.getElementById('co_items');
@@ -1896,7 +2056,7 @@ function coAddItem(name, qty, price){
   row.className = 'co-item-row';
   row.innerHTML = '<input class="ci-name" placeholder="品名" maxlength="100" />'
     + '<input class="ci-qty" type="number" min="0" step="any" placeholder="數量" />'
-    + '<input class="ci-price" type="number" min="0" step="any" placeholder="單價" />'
+    + '<input class="ci-price" type="number" step="any" placeholder="單價" title="折扣請填負數（例如 -20），贈品填 0" />'
     + '<span class="ci-sub">$0</span>'
     + '<button type="button" class="btn secondary small" title="移除這個品項">&times;</button>';
   row.querySelector('.ci-name').value = name || '';
@@ -1907,6 +2067,15 @@ function coAddItem(name, qty, price){
   box.appendChild(row);
   coSyncAmount();
   if (!name) row.querySelector('.ci-name').focus();
+}
+
+// 新增一列「折扣」：品名先填好，游標直接跳到單價，輸入負數即可
+function coAddDiscount(){
+  coAddItem('折扣', 1);
+  const rows = document.querySelectorAll('#co_items .co-item-row');
+  const price = rows[rows.length - 1].querySelector('.ci-price');
+  price.placeholder = '例如 -20';
+  price.focus();
 }
 
 // 讀取目前所有品項列；全空白的列略過，只填了數字沒填品名的列視為錯誤
@@ -1922,7 +2091,7 @@ function coCollectItems(){
     const qty = parseFloat(qtyRaw);
     const unit_price = parseFloat(priceRaw);
     if (!(qty > 0)) return { error: '「' + name + '」的數量必須大於 0' };
-    if (!(unit_price >= 0)) return { error: '「' + name + '」請填寫單價' };
+    if (priceRaw === '' || !isFinite(unit_price)) return { error: '「' + name + '」請填寫單價（折扣填負數，免費填 0）' };
     items.push({ name, qty, unit_price });
   }
   return { items };
@@ -1971,6 +2140,7 @@ async function createOrder(){
   const items = collected.items;
   if (amountMode === 'items'){
     if (!items.length){ msg.textContent='請至少填寫一個品項，或改用「手動輸入金額」'; msg.className='msg err'; return; }
+    if (!(coItemsTotal() > 0)){ msg.textContent='品項合計必須大於 0（折扣加總後不能是 0 或負數）'; msg.className='msg err'; return; }
     document.getElementById('co_amount').value = coItemsTotal();
   }
   const amount = parseFloat(document.getElementById('co_amount').value);
@@ -2200,7 +2370,7 @@ function renderOrders(){
       <td data-label="會員">\${escapeHtml(o.member_name_snapshot)}\${orderMemberFlags(o)}\${o.notify_email ? ' <span title="顧客下單時選擇：訂單完成寄信通知' + (o.notify_email_addr ? '（' + o.notify_email_addr + '）' : '') + '" style="color:var(--accent);">✉</span>' : ''}</td>
       <td data-label="儲值平台">\${PLATFORM_LABEL[o.platform]||'<span class="muted" style="color:var(--muted)">未指定</span>'}</td>
       <td data-label="帳號/密碼">\${accountInfo}</td>
-      <td data-label="金額">$\${o.amount}</td>
+      <td data-label="金額">\${dMoney(o.amount)}\${o.amount<0?' <span style="color:#c0392b;font-size:12px;">（折扣／退款）</span>':''}</td>
       <td data-label="預計幣數">\${o.coins != null ? ('🪙 '+Number(o.coins).toLocaleString()) : '<span class="muted" style="color:var(--muted)">-</span>'}</td>
       <td data-label="優惠">\${couponInfo}</td>
       <td data-label="付款方式">\${PM_LABEL[o.payment_method]||'尚未選擇'}\${(o.payment_method==='store_barcode' && o.store_brand && CVS_LABEL[o.store_brand]) ? '<br/><span style="color:var(--muted);font-size:12px;">'+CVS_LABEL[o.store_brand]+'</span>' : ''}</td>
@@ -2254,15 +2424,17 @@ function renderOrderItems(orderId, items){
   const orderNo = o ? o.order_no : ('#' + orderId);
   const total = items.reduce(function(s, it){ return s + it.qty * it.unit_price; }, 0);
   const itemRows = items.length ? items.map(function(it){
-    const sub = (it.qty * it.unit_price).toLocaleString();
-    const dlBtn = it.is_delivered
+    const sub = it.qty * it.unit_price;
+    const dlBtn = it.unit_price < 0
+      ? '<span style="color:var(--muted);font-size:12px;">折扣</span>'
+      : it.is_delivered
       ? \`<button class="btn secondary small" style="font-size:11px;padding:3px 8px;" onclick="toggleDelivery(\${it.id}, \${orderId}, false)">✓ 已交貨</button>\`
       : \`<button class="btn small" style="font-size:11px;padding:3px 8px;background:#f59e0b;" onclick="toggleDelivery(\${it.id}, \${orderId}, true)">◎ 未交貨</button>\`;
     return \`<tr>
       <td style="padding:6px 8px;font-size:13px;">\${escapeHtml(it.name)}\${it.note ? '<br/><span style="color:var(--muted);font-size:11px;">' + escapeHtml(it.note) + '</span>' : ''}</td>
       <td style="padding:6px 8px;font-size:13px;text-align:right;">\${it.qty}</td>
-      <td style="padding:6px 8px;font-size:13px;text-align:right;">$\${it.unit_price.toLocaleString()}</td>
-      <td style="padding:6px 8px;font-size:13px;text-align:right;font-weight:600;">$\${sub}</td>
+      <td style="padding:6px 8px;font-size:13px;text-align:right;">\${coFmt(it.unit_price)}</td>
+      <td style="padding:6px 8px;font-size:13px;text-align:right;font-weight:600;">\${coFmt(sub)}</td>
       <td style="padding:6px 8px;font-size:13px;">\${dlBtn}</td>
       <td style="padding:6px 8px;font-size:13px;"><button class="btn danger small" style="font-size:11px;padding:3px 8px;" onclick="deleteOrderItem(\${it.id}, \${orderId})">刪除</button></td>
     </tr>\`;
@@ -2282,7 +2454,7 @@ function renderOrderItems(orderId, items){
         </tr>
       </thead>
       <tbody>\${itemRows}</tbody>
-      \${items.length ? \`<tfoot><tr style="background:var(--bg);"><td colspan="3" style="padding:6px 8px;font-weight:700;font-size:13px;">合計</td><td style="padding:6px 8px;font-weight:700;font-size:13px;text-align:right;">$\${total.toLocaleString()}</td><td colspan="2"></td></tr></tfoot>\` : ''}
+      \${items.length ? \`<tfoot><tr style="background:var(--bg);"><td colspan="3" style="padding:6px 8px;font-weight:700;font-size:13px;">合計</td><td style="padding:6px 8px;font-weight:700;font-size:13px;text-align:right;">\${coFmt(total)}</td><td colspan="2"></td></tr></tfoot>\` : ''}
     </table>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:8px;">
       <div>
@@ -2295,7 +2467,7 @@ function renderOrderItems(orderId, items){
       </div>
       <div>
         <div style="font-size:12px;color:var(--muted);margin-bottom:3px;">單價</div>
-        <input id="oi_price_\${orderId}" type="number" min="0" step="any" value="0" style="width:90px;font-size:13px;padding:5px 8px;" />
+        <input id="oi_price_\${orderId}" type="number" step="any" value="0" title="折扣請填負數（例如 -20）" style="width:90px;font-size:13px;padding:5px 8px;" />
       </div>
       <div>
         <div style="font-size:12px;color:var(--muted);margin-bottom:3px;">備註（選填）</div>
@@ -2445,7 +2617,7 @@ function closeCorrect(){
 async function submitCorrect(){
   const msg = document.getElementById('cor_msg');
   const amount = parseFloat(document.getElementById('cor_amount').value);
-  if (!amount || amount<=0){ msg.textContent='請輸入正確金額'; msg.className='msg err'; return; }
+  if (!Number.isFinite(amount)){ msg.textContent='請輸入正確金額'; msg.className='msg err'; return; }
   const memberSel = document.getElementById('cor_member');
   const body = { amount, member_id: memberSel.value || null };
   if (!memberSel.value) body.non_member_name = document.getElementById('cor_nonmember_name').value.trim();
@@ -3041,19 +3213,26 @@ async function loadStaff(){
     else if (s.permissions === null) permText = '<span style="color:var(--danger);">尚未設定（目前全部功能）</span>';
     else if (!s.permissions.length) permText = '<span style="color:var(--danger);">沒有任何功能</span>';
     else permText = escapeHtml(s.permissions.map(permLabelOf).join('、')) + '（共 ' + s.permissions.length + ' 項）';
+    const secBits = [];
+    secBits.push(s.totp_enabled ? '兩步驟驗證：已啟用' : '兩步驟驗證：未啟用');
+    if (s.is_locked) secBits.push('<span style="color:var(--danger);">登入已鎖定</span>');
+    const secText = secBits.join('<br>');
     return '<tr>'+
       '<td data-label="ID">'+s.id+'</td>'+
       '<td data-label="帳號">'+escapeHtml(s.username)+(isSelf?'（目前登入）':'')+'</td>'+
       '<td data-label="角色">'+(isOwner?'管理員':'員工')+'</td>'+
       '<td data-label="信箱">'+(isOwner ? (s.email ? escapeHtml(s.email) : '<span style="color:var(--muted,#888);">未設定</span>') : '—')+'</td>'+
       '<td data-label="可使用的功能">'+permText+'</td>'+
+      '<td data-label="登入保護">'+secText+'</td>'+
       '<td data-label="建立時間">'+toTaipeiTime(s.created_at)+'</td>'+
       '<td data-label="操作">'+
         (isOwner ? '<button class="btn secondary small" onclick="setStaffEmail('+s.id+')">設定信箱</button>' : '<button class="btn secondary small" onclick="openStaffPerms('+s.id+')">設定權限</button>')+
         '<button class="btn secondary small" onclick="resetStaffPassword('+s.id+')">重設密碼</button>'+
+        (s.totp_enabled && !isSelf ? '<button class="btn secondary small" onclick="adminReset2fa('+s.id+',\\''+escapeHtml(s.username)+'\\')">重設兩步驟驗證</button>' : '')+
+        (s.is_locked ? '<button class="btn secondary small" onclick="unlockStaff('+s.id+',\\''+escapeHtml(s.username)+'\\')">解除鎖定</button>' : '')+
         '<button class="btn danger small" '+((isSelf||isOwner)?'disabled':'')+' onclick="deleteStaff('+s.id+')">刪除</button>'+
       '</td></tr>';
-  }).join('') || '<tr><td colspan="7">尚無帳號</td></tr>';
+  }).join('') || '<tr><td colspan="8">尚無帳號</td></tr>';
 }
 
 async function sendTestDailyReport(){
@@ -3146,6 +3325,22 @@ async function deleteStaff(id){
   }catch(e){ alert(e.message); }
 }
 
+async function adminReset2fa(id, username){
+  if (!confirm('確定要關閉「'+username+'」的兩步驟驗證嗎？（通常是他手機弄丟、備援碼也找不到時才用這個，之後他可以再重新設定一次）')) return;
+  try{
+    await api('/api/admin/staff/'+id+'/2fa-reset', {method:'POST'});
+    loadStaff();
+  }catch(e){ alert(e.message); }
+}
+
+async function unlockStaff(id, username){
+  if (!confirm('確定要提早解除「'+username+'」的登入鎖定嗎？')) return;
+  try{
+    await api('/api/admin/staff/'+id+'/unlock', {method:'POST'});
+    loadStaff();
+  }catch(e){ alert(e.message); }
+}
+
 // ---- 首頁儀表板 ----
 let dashTimer = null;
 function startDashPolling(){
@@ -3157,7 +3352,7 @@ function startDashPolling(){
 }
 function stopDashPolling(){ if (dashTimer) { clearInterval(dashTimer); dashTimer = null; } }
 
-function dMoney(n){ return '$' + Math.round(Number(n)||0).toLocaleString('en-US'); }
+function dMoney(n){ const v = Math.round(Number(n)||0); return (v<0?'-':'') + '$' + Math.abs(v).toLocaleString('en-US'); }
 function dDelta(cur, prev, label){
   if (!prev) return cur ? '<span class="kpi-up">' + label + '無資料可比較</span>' : label + '無資料可比較';
   const pct = Math.round((cur - prev) / prev * 100);
@@ -4380,7 +4575,7 @@ async function viewOrderHistory(id){
     const d = await api('/api/admin/orders/' + id + '/history');
     const o = d.order;
     document.getElementById('oh_title').textContent = '訂單操作歷程　' + o.order_no;
-    document.getElementById('oh_sub').textContent = '客戶：' + o.member_name_snapshot + '　金額：$' + o.amount + '　目前狀態：' + ((STATUS_LABEL[o.status] || [o.status])[0]);
+    document.getElementById('oh_sub').textContent = '客戶：' + o.member_name_snapshot + '　金額：' + dMoney(o.amount) + '　目前狀態：' + ((STATUS_LABEL[o.status] || [o.status])[0]);
     document.getElementById('oh_list').innerHTML = d.events.map(function(e){
       return '<li class="oh-item' + (e.synthetic ? ' sys' : '') + '">'
         + '<div class="oh-head"><span class="oh-label">' + escapeHtml(e.label) + '</span>'
@@ -5214,7 +5409,7 @@ function renderOrderView(o){
     if (!o.coupon_code) html += '<div class="row"><span>原始金額</span><span>$'+o.original_amount+'</span></div>';
     html += '<div class="row"><span>點數折抵（'+o.points_used+' 點）</span><span>-$'+o.points_discount+'</span></div>';
   }
-  html += '<div class="amount">$'+o.amount+'</div>';
+  html += '<div class="amount">'+(o.amount<0?('-$'+Math.abs(o.amount).toLocaleString()):('$'+o.amount.toLocaleString()))+'</div>';
   html += '<div class="row"><span>付款對象</span><span>'+o.member_name_snapshot+'</span></div>';
   if (o.platform) {
     html += '<div class="row"><span>儲值平台</span><span>'+(PLATFORM_LABEL[o.platform]||o.platform)+'</span></div>';
@@ -6376,7 +6571,7 @@ function refreshUpdates(){
     if (seen['o' + o.id] === updOrderSig(o)) return;
     const text = o.is_completed ? '訂單已結案' : UPD_STATE[o.status];
     if (!text) return;
-    items.push({title: '訂單 ' + o.order_no, desc: text + '（$' + o.amount + '）', href: '/pay/' + o.token});
+    items.push({title: '訂單 ' + o.order_no, desc: text + '（' + (o.amount<0?('-$'+Math.abs(o.amount).toLocaleString()):('$'+o.amount)) + '）', href: '/pay/' + o.token});
   });
   updRed.forEach(function(r){
     if (r.status === 'pending' || seen['r' + r.id] === r.status) return;
@@ -6724,7 +6919,7 @@ async function loadOrders(){
       <td data-label="訂單編號"><code>\${o.order_no}</code></td>
       <td data-label="建立時間">\${toTaipeiTime(o.created_at)}</td>
       <td data-label="儲值平台">\${PLATFORM_LABEL[o.platform]||'-'}</td>
-      <td data-label="金額">$\${o.amount}</td>
+      <td data-label="金額">\${o.amount<0?('-$'+Math.abs(o.amount).toLocaleString()):('$'+o.amount)}</td>
       <td data-label="預計幣數">\${o.coins != null ? ('🪙 '+Number(o.coins).toLocaleString()) : '-'}</td>
       <td data-label="優惠">\${couponInfo}</td>
       <td data-label="付款方式">\${PM_LABEL[o.payment_method]||'尚未選擇'}\${(o.payment_method==='store_barcode' && o.store_brand && CVS_LABEL[o.store_brand]) ? '<br/><span style="color:var(--muted);font-size:12px;">'+CVS_LABEL[o.store_brand]+'</span>' : ''}</td>

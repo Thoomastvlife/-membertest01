@@ -628,6 +628,160 @@ export const logOrderContext = new WeakMap();
 // 還沒執行 migrate_v25.sql（admin_logs 沒有 order_id 欄位）時，自動退回舊的寫法，操作紀錄不會整個壞掉。
 let adminLogsHasNoOrderIdColumn = false;
 
+// ========================================================================
+// 登入保護：連續失敗鎖定 + 兩步驟驗證（TOTP）
+// ========================================================================
+
+// 連續失敗幾次鎖定、鎖多久，可用環境變數調整（Pages 專案設定的一般變數即可，不用 Secret）
+export function loginLockoutConfig(env) {
+  return {
+    maxAttempts: Math.max(3, parseInt(env.LOGIN_MAX_ATTEMPTS || "5", 10) || 5),
+    lockoutMinutes: Math.max(1, parseInt(env.LOGIN_LOCKOUT_MINUTES || "15", 10) || 15),
+  };
+}
+
+// 登入或驗證碼錯誤時呼叫：把失敗次數+1，達到門檻就鎖定一段時間。
+// table 是固定字串（"admins" 或 "members"，程式內部決定，不是使用者輸入），可以直接接在 SQL 裡。
+// 資料庫還沒跑 migrate_v28.sql（沒有這些欄位）時，直接略過，不影響原本登入流程。
+export async function bumpFailedLogin(env, table, id, currentAttempts, maxAttempts, lockoutMinutes) {
+  try {
+    const attempts = (currentAttempts || 0) + 1;
+    if (attempts >= maxAttempts) {
+      await env.DB.prepare(
+        `UPDATE ${table} SET failed_attempts=?, locked_until=datetime('now', ?) WHERE id=?`
+      ).bind(attempts, `+${lockoutMinutes} minutes`, id).run();
+    } else {
+      await env.DB.prepare(`UPDATE ${table} SET failed_attempts=? WHERE id=?`).bind(attempts, id).run();
+    }
+  } catch (err) {
+    if (!/no such column/i.test(String(err && err.message))) throw err;
+    // 還沒跑 migrate_v28.sql：不鎖定，維持原本「只記錄」的行為
+  }
+}
+
+// 登入成功時呼叫，清掉失敗次數與鎖定狀態（資料庫還沒升級就略過）
+export async function clearFailedLogin(env, table, id) {
+  try {
+    await env.DB.prepare(`UPDATE ${table} SET failed_attempts=0, locked_until=NULL WHERE id=?`).bind(id).run();
+  } catch (err) {
+    if (!/no such column/i.test(String(err && err.message))) throw err;
+  }
+}
+
+// ---- TOTP（RFC 6238）。不依賴任何套件，只用 Web Crypto，跟專案裡其他加解密的作法一致 ----
+const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+function base32Encode(bytes) {
+  let bits = 0, value = 0, output = "";
+  for (const b of bytes) {
+    value = (value << 8) | b;
+    bits += 8;
+    while (bits >= 5) {
+      output += BASE32_ALPHABET[(value >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) output += BASE32_ALPHABET[(value << (5 - bits)) & 31];
+  return output;
+}
+
+function base32Decode(str) {
+  const clean = String(str || "").toUpperCase().replace(/[^A-Z2-7]/g, "");
+  let bits = 0, value = 0;
+  const bytes = [];
+  for (const ch of clean) {
+    const idx = BASE32_ALPHABET.indexOf(ch);
+    if (idx === -1) continue;
+    value = (value << 5) | idx;
+    bits += 5;
+    if (bits >= 8) {
+      bytes.push((value >>> (bits - 8)) & 0xff);
+      bits -= 8;
+    }
+  }
+  return new Uint8Array(bytes);
+}
+
+// 產生一組新的 TOTP 密鑰（160 bits，base32 顯示，驗證器 App 都看得懂）
+export function generateTotpSecret() {
+  const bytes = new Uint8Array(20);
+  crypto.getRandomValues(bytes);
+  return base32Encode(bytes);
+}
+
+async function totpCodeAt(secretBase32, counter) {
+  const keyBytes = base32Decode(secretBase32);
+  const key = await crypto.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-1" }, false, ["sign"]);
+  const counterBuf = new ArrayBuffer(8);
+  const view = new DataView(counterBuf);
+  view.setUint32(0, Math.floor(counter / 2 ** 32));
+  view.setUint32(4, counter >>> 0);
+  const sigBuf = await crypto.subtle.sign("HMAC", key, counterBuf);
+  const sig = new Uint8Array(sigBuf);
+  const offset = sig[sig.length - 1] & 0x0f;
+  const code =
+    ((sig[offset] & 0x7f) << 24) |
+    ((sig[offset + 1] & 0xff) << 16) |
+    ((sig[offset + 2] & 0xff) << 8) |
+    (sig[offset + 3] & 0xff);
+  return (code % 1000000).toString().padStart(6, "0");
+}
+
+// 驗證驗證器 App 顯示的 6 位數代碼。前後各容許 1 個時間窗（±30 秒），容忍手機時鐘誤差。
+export async function verifyTotpCode(secretBase32, inputCode, window = 1) {
+  if (!secretBase32 || !inputCode) return false;
+  const code = String(inputCode).replace(/\s+/g, "");
+  if (!/^\d{6}$/.test(code)) return false;
+  const counter = Math.floor(Date.now() / 1000 / 30);
+  for (let i = -window; i <= window; i++) {
+    const expected = await totpCodeAt(secretBase32, counter + i);
+    if (expected === code) return true;
+  }
+  return false;
+}
+
+// 給驗證器 App 掃描用的 otpauth:// 連結（用來產生 QR code）
+export function totpOtpauthUrl(secretBase32, accountLabel, issuer) {
+  const label = encodeURIComponent(`${issuer}:${accountLabel}`);
+  const params = new URLSearchParams({ secret: secretBase32, issuer, algorithm: "SHA1", digits: "6", period: "30" });
+  return `otpauth://totp/${label}?${params.toString()}`;
+}
+
+// 備援碼：手機不在身邊或弄丟時，可以用這組碼登入一次。產生明碼（只在啟用當下顯示一次），
+// 呼叫端要自己用 hashPassword() 雜湊後存進 totp_backup_codes。
+const BACKUP_CODE_CHARSET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // 不含容易看錯的 0/O/1/I
+export function generateBackupCodes(count = 8, length = 10) {
+  const codes = [];
+  for (let i = 0; i < count; i++) {
+    const bytes = new Uint8Array(length);
+    crypto.getRandomValues(bytes);
+    let code = "";
+    for (let j = 0; j < length; j++) code += BACKUP_CODE_CHARSET[bytes[j] % BACKUP_CODE_CHARSET.length];
+    codes.push(code);
+  }
+  return codes;
+}
+
+// 檢查輸入的字串是不是其中一組備援碼；驗證通過就「用掉」（從清單移除，回傳剩下的清單讓呼叫端存回去）
+export async function consumeBackupCode(storedHashesJson, inputCode) {
+  let hashes;
+  try {
+    hashes = JSON.parse(storedHashesJson || "[]");
+    if (!Array.isArray(hashes)) hashes = [];
+  } catch {
+    hashes = [];
+  }
+  const clean = String(inputCode || "").trim().toUpperCase().replace(/\s|-/g, "");
+  if (!clean) return { ok: false, remaining: hashes };
+  for (let i = 0; i < hashes.length; i++) {
+    if (await verifyPassword(clean, hashes[i])) {
+      hashes.splice(i, 1);
+      return { ok: true, remaining: hashes };
+    }
+  }
+  return { ok: false, remaining: hashes };
+}
+
 // 寫入一筆操作紀錄。寫入失敗只記錄到 console，不會讓原本的後台操作跟著失敗。
 export async function logAdminAction(env, session, request, { action, summary, detail, orderId }) {
   try {
