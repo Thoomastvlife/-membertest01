@@ -1,4 +1,5 @@
 import { handleDailyReportCron, handleDailyReportTest } from "./_lib/report.js";
+import { getBankAccounts, saveBankAccounts, chooseBank } from "./_lib/banks.js";
 import { adminHtml, payHtml, memberHtml, memberRegisterHtml } from "./_lib/templates.js";
 import {
   getPlatforms,
