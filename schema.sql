@@ -257,6 +257,7 @@ CREATE TABLE IF NOT EXISTS order_items (
   is_delivered INTEGER NOT NULL DEFAULT 0,  -- 0 = 未交貨, 1 = 已交貨
   delivered_at TEXT,                   -- 標記已交貨的時間
   note TEXT,                           -- 備註
+  delivery_note TEXT,                  -- 寄送序號／給顧客的內容（出貨時寄出；多組序號可換行）
   sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TEXT DEFAULT (datetime('now')),
   FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE

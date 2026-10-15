@@ -595,6 +595,7 @@ const LOG_HIDE_FIELDS = new Set([
   "password",
   "new_password",
   "platform_password",
+  "delivery_note",
   "proof_image",
   "barcode_image",
   "image_base64",

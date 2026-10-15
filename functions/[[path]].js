@@ -1732,11 +1732,31 @@ async function handleAddOrderItem(id, request, env) {
   const unit_price = body.unit_price === undefined || body.unit_price === null || body.unit_price === "" ? 0 : Number(body.unit_price);
   if (!Number.isFinite(unit_price) || Math.abs(unit_price) > 100000000) return json({ error: "單價不正確" }, 400); // 0＝贈品、負數＝折扣都可以
   const note = body.note ? String(body.note).slice(0, 200) : null;
+  const deliveryNote = cleanDeliveryNote(body.delivery_note);
   const { meta } = await env.DB.prepare(
     "INSERT INTO order_items (order_id, name, qty, unit_price, note, sort_order, created_at) VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order),0)+1 FROM order_items WHERE order_id=?), datetime('now'))"
   ).bind(id, name, qty, unit_price, note, id).run();
+  if (deliveryNote) {
+    try {
+      await env.DB.prepare("UPDATE order_items SET delivery_note=? WHERE id=?").bind(deliveryNote, meta.last_row_id).run();
+    } catch (e) {
+      await env.DB.prepare("DELETE FROM order_items WHERE id=?").bind(meta.last_row_id).run(); // 品項不要留一半
+      if (isMissingColumnErr(e)) return json({ error: DELIVERY_MIGRATE_HINT }, 400);
+      throw e;
+    }
+  }
   const item = await env.DB.prepare("SELECT * FROM order_items WHERE id=?").bind(meta.last_row_id).first();
   return json(item);
+}
+
+// 寄送序號：去掉前後空白、統一換行、最長 2000 字；空白 = 沒有序號
+const DELIVERY_NOTE_MAX = 2000;
+const DELIVERY_MIGRATE_HINT = "資料庫尚未升級，請先在 D1 執行 migrate_v29.sql（新增「寄送序號」欄位）";
+const isMissingColumnErr = (e) => /no such (column|table)/i.test(String(e && e.message));
+function cleanDeliveryNote(v) {
+  if (v === undefined || v === null) return null;
+  const s = String(v).replace(/\r\n?/g, "\n").trim().slice(0, DELIVERY_NOTE_MAX);
+  return s || null;
 }
 
 // PATCH /api/admin/order-items/:itemId — 更新品項（品名/數量/單價/備註）
@@ -1753,8 +1773,14 @@ async function handleUpdateOrderItem(itemId, request, env) {
     fields.push("unit_price=?"); binds.push(up);
   }
   if (body.note !== undefined) { fields.push("note=?"); binds.push(body.note ? String(body.note).slice(0, 200) : null); }
+  if (body.delivery_note !== undefined) { fields.push("delivery_note=?"); binds.push(cleanDeliveryNote(body.delivery_note)); }
   if (!fields.length) return json({ ok: true });
-  await env.DB.prepare(`UPDATE order_items SET ${fields.join(",")} WHERE id=?`).bind(...binds, itemId).run();
+  try {
+    await env.DB.prepare(`UPDATE order_items SET ${fields.join(",")} WHERE id=?`).bind(...binds, itemId).run();
+  } catch (e) {
+    if (isMissingColumnErr(e)) return json({ error: DELIVERY_MIGRATE_HINT }, 400);
+    throw e;
+  }
   return json(await env.DB.prepare("SELECT * FROM order_items WHERE id=?").bind(itemId).first());
 }
 
@@ -1764,9 +1790,28 @@ async function handleToggleDelivery(itemId, request, env) {
   if (!item) return json({ error: "找不到品項" }, 404);
   const body = await request.json().catch(() => ({}));
   const deliver = body.deliver === true || body.deliver === 1 || body.deliver === "1";
+  const wantEmail = body.send_email === true || body.send_email === 1 || body.send_email === "1";
+  // 出貨視窗會一起帶最新的序號過來：先存起來，信裡才會是最新的內容（避免跟「離開輸入框自動儲存」搶時間）
+  if (body.delivery_note !== undefined) {
+    try {
+      await env.DB.prepare("UPDATE order_items SET delivery_note=? WHERE id=?").bind(cleanDeliveryNote(body.delivery_note), itemId).run();
+    } catch (e) {
+      if (isMissingColumnErr(e)) return json({ error: DELIVERY_MIGRATE_HINT }, 400);
+      throw e;
+    }
+  }
   await env.DB.prepare("UPDATE order_items SET is_delivered=?, delivered_at=? WHERE id=?")
     .bind(deliver ? 1 : 0, deliver ? nowIso() : null, itemId).run();
-  return json({ ok: true, is_delivered: deliver ? 1 : 0 });
+
+  // 出貨並勾選寄信 → 寄出含序號的出貨通知。訂單還沒付款絕對不寄（避免沒收到錢就把序號寄出去）。
+  let email = null;
+  if (deliver && wantEmail) {
+    const order = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(item.order_id).first();
+    if (!order) email = { sent: false, reason: "找不到訂單" };
+    else if (order.status !== "paid") email = { sent: false, reason: "訂單尚未付款，不會寄出序號（只標記了交貨）" };
+    else email = await sendOrderDetailEmail(env, order, { forceItems: true });
+  }
+  return json({ ok: true, is_delivered: deliver ? 1 : 0, email });
 }
 
 // DELETE /api/admin/order-items/:itemId
@@ -1870,15 +1915,35 @@ async function sendOrderDetailEmail(env, order, opts = {}) {
     ).join("\n") + `\n合計：${money(itemsTotal)}`;
   }
 
-  const subject = hasItems ? `【訂單明細】${orderNo}` : `【訂單資訊】${orderNo}`;
+  // ---- 寄送序號：只有「訂單已付款」且「該品項已交貨」才會寄出 ----
+  const serialItems = order.status === "paid"
+    ? items.filter((it) => it.is_delivered && it.delivery_note && String(it.delivery_note).trim())
+    : [];
+  let serialHtml = "";
+  let serialText = "";
+  if (serialItems.length) {
+    const blocks = serialItems.map((it) => `<div style="margin:10px 0;">
+        <div style="font-size:13px;color:#6b7280;margin-bottom:3px;">${escM(it.name)}</div>
+        <div style="font-family:Menlo,Consolas,'Courier New',monospace;font-size:15px;font-weight:700;color:#1f2430;white-space:pre-wrap;word-break:break-all;background:#fff;border:1px dashed #86efac;border-radius:6px;padding:8px 10px;">${escM(it.delivery_note)}</div>
+      </div>`).join("");
+    serialHtml = `<h3 style="font-size:15px;margin:22px 0 8px;color:#1f2430;">🔑 您的序號／寄送內容</h3>
+      <div style="border:1px solid #bbf7d0;background:#f0fdf4;border-radius:8px;padding:2px 14px;">${blocks}</div>
+      <p style="color:#9ca3af;font-size:12px;margin:6px 0 0;">請妥善保管，勿轉傳給他人。</p>`;
+    serialText = "\n\n【您的序號／寄送內容】\n" + serialItems.map((it, i) =>
+      `  ${i + 1}. ${it.name}\n` + String(it.delivery_note).split("\n").map((l) => "     " + l).join("\n")
+    ).join("\n");
+  }
+
+  const subject = serialItems.length ? `【出貨通知】${orderNo}（含序號）` : hasItems ? `【訂單明細】${orderNo}` : `【訂單資訊】${orderNo}`;
   const htmlBody = `<div style="font-family:-apple-system,'PingFang TC','Microsoft JhengHei',sans-serif;max-width:500px;margin:auto;padding:20px;">
     <p style="font-size:16px;margin-bottom:4px;">${escM(name)} 您好，</p>
-    <p style="color:#6b7280;font-size:14px;margin-top:0;">以下是您的訂單資訊${hasItems ? "及明細" : ""}：</p>
+    <p style="color:#6b7280;font-size:14px;margin-top:0;">${serialItems.length ? "您的商品已出貨，序號請見下方。以下是您的訂單資訊及明細：" : "以下是您的訂單資訊" + (hasItems ? "及明細" : "") + "："}</p>
     <table style="border-collapse:collapse;margin:12px 0;">${infoRows}</table>
     ${itemsHtml}
+    ${serialHtml}
     <p style="color:#9ca3af;font-size:12px;margin-top:20px;">這是系統寄送的訂單通知，如有疑問請直接聯絡店家。</p>
   </div>`;
-  const textBody = `${name} 您好，以下是您的訂單資訊：\n\n訂單編號：${orderNo}\n儲值平台：${platformLabel}\n付款方式：${payMethod}\n訂單金額：${money(order.amount)}${order.amount < 0 ? "（折扣／退款）" : ""}\n付款狀態：${paidLabel}${paidAt ? "（" + paidAt + "）" : ""}\n結案狀態：${completedLabel}${itemsText}`;
+  const textBody = `${name} 您好，以下是您的訂單資訊：\n\n訂單編號：${orderNo}\n儲值平台：${platformLabel}\n付款方式：${payMethod}\n訂單金額：${money(order.amount)}${order.amount < 0 ? "（折扣／退款）" : ""}\n付款狀態：${paidLabel}${paidAt ? "（" + paidAt + "）" : ""}\n結案狀態：${completedLabel}${itemsText}${serialText}`;
 
   try {
     await sendEmail(env, { to: toAddr, from: orderSender, subject, html: htmlBody, text: textBody });

@@ -1181,6 +1181,24 @@ ${THEME_CSS_ADMIN}
   </div>
 </div>
 
+<div id="shipModal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <h2>出貨 <span id="ship_name" style="font-size:14px;color:var(--muted);"></span></h2>
+    <p style="margin:0 0 8px;font-size:14px;line-height:1.6;">這個品項有寄送序號，標記為已交貨後可以一併寄給顧客（可以在這裡修改）：</p>
+    <textarea id="ship_serial" rows="3" style="font-family:Menlo,Consolas,monospace;font-size:14px;"></textarea>
+    <label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;margin:12px 0 0;">
+      <input type="checkbox" id="ship_email" style="width:auto;margin:0;" />
+      <span>同時寄信給顧客（含序號）</span>
+    </label>
+    <small class="hint" id="ship_hint" style="display:block;margin-top:6px;"></small>
+    <div style="display:flex;gap:8px;margin-top:14px;">
+      <button class="btn" id="ship_ok" onclick="submitShip()">確認出貨</button>
+      <button class="btn secondary" onclick="closeShip()">取消</button>
+    </div>
+    <div id="ship_msg" class="msg"></div>
+  </div>
+</div>
+
 <div id="sendDetailModal" class="modal-overlay hidden">
   <div class="modal-box">
     <h2>寄送訂單明細 <span id="sde_order_no" style="font-size:14px;color:var(--muted);"></span></h2>
@@ -2420,6 +2438,8 @@ async function loadOrderItems(orderId){
 function renderOrderItems(orderId, items){
   const container = document.getElementById('order-items-' + orderId);
   if (!container) return;
+  window.__itemsCache = window.__itemsCache || {};
+  window.__itemsCache[orderId] = items;   // 交貨按鈕要用它判斷這個品項有沒有寄送序號
   const o = ordersCache.find(function(x){ return x.id === orderId; });
   const orderNo = o ? o.order_no : ('#' + orderId);
   const total = items.reduce(function(s, it){ return s + it.qty * it.unit_price; }, 0);
@@ -2431,7 +2451,7 @@ function renderOrderItems(orderId, items){
       ? \`<button class="btn secondary small" style="font-size:11px;padding:3px 8px;" onclick="toggleDelivery(\${it.id}, \${orderId}, false)">✓ 已交貨</button>\`
       : \`<button class="btn small" style="font-size:11px;padding:3px 8px;background:#f59e0b;" onclick="toggleDelivery(\${it.id}, \${orderId}, true)">◎ 未交貨</button>\`;
     return \`<tr>
-      <td style="padding:6px 8px;font-size:13px;">\${escapeHtml(it.name)}\${it.note ? '<br/><span style="color:var(--muted);font-size:11px;">' + escapeHtml(it.note) + '</span>' : ''}</td>
+      <td style="padding:6px 8px;font-size:13px;">\${escapeHtml(it.name)}\${it.note ? '<br/><span style="color:var(--muted);font-size:11px;">' + escapeHtml(it.note) + '</span>' : ''}<textarea class="oi-serial" data-item="\${it.id}" rows="\${it.delivery_note ? 2 : 1}" data-orig="\${escapeHtml(it.delivery_note || '')}" placeholder="🔑 寄送序號／給顧客的內容（出貨時寄出）" onfocus="if(this.rows<2)this.rows=2" onblur="saveItemSerial(\${it.id}, \${orderId}, this)" style="display:block;width:100%;min-width:170px;margin-top:5px;font-size:12px;font-family:Menlo,Consolas,monospace;padding:4px 6px;resize:vertical;">\${escapeHtml(it.delivery_note || '')}</textarea></td>
       <td style="padding:6px 8px;font-size:13px;text-align:right;">\${it.qty}</td>
       <td style="padding:6px 8px;font-size:13px;text-align:right;">\${coFmt(it.unit_price)}</td>
       <td style="padding:6px 8px;font-size:13px;text-align:right;font-weight:600;">\${coFmt(sub)}</td>
@@ -2473,6 +2493,10 @@ function renderOrderItems(orderId, items){
         <div style="font-size:12px;color:var(--muted);margin-bottom:3px;">備註（選填）</div>
         <input id="oi_note_\${orderId}" placeholder="選填" style="width:120px;font-size:13px;padding:5px 8px;" />
       </div>
+      <div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:3px;">🔑 寄送序號（選填）</div>
+        <input id="oi_serial_\${orderId}" placeholder="出貨時寄給顧客" style="width:150px;font-size:13px;padding:5px 8px;font-family:Menlo,Consolas,monospace;" />
+      </div>
       <button class="btn small" style="margin-top:0;padding:6px 12px;font-size:13px;" onclick="addOrderItem(\${orderId})">＋ 新增品項</button>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px;">
@@ -2487,15 +2511,16 @@ async function addOrderItem(orderId){
   const qtyEl = document.getElementById('oi_qty_' + orderId);
   const priceEl = document.getElementById('oi_price_' + orderId);
   const noteEl = document.getElementById('oi_note_' + orderId);
+  const serialEl = document.getElementById('oi_serial_' + orderId);
   const msg = document.getElementById('oi_msg_' + orderId);
   const name = nameEl.value.trim();
   if (!name) { msg.textContent = '請填寫品名'; msg.className = 'msg err'; return; }
   try {
     await api('/api/admin/orders/' + orderId + '/items', {
       method: 'POST',
-      body: JSON.stringify({ name, qty: parseFloat(qtyEl.value)||1, unit_price: parseFloat(priceEl.value)||0, note: noteEl.value.trim() || null })
+      body: JSON.stringify({ name, qty: parseFloat(qtyEl.value)||1, unit_price: parseFloat(priceEl.value)||0, note: noteEl.value.trim() || null, delivery_note: serialEl && serialEl.value.trim() ? serialEl.value.trim() : undefined })
     });
-    nameEl.value = ''; qtyEl.value = '1'; priceEl.value = '0'; noteEl.value = '';
+    nameEl.value = ''; qtyEl.value = '1'; priceEl.value = '0'; noteEl.value = ''; if (serialEl) serialEl.value = '';
     msg.textContent = '已新增'; msg.className = 'msg ok';
     setTimeout(function(){ if(msg) msg.textContent=''; }, 2000);
     await loadOrderItems(orderId);
@@ -2510,13 +2535,92 @@ async function deleteOrderItem(itemId, orderId){
   } catch(e) { alert('刪除失敗：' + e.message); }
 }
 
+function findCachedItem(orderId, itemId){
+  const list = (window.__itemsCache && window.__itemsCache[orderId]) || [];
+  return list.find(function(x){ return x.id === itemId; }) || null;
+}
+
 async function toggleDelivery(itemId, orderId, deliver){
+  const it = findCachedItem(orderId, itemId);
+  // 輸入框裡還沒離開（還沒自動儲存）的序號也要算，所以優先看畫面上的內容
+  const ta = document.querySelector('.oi-serial[data-item="' + itemId + '"]');
+  const serial = ta ? ta.value.trim() : (it && it.delivery_note ? String(it.delivery_note).trim() : '');
+  // 有寄送序號的品項要「出貨」→ 先跳出視窗，問要不要同時寄信給顧客
+  if (deliver && it && serial) { openShipModal(it, orderId, serial); return; }
+  await doDelivery(itemId, orderId, deliver, {});
+}
+
+async function doDelivery(itemId, orderId, deliver, extra){
   try {
-    await api('/api/admin/order-items/' + itemId + '/deliver', {
-      method: 'POST', body: JSON.stringify({ deliver })
-    });
+    const body = Object.assign({ deliver: deliver }, extra || {});
+    const r = await api('/api/admin/order-items/' + itemId + '/deliver', { method: 'POST', body: JSON.stringify(body) });
     await loadOrderItems(orderId);
-  } catch(e) { alert('操作失敗：' + e.message); }
+    return r;
+  } catch(e) { alert('操作失敗：' + e.message); return null; }
+}
+
+async function saveItemSerial(itemId, orderId, el){
+  const value = el.value.trim();
+  if (value === (el.dataset.orig || '')) { if (!value) el.rows = 1; return; }
+  try {
+    await api('/api/admin/order-items/' + itemId, { method: 'PATCH', body: JSON.stringify({ delivery_note: value }) });
+    el.dataset.orig = value;
+    el.rows = value ? 2 : 1;
+    const it = findCachedItem(orderId, itemId);
+    if (it) it.delivery_note = value || null;
+    const o = ordersCache.find(function(x){ return x.id === orderId; });
+    if (o) {
+      // 讓「訂單完成」視窗的序號提醒保持最新（只有從沒有→有、或有→沒有時需要調整）
+      const list = (window.__itemsCache && window.__itemsCache[orderId]) || [];
+      o.serial_count = list.filter(function(x){ return x.delivery_note && String(x.delivery_note).trim(); }).length;
+    }
+  } catch(e) { alert('儲存序號失敗：' + e.message); }
+}
+
+let shipping = null;
+
+function openShipModal(it, orderId, serial){
+  shipping = { itemId: it.id, orderId: orderId };
+  const o = ordersCache.find(function(x){ return x.id === orderId; });
+  const m = o && o.member_id ? membersCache.find(function(x){ return x.id === o.member_id; }) : null;
+  const addr = o ? (o.notify_email_addr || (m && m.email) || '') : '';
+  document.getElementById('ship_name').textContent = it.name;
+  document.getElementById('ship_serial').value = serial;
+  const cb = document.getElementById('ship_email');
+  const hint = document.getElementById('ship_hint');
+  if (!o || o.status !== 'paid') {
+    cb.checked = false; cb.disabled = true;
+    hint.textContent = '這張訂單還沒付款，不會寄出序號（只會標記交貨）。';
+  } else if (!addr) {
+    cb.checked = false; cb.disabled = true;
+    hint.textContent = '這張訂單沒有顧客信箱，無法寄信（只會標記交貨）。可以用「寄送明細給客戶」輸入信箱後再寄。';
+  } else {
+    cb.checked = true; cb.disabled = false;
+    hint.textContent = '會寄到：' + addr;
+  }
+  const msg = document.getElementById('ship_msg'); msg.textContent = ''; msg.className = 'msg';
+  document.getElementById('ship_ok').disabled = false;
+  document.getElementById('shipModal').classList.remove('hidden');
+}
+
+function closeShip(){
+  shipping = null;
+  document.getElementById('shipModal').classList.add('hidden');
+}
+
+async function submitShip(){
+  if (!shipping) return;
+  const btn = document.getElementById('ship_ok');
+  const msg = document.getElementById('ship_msg');
+  const cur = shipping;
+  btn.disabled = true;
+  const r = await doDelivery(cur.itemId, cur.orderId, true, {
+    send_email: document.getElementById('ship_email').checked,
+    delivery_note: document.getElementById('ship_serial').value.trim(),
+  });
+  if (!r) { btn.disabled = false; return; }
+  closeShip();
+  if (r.email) alert(r.email.sent ? '已標記交貨，序號已寄到 ' + r.email.to : '已標記交貨，但信沒有寄出：' + r.email.reason);
 }
 
 let _sendDetailOrderId = null;
@@ -2640,11 +2744,14 @@ function completeOrder(id){
   document.getElementById('cpl_no').textContent = o && o.order_no ? o.order_no : '';
   const cb = document.getElementById('cpl_email');
   const optedIn = !!(o && o.notify_email);
-  cb.checked = optedIn;
+  const serials = o && o.serial_count ? o.serial_count : 0;   // 這張單有幾個品項設定了寄送序號
+  cb.checked = optedIn || serials > 0;
   cb.disabled = optedIn;
   document.getElementById('cpl_email_note').textContent = optedIn
     ? '顧客下單時已選擇要信箱通知，完成後會自動寄到：' + ((o && o.notify_email_addr) ? o.notify_email_addr : '會員資料中的信箱') + '。'
-    : '會寄到會員資料中的信箱；非會員或沒有信箱的訂單不會寄出。';
+    : (serials > 0
+      ? '這張訂單有 ' + serials + ' 個品項設定了寄送序號，勾選寄信才會把序號寄給顧客（已先幫你勾選）。會寄到會員資料中的信箱；沒有信箱的訂單不會寄出。'
+      : '會寄到會員資料中的信箱；非會員或沒有信箱的訂單不會寄出。');
   const msg = document.getElementById('cpl_msg'); msg.textContent = ''; msg.className = 'msg';
   document.getElementById('cpl_ok').disabled = false;
   document.getElementById('completeModal').classList.remove('hidden');

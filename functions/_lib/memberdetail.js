@@ -211,8 +211,25 @@ export async function attachMemberFlags(env, orders) {
   } catch (e) {
     if (!isMissingColumn(e)) throw e;
   }
+  // 每張訂單有幾個品項設定了「寄送序號」：「訂單完成」視窗用它來提醒要不要寄信。
+  // 還沒執行 migrate_v29.sql（沒有 delivery_note 欄位）時一律當 0。
+  const serialByOrder = new Map();
+  try {
+    const oids = orders.map((o) => o.id);
+    for (let i = 0; i < oids.length; i += 90) {
+      const part = oids.slice(i, i + 90);
+      const { results } = await env.DB.prepare(
+        "SELECT order_id, COUNT(*) AS c FROM order_items WHERE order_id IN (" + part.map(() => "?").join(",") + ") AND delivery_note IS NOT NULL AND TRIM(delivery_note) != '' GROUP BY order_id"
+      )
+        .bind(...part)
+        .all();
+      results.forEach((r) => serialByOrder.set(r.order_id, r.c));
+    }
+  } catch (e) {
+    if (!isMissingColumn(e)) throw e;
+  }
   return orders.map((o) => {
     const m = o.member_id != null ? byId.get(o.member_id) : null;
-    return { ...o, member_tags: m ? parseTags(m.tags) : [], member_blocked: !!(m && m.is_blocked) };
+    return { ...o, member_tags: m ? parseTags(m.tags) : [], member_blocked: !!(m && m.is_blocked), serial_count: serialByOrder.get(o.id) || 0 };
   });
 }
