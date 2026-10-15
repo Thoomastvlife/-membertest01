@@ -1004,11 +1004,20 @@ async function handleSaveAnnouncement(request, env) {
   }
 
   const ann = { enabled, type, title, text, images, updated_at: nowIso() };
-  await env.DB.prepare(
-    "INSERT INTO settings (key, value) VALUES ('announcement', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value"
-  )
-    .bind(JSON.stringify(ann))
-    .run();
+  const serialized = JSON.stringify(ann);
+  // D1 單一欄位上限約 2MB，超過會直接 500；這裡先擋下來並給明確提示
+  if (serialized.length > 1_900_000) {
+    return json({ error: `圖片總大小約 ${Math.round(serialized.length / 1024)}KB，超過上限（約 1800KB），請減少張數或換較小的圖片` }, 400);
+  }
+  try {
+    await env.DB.prepare(
+      "INSERT INTO settings (key, value) VALUES ('announcement', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value"
+    )
+      .bind(serialized)
+      .run();
+  } catch (e) {
+    return json({ error: "公告儲存失敗（資料量過大或資料庫忙碌），請減少圖片後再試" }, 500);
+  }
   return json({ ok: true });
 }
 

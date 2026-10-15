@@ -760,7 +760,7 @@ ${THEME_CSS_ADMIN}
         </div>
 
         <div id="ann_image_wrap" class="hidden">
-          <label>公告圖片（可上傳多張，將自動輪播；建議單張小於 500KB，最多 10 張）</label>
+          <label>公告圖片（可上傳多張，將自動輪播；上傳時會自動壓縮，所有圖片合計約 1.8MB 以內，最多 10 張）</label>
           <input type="file" id="ann_image_input" accept="image/*" multiple onchange="addAnnouncementImages(this)" />
           <div id="ann_image_list" style="display:flex;flex-wrap:wrap;gap:10px;margin-top:12px;"></div>
         </div>
@@ -4351,19 +4351,28 @@ function moveAnnouncementImage(i, dir){
   renderAnnouncementImageList();
 }
 
-function addAnnouncementImages(input){
+// 公告圖片全部存在同一筆資料庫設定值裡（上限約 2MB），所以上傳時一律先壓縮：
+// 縮到最長邊 1280px、轉成 JPEG，每張通常只剩 100～300KB。
+async function addAnnouncementImages(input){
   const files = Array.from(input.files || []);
   if (files.length === 0) return;
-  let remaining = files.length;
-  files.forEach(file => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (annImages.length < 10) annImages.push(reader.result);
-      remaining--;
-      if (remaining === 0) { renderAnnouncementImageList(); input.value = ''; }
-    };
-    reader.readAsDataURL(file);
-  });
+  const msg = document.getElementById('ann_msg');
+  msg.textContent = '圖片處理中…'; msg.className = 'msg';
+  for (const file of files) {
+    if (annImages.length >= 10) { msg.textContent = '最多只能放 10 張圖片'; msg.className = 'msg err'; break; }
+    try{
+      annImages.push(await compressImage(file, 1280, 0.8));
+    }catch(e){
+      msg.textContent = '有圖片讀取失敗，請換一張再試'; msg.className = 'msg err';
+    }
+  }
+  input.value = '';
+  renderAnnouncementImageList();
+  const kb = Math.round(annImages.reduce((n, x) => n + x.length, 0) / 1024);
+  if (msg.className.indexOf('err') < 0) {
+    msg.textContent = '目前圖片合計約 ' + kb + ' KB（上限約 1800 KB）';
+    msg.className = kb > 1800 ? 'msg err' : 'msg';
+  }
 }
 
 async function loadAnnouncement(){
