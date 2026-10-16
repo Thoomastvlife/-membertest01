@@ -36,6 +36,16 @@ EMAIL_FROM_ORDER = "咖啡代儲訂單通知 <order@member.ytgp168.com>"
 # 日報寄件人，選填；不填沿用 EMAIL_FROM_ORDER，再沒有就用 EMAIL_FROM。
 EMAIL_FROM_REPORT = "咖啡代儲營運日報 <report@member.ytgp168.com>"
 
+# ---- 服務條款／隱私權政策頁面（/terms、/privacy）要顯示的企業資訊 ----
+# 這些是「零售業等網路交易定型化契約應記載及不得記載事項」要求公開揭露的基本資訊，上線前請務必填寫正確；
+# 沒填的欄位，頁面上會直接顯示「尚未設定」字樣提醒你補上，不會悄悄留白。
+BIZ_NAME = "咖啡代儲"
+# BIZ_OWNER = "負責人姓名"
+# BIZ_TAX_ID = "統一編號（沒有統編請填「無」，並自行確認是否需要辦理商業登記）"
+# BIZ_ADDRESS = "營業所在地地址"
+# BIZ_PHONE = "客服電話"
+# BIZ_EMAIL = "客服信箱"   # 沒填的話，頁面會沿用 EMAIL_FROM_ORDER 或 EMAIL_FROM 的信箱
+
 # 部署前務必設定這個機密值（用來簽署登入 session）：
 #   wrangler pages secret put ADMIN_SESSION_SECRET --project-name=member-checkout-pages
 # 建議用一長串隨機字串，例如: openssl rand -hex 32

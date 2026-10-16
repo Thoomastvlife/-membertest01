@@ -20,7 +20,7 @@ const SITE_DISCLAIMER_CSS = `
   .site-disclaimer{width:100%;max-width:420px;margin:22px auto 8px;padding:0 14px;text-align:center;font-size:12.5px;line-height:1.7;color:#767B8C;box-sizing:border-box;}
   .site-disclaimer b{display:block;font-size:13px;margin-bottom:2px;color:inherit;}
   .site-disclaimer a{color:inherit;text-decoration:underline;}`;
-const SITE_DISCLAIMER_HTML = `<div class="site-disclaimer"><b>網頁宣告</b>本網站為會員自助查詢與訂單結帳頁面，內容僅供參考，實際以訂單確認內容為準。<br/>客服信箱：<a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a></div>`;
+const SITE_DISCLAIMER_HTML = `<div class="site-disclaimer"><b>網頁宣告</b>本網站為會員自助查詢與訂單結帳頁面，內容僅供參考，實際以訂單確認內容為準。點數／序號類商品一經交付即不適用七日猶豫期，詳見<a href="/terms" target="_blank">服務條款</a>。<br/>客服信箱：<a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a>　<a href="/terms" target="_blank">服務條款</a>　<a href="/privacy" target="_blank">隱私權政策</a></div>`;
 
 export function adminHtml({ platforms = DEFAULT_PLATFORMS } = {}) {
   return `<!DOCTYPE html>
@@ -760,7 +760,7 @@ ${THEME_CSS_ADMIN}
         </div>
 
         <div id="ann_image_wrap" class="hidden">
-          <label>公告圖片（可上傳多張，將自動輪播；上傳時會自動壓縮，所有圖片合計約 1.8MB 以內，最多 10 張）</label>
+          <label>公告圖片（可上傳多張，將自動輪播；建議單張小於 500KB，最多 10 張）</label>
           <input type="file" id="ann_image_input" accept="image/*" multiple onchange="addAnnouncementImages(this)" />
           <div id="ann_image_list" style="display:flex;flex-wrap:wrap;gap:10px;margin-top:12px;"></div>
         </div>
@@ -4351,28 +4351,19 @@ function moveAnnouncementImage(i, dir){
   renderAnnouncementImageList();
 }
 
-// 公告圖片全部存在同一筆資料庫設定值裡（上限約 2MB），所以上傳時一律先壓縮：
-// 縮到最長邊 1280px、轉成 JPEG，每張通常只剩 100～300KB。
-async function addAnnouncementImages(input){
+function addAnnouncementImages(input){
   const files = Array.from(input.files || []);
   if (files.length === 0) return;
-  const msg = document.getElementById('ann_msg');
-  msg.textContent = '圖片處理中…'; msg.className = 'msg';
-  for (const file of files) {
-    if (annImages.length >= 10) { msg.textContent = '最多只能放 10 張圖片'; msg.className = 'msg err'; break; }
-    try{
-      annImages.push(await compressImage(file, 1280, 0.8));
-    }catch(e){
-      msg.textContent = '有圖片讀取失敗，請換一張再試'; msg.className = 'msg err';
-    }
-  }
-  input.value = '';
-  renderAnnouncementImageList();
-  const kb = Math.round(annImages.reduce((n, x) => n + x.length, 0) / 1024);
-  if (msg.className.indexOf('err') < 0) {
-    msg.textContent = '目前圖片合計約 ' + kb + ' KB（上限約 1800 KB）';
-    msg.className = kb > 1800 ? 'msg err' : 'msg';
-  }
+  let remaining = files.length;
+  files.forEach(file => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (annImages.length < 10) annImages.push(reader.result);
+      remaining--;
+      if (remaining === 0) { renderAnnouncementImageList(); input.value = ''; }
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 async function loadAnnouncement(){
@@ -5526,6 +5517,7 @@ function renderOrderView(o){
     html += '<div class="row"><span>點數折抵（'+o.points_used+' 點）</span><span>-$'+o.points_discount+'</span></div>';
   }
   html += '<div class="amount">'+(o.amount<0?('-$'+Math.abs(o.amount).toLocaleString()):('$'+o.amount.toLocaleString()))+'</div>';
+  html += '<div class="row" style="font-size:12.5px;color:var(--muted);line-height:1.6;">本訂單為點數／序號類數位內容，依「通訊交易解除權合理例外情事適用準則」，一經儲值或提供序號即完成交付，不適用七日猶豫期，詳見<a href="/terms" target="_blank">服務條款</a>。</div>';
   html += '<div class="row"><span>付款對象</span><span>'+o.member_name_snapshot+'</span></div>';
   if (o.platform) {
     html += '<div class="row"><span>儲值平台</span><span>'+(PLATFORM_LABEL[o.platform]||o.platform)+'</span></div>';
@@ -6127,6 +6119,10 @@ ${THEME_CSS_PORTAL}
         <label>通知信箱（可改成其他信箱，僅用於這筆訂單）</label>
         <input id="new_notify_addr" type="email" autocomplete="off" placeholder="例如：name@gmail.com" />
       </div>
+      <label style="display:flex;align-items:flex-start;gap:8px;font-size:13.5px;cursor:pointer;margin-top:14px;">
+        <input type="checkbox" id="agree_terms" style="width:auto;margin:3px 0 0;" />
+        <span>我已閱讀並同意<a href="/terms" target="_blank" onclick="event.stopPropagation()">服務條款</a>及<a href="/privacy" target="_blank" onclick="event.stopPropagation()">隱私權政策</a>，並了解本商品為點數／序號類數位內容，<b>一經儲值或提供序號即完成交付，不適用七日猶豫期</b>。</span>
+      </label>
       <button class="btn" id="newOrderBtn" onclick="createOrder()">建立訂單</button>
       <div id="newOrderMsg" class="msg"></div>
       <div id="newOrderResult" class="hidden">
@@ -6624,9 +6620,10 @@ async function createOrder(){
   if (!platform){ msg.textContent='請選擇儲值平台'; msg.className='msg err'; return; }
   if (!platform_account){ msg.textContent='請輸入帳號/ID'; msg.className='msg err'; return; }
   if (!platform_password && PLATFORMS_REQUIRE_PASSWORD.has(platform)){ msg.textContent='請輸入密碼'; msg.className='msg err'; return; }
+  if (!document.getElementById('agree_terms').checked){ msg.textContent='請先閱讀並勾選同意服務條款及隱私權政策'; msg.className='msg err'; return; }
   btn.disabled = true;
   try{
-    const res = await api('/api/member/orders', {method:'POST', body: JSON.stringify({amount, platform, platform_account, platform_password, coupon_code, use_points, notify_email, notify_email_addr})});
+    const res = await api('/api/member/orders', {method:'POST', body: JSON.stringify({amount, platform, platform_account, platform_password, coupon_code, use_points, notify_email, notify_email_addr, agree_terms: true})});
     document.getElementById('use_points').value = '';
     document.getElementById('new_notify_email').checked = false;
     onNotifyToggle();

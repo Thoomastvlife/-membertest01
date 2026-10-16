@@ -67,6 +67,7 @@ import {
   handleTotpAdminReset,
   handleUnlockLogin,
 } from "./_lib/twofa.js";
+import { termsHtml, privacyHtml } from "./_lib/legal.js";
 import { getRateRules, saveRateRules, getAllRateRules, getRateGroupForPlatform, RATE_GROUPS, DEFAULT_RATE_RULES, MIN_QUOTE_AMOUNT, calcCoins, isCustomRateGroup } from "./_lib/rates.js";
 
 // 會員自助下單的最低金額，跟查價系統的最低查詢金額保持一致
@@ -1004,20 +1005,11 @@ async function handleSaveAnnouncement(request, env) {
   }
 
   const ann = { enabled, type, title, text, images, updated_at: nowIso() };
-  const serialized = JSON.stringify(ann);
-  // D1 單一欄位上限約 2MB，超過會直接 500；這裡先擋下來並給明確提示
-  if (serialized.length > 1_900_000) {
-    return json({ error: `圖片總大小約 ${Math.round(serialized.length / 1024)}KB，超過上限（約 1800KB），請減少張數或換較小的圖片` }, 400);
-  }
-  try {
-    await env.DB.prepare(
-      "INSERT INTO settings (key, value) VALUES ('announcement', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value"
-    )
-      .bind(serialized)
-      .run();
-  } catch (e) {
-    return json({ error: "公告儲存失敗（資料量過大或資料庫忙碌），請減少圖片後再試" }, 500);
-  }
+  await env.DB.prepare(
+    "INSERT INTO settings (key, value) VALUES ('announcement', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value"
+  )
+    .bind(JSON.stringify(ann))
+    .run();
   return json({ ok: true });
 }
 
@@ -2859,6 +2851,9 @@ async function handleMemberOrders(session, request, env) {
 
 async function handleMemberCreateOrder(session, request, env) {
   const body = await request.json().catch(() => ({}));
+  // 點數／序號類商品一經交付即不適用七日猶豫期，需要消費者「事先同意」才能排除——前端畫面已有對應的
+  // 勾選同意（連結到 /terms），這裡在伺服器端再次把關，避免有人繞過前端直接打 API。
+  if (!body.agree_terms) return json({ error: "請先閱讀並同意服務條款及隱私權政策" }, 400);
   const amt = parseFloat(body.amount);
   if (!amt || amt <= 0) return json({ error: "金額不正確" }, 400);
   if (amt < MIN_ORDER_AMOUNT) return json({ error: `訂單金額不可低於 ${MIN_ORDER_AMOUNT} 元` }, 400);
@@ -3371,6 +3366,8 @@ export async function onRequest(context) {
     if (path.startsWith("/pay/")) return html(payHtml({ platforms: await getPlatforms(env.DB) }));
     if (path === "/member" || path === "/member/") return html(memberHtml({ platforms: await getPlatforms(env.DB) }));
     if (path === "/member/register" || path === "/member/register/") return html(memberRegisterHtml({ emailVerify: emailVerifyEnabled(env) }));
+    if (path === "/terms" && method === "GET") return html(termsHtml(env));
+    if (path === "/privacy" && method === "GET") return html(privacyHtml(env));
     if (path === "/") return html(homeHtml());
 
     // ---- Public API ----
