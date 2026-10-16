@@ -17,10 +17,6 @@ function bizInfo(env) {
   const need = (v, hint) => (v && String(v).trim()) || `（尚未設定，請在 wrangler.toml 填入 ${hint}）`;
   return {
     name: need(env.BIZ_NAME, "BIZ_NAME"),
-    owner: need(env.BIZ_OWNER, "BIZ_OWNER"),
-    taxId: need(env.BIZ_TAX_ID, "BIZ_TAX_ID"),
-    address: need(env.BIZ_ADDRESS, "BIZ_ADDRESS"),
-    phone: need(env.BIZ_PHONE, "BIZ_PHONE"),
     email: (env.BIZ_EMAIL && env.BIZ_EMAIL.trim()) || extractEmail(env.EMAIL_FROM_ORDER) || extractEmail(env.EMAIL_FROM) || "（尚未設定，請在 wrangler.toml 填入 BIZ_EMAIL）",
   };
 }
@@ -88,10 +84,6 @@ export function termsHtml(env) {
     <h2>一、企業經營者資訊</h2>
     <table>
       <tr><td>名稱</td><td>${escapeHtml(b.name)}</td></tr>
-      <tr><td>負責人</td><td>${escapeHtml(b.owner)}</td></tr>
-      <tr><td>統一編號</td><td>${escapeHtml(b.taxId)}</td></tr>
-      <tr><td>營業地址</td><td>${escapeHtml(b.address)}</td></tr>
-      <tr><td>客服電話</td><td>${escapeHtml(b.phone)}</td></tr>
       <tr><td>客服信箱</td><td>${escapeHtml(b.email)}</td></tr>
     </table>
 
@@ -196,9 +188,7 @@ export function privacyHtml(env) {
 
     <h2>八、聯絡方式</h2>
     <table>
-      <tr><td>客服電話</td><td>${escapeHtml(b.phone)}</td></tr>
       <tr><td>客服信箱</td><td>${escapeHtml(b.email)}</td></tr>
-      <tr><td>營業地址</td><td>${escapeHtml(b.address)}</td></tr>
     </table>
   `;
   return pageShell("隱私權政策", b.name, body);
