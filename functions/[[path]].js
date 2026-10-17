@@ -1479,16 +1479,40 @@ async function handleListOrders(request, env) {
   return json((await attachMemberFlags(env, results)).map((o) => ({ ...o, order_no: formatOrderNo(o.id) })));
 }
 
-function normalizeImageDataUrl(v) {
-  if (!v || typeof v !== "string") return v;
-  // 部分安卓瀏覽器傳來 data:application/octet-stream 或空的 MIME，統一視為圖片
-  return v.replace(/^data:(application\/octet-stream|binary\/octet-stream)?;base64,/, "data:image/jpeg;base64,");
+// 圖片上傳驗證：用檔案開頭的「特徵碼」判斷真實格式，只收瀏覽器一定能顯示的 JPEG／PNG／GIF／WebP，
+// 並把 data URL 的 MIME 改成正確的。（以前會把 application/octet-stream 一律標成 JPEG，
+// 結果 HEIC 等格式被存成「標成 JPEG 的壞檔」，後台顯示時就是破圖。）
+// 回傳 { dataUrl } 或 { error }。
+const IMAGE_DATAURL_MAX_CHARS = 1600000; // D1 單列約 2MB 上限，留一點餘裕
+function checkImageDataUrl(v) {
+  if (typeof v !== "string") return { error: "請上傳有效的圖片" };
+  const m = /^data:([^;,]*)(?:;[^,]*)?;base64,([\s\S]*)$/.exec(v);
+  if (!m) return { error: "請上傳有效的圖片" };
+  const b64 = m[2].replace(/\s+/g, "");
+  if (b64.length < 100 || b64.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(b64)) {
+    return { error: "圖片資料不完整，請重新選擇圖片再上傳" };
+  }
+  if (b64.length + 40 > IMAGE_DATAURL_MAX_CHARS) return { error: "圖片太大，請換較小的圖片（或直接用手機截圖）" };
+  let mime = null;
+  if (b64.startsWith("/9j/")) mime = "image/jpeg";
+  else if (b64.startsWith("iVBORw0KGgo")) mime = "image/png";
+  else if (b64.startsWith("R0lGOD")) mime = "image/gif";
+  else if (b64.startsWith("UklGR")) {
+    try {
+      if (atob(b64.slice(0, 16)).slice(8, 12) === "WEBP") mime = "image/webp";
+    } catch (e) {
+      mime = null;
+    }
+  }
+  if (!mime) return { error: "這個圖片格式無法使用（例如 iPhone 的 HEIC），請改傳 JPG 或 PNG，或直接用手機截圖" };
+  return { dataUrl: "data:" + mime + ";base64," + b64 };
 }
 
 async function handleUploadBarcode(id, request, env) {
   const body = await request.json().catch(() => ({}));
-  const image_base64 = normalizeImageDataUrl(body.image_base64);
-  if (!image_base64 || !image_base64.startsWith("data:image")) return json({ error: "請上傳有效的圖片" }, 400);
+  const checked = checkImageDataUrl(body.image_base64);
+  if (checked.error) return json({ error: checked.error }, 400);
+  const image_base64 = checked.dataUrl;
   const order = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).first();
   if (!order) return json({ error: "找不到訂單" }, 404);
   if (!["store_barcode", "taiwan_pay"].includes(order.payment_method)) {
@@ -2448,8 +2472,13 @@ async function handleSelectMethod(token, request, env) {
 async function handleUploadProof(token, request, env) {
   const body = await request.json().catch(() => ({}));
   const { last_digits } = body;
-  const image_base64 = normalizeImageDataUrl(body.image_base64);
-  const hasImage = image_base64 && String(image_base64).startsWith("data:image");
+  let image_base64 = null;
+  if (body.image_base64) {
+    const checked = checkImageDataUrl(body.image_base64);
+    if (checked.error) return json({ error: checked.error }, 400);
+    image_base64 = checked.dataUrl;
+  }
+  const hasImage = !!image_base64;
   const digits = last_digits && last_digits.trim() ? last_digits.trim().slice(0, 20) : null;
   if (!hasImage && !digits) return json({ error: "請上傳截圖或填寫帳號末幾碼" }, 400);
 
