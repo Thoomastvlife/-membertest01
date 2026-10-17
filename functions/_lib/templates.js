@@ -1910,9 +1910,9 @@ function showTab(name, opts){
   document.getElementById('tab-'+name).classList.remove('hidden');
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active', b.dataset.tab===name));
   if (name==='dashboard') { loadDashboard(); startDashPolling(); } else { stopDashPolling(); }
-  if (name==='orders') { fillOrderFilters(); loadOrders(); startOrdersPolling(); }
-  if (name==='backup') { loadBackupTab(); }
+  if (name==='orders') { fillOrderFilters(); loadOrders().catch(function(e){ showOrdersLoadError(e && e.message); }); startOrdersPolling(); }
   else { stopOrdersPolling(); }
+  if (name==='backup') { loadBackupTab(); }
   if (name==='members') loadMembers();
   if (name==='stats') loadStats();
   if (name==='settings') { loadSettings(); loadPlatformsAdmin(); loadMethodsAdmin(); }
@@ -2225,6 +2225,14 @@ function copyLink(){
   el.select(); document.execCommand('copy');
 }
 
+function showOrdersLoadError(msg){
+  const tbody = document.querySelector('#ord_table tbody');
+  if (!tbody) return;
+  tbody.innerHTML = '<tr><td colspan="14" style="text-align:center;color:var(--danger,#c0392b);padding:18px;">訂單載入失敗：'
+    + escapeHtml(msg || '未知錯誤')
+    + '　<button type="button" class="btn secondary small" onclick="loadOrders().catch(function(e){ showOrdersLoadError(e && e.message); })">重新載入</button></td></tr>';
+}
+
 async function loadOrders(opts){
   const silent = !!(opts && opts.silent);   // true = 背景自動更新（不是使用者按的）
   const forceMonth = !!(opts && opts.forceMonth);
@@ -2238,7 +2246,13 @@ async function loadOrders(opts){
   const monthInput = document.getElementById('ord_month');
   if (!monthInput.value) monthInput.value = new Date().toISOString().slice(0,7);
   const month = monthInput.value;
-  const fresh = await api('/api/admin/orders?month='+encodeURIComponent(month));
+  let fresh;
+  try {
+    fresh = await api('/api/admin/orders?month='+encodeURIComponent(month));
+  } catch (e) {
+    if (!silent) showOrdersLoadError(e && e.message);   // 背景自動更新失敗就先不吵，下一輪再試
+    return;
+  }
   if (silent) {
     // 資料沒變 → 完全不重畫；請求期間使用者剛好點進輸入框 → 也先不重畫（下一輪再更新）
     if (JSON.stringify(fresh) === JSON.stringify(ordersCache)) return;
@@ -2375,6 +2389,12 @@ function renderOrders(){
   const hideCompleted = document.getElementById('ord_hide_completed').checked;
   const tbody = document.querySelector('#ord_table tbody');
   const list = hideCompleted ? ordersCache.filter(o=>!o.is_completed) : ordersCache;
+  if (!list.length) {
+    tbody.innerHTML = '<tr><td colspan="14" style="text-align:center;color:var(--muted);padding:18px;">'
+      + (ordersCache.length ? '目前條件下沒有訂單（已隱藏已結案訂單）' : (orderSearchActive ? '沒有符合條件的訂單' : '這個月份沒有訂單'))
+      + '</td></tr>';
+    return;
+  }
   tbody.innerHTML = list.map(o=>{
     const st = STATUS_LABEL[o.status] || [o.status,'b-pending'];
     let actions = '';
