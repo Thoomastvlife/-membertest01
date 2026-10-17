@@ -5448,6 +5448,11 @@ ${THEME_HEAD}
   .methods button{padding:14px;border-radius:8px;border:1px solid #2f6fed;background:#fff;color:#2f6fed;font-size:15px;cursor:pointer;}
   .methods button:hover{background:#eef3ff;}
   .info-box{background:#f0f2f5;border-radius:8px;padding:14px;margin-top:16px;font-size:14px;line-height:1.8;}
+  .legal-note{display:flex;gap:10px;align-items:flex-start;margin:14px 0 10px;padding:10px 12px;background:#f3f5fa;border:1px solid #e2e4e8;border-left:3px solid #2f6fed;border-radius:0 8px 8px 0;font-size:12.5px;line-height:1.75;color:#5b6475;}
+  .legal-note .ln-ic{flex:none;width:18px;height:18px;margin-top:2px;border-radius:50%;background:#2f6fed;color:#fff;font-size:12px;font-weight:700;line-height:18px;text-align:center;font-family:Georgia,serif;font-style:italic;}
+  .legal-note .ln-tx{flex:1;min-width:0;}
+  .legal-note b{color:#1f2430;font-weight:600;}
+  .legal-note a{color:#2f6fed;text-decoration:underline;text-underline-offset:2px;white-space:nowrap;}
   img.barcode{max-width:100%;margin-top:12px;border:1px solid #e2e4e8;border-radius:8px;display:block;}
   .barcode-wrap{position:relative;display:inline-block;max-width:100%;}
   .barcode-watermark{position:absolute;top:12px;left:0;right:0;bottom:0;pointer-events:none;border-radius:8px;overflow:hidden;
@@ -5464,6 +5469,10 @@ ${THEME_HEAD}
   .proof-done{background:#eef9f0;color:#1f9d55;border-radius:8px;padding:10px;margin-top:14px;font-size:13px;text-align:center;}
 ${SITE_DISCLAIMER_CSS}
 ${THEME_CSS_PAY}
+  html[data-theme="dark"] .legal-note{background:#222737;border-color:#2D3140;border-left-color:#5B8CFF;color:#A9B0C2;}
+  html[data-theme="dark"] .legal-note .ln-ic{background:#4A7BEC;}
+  html[data-theme="dark"] .legal-note b{color:#E6E8EE;}
+  html[data-theme="dark"] .legal-note a{color:#8FB0FF;}
 </style>
 </head>
 <body>
@@ -5555,7 +5564,7 @@ function renderOrderView(o){
     html += '<div class="row"><span>點數折抵（'+o.points_used+' 點）</span><span>-$'+o.points_discount+'</span></div>';
   }
   html += '<div class="amount">'+(o.amount<0?('-$'+Math.abs(o.amount).toLocaleString()):('$'+o.amount.toLocaleString()))+'</div>';
-  html += '<div class="row" style="font-size:12.5px;color:var(--muted);line-height:1.6;">本訂單為點數／序號類數位內容，依「通訊交易解除權合理例外情事適用準則」，一經儲值或提供序號即完成交付，不適用七日猶豫期，詳見<a href="/terms" target="_blank">服務條款</a>。</div>';
+  html += '<div class="legal-note"><span class="ln-ic" aria-hidden="true">i</span><div class="ln-tx">本訂單為點數／序號類數位內容，依「通訊交易解除權合理例外情事適用準則」，一經儲值或提供序號即完成交付，<b>不適用七日猶豫期</b>，詳見<a href="/terms" target="_blank">服務條款</a>。</div></div>';
   html += '<div class="row"><span>付款對象</span><span>'+o.member_name_snapshot+'</span></div>';
   if (o.platform) {
     html += '<div class="row"><span>儲值平台</span><span>'+(PLATFORM_LABEL[o.platform]||o.platform)+'</span></div>';
