@@ -2403,7 +2403,7 @@ function renderOrders(){
 
     let proofInfo = '';
     if (o.proof_last_digits) proofInfo += \`末碼 \${o.proof_last_digits}<br/>\`;
-    if (o.proof_image) proofInfo += \`<img class="proof-thumb" src="\${o.proof_image}" onclick="viewProof(\${o.id})" />\`;
+    if (o.proof_image) proofInfo += \`<img class="proof-thumb" src="\${o.proof_image}" onclick="viewProof(\${o.id})" onerror="proofBroken(this)" />\`;
     if (!proofInfo) proofInfo = '<span class="muted" style="color:var(--muted)">-</span>';
 
     const ptsNote = o.points_used > 0 ? \`<br/><span class="muted" style="color:var(--muted)">點數 \${o.points_used} 點 -$\${o.points_discount}</span>\` : '';
@@ -2729,6 +2729,13 @@ async function deleteOrder(id, isPaid){
   }catch(e){ alert(e.message); }
 }
 
+function proofBroken(img){
+  var s = document.createElement('span');
+  s.style.cssText = 'color:#e0453c;font-size:12px;';
+  s.textContent = '⚠ 圖片損毀，請客人重傳';
+  if (img.parentNode) img.parentNode.replaceChild(s, img);
+}
+
 function viewProof(id){
   const o = ordersCache.find(x=>x.id===id);
   if (!o || !o.proof_image) return;
@@ -2846,6 +2853,8 @@ async function onBarcodeChosen(input){
 // 壓縮圖片：縮到最長邊 1280px、轉成 JPEG，避免安卓大照片或格式標記異常造成上傳失敗
 function compressImage(file, maxDim, quality){
   maxDim = maxDim || 1280; quality = quality || 0.85;
+  var MAX_CHARS = 1400000;
+  var RAW_OK = ['image/jpeg','image/png','image/gif','image/webp'];
   function readRaw(){
     return new Promise(function(resolve, reject){
       var r = new FileReader();
@@ -2854,24 +2863,42 @@ function compressImage(file, maxDim, quality){
       r.readAsDataURL(file);
     });
   }
-  return new Promise(function(resolve, reject){
-    var url = URL.createObjectURL(file);
-    var img = new Image();
-    img.onload = function(){
-      try{
-        var w = img.naturalWidth, h = img.naturalHeight;
-        var scale = Math.min(1, maxDim / Math.max(w, h));
-        var cw = Math.max(1, Math.round(w * scale)), ch = Math.max(1, Math.round(h * scale));
-        var c = document.createElement('canvas'); c.width = cw; c.height = ch;
-        var ctx = c.getContext('2d');
-        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cw, ch);
-        ctx.drawImage(img, 0, 0, cw, ch);
-        URL.revokeObjectURL(url);
-        resolve(c.toDataURL('image/jpeg', quality));
-      }catch(e){ URL.revokeObjectURL(url); readRaw().then(resolve, reject); }
-    };
-    img.onerror = function(){ URL.revokeObjectURL(url); readRaw().then(resolve, reject); };
-    img.src = url;
+  function viaImage(){
+    return new Promise(function(resolve, reject){
+      var url = URL.createObjectURL(file);
+      var img = new Image();
+      img.onload = function(){ URL.revokeObjectURL(url); resolve({src: img, w: img.naturalWidth, h: img.naturalHeight}); };
+      img.onerror = function(){ URL.revokeObjectURL(url); reject(new Error('decode')); };
+      img.src = url;
+    });
+  }
+  function viaBitmap(){
+    if (!window.createImageBitmap) return Promise.reject(new Error('nobitmap'));
+    return createImageBitmap(file).then(function(b){ return {src: b, w: b.width, h: b.height}; });
+  }
+  function draw(d, dim, q){
+    var scale = Math.min(1, dim / Math.max(d.w, d.h));
+    var cw = Math.max(1, Math.round(d.w * scale)), ch = Math.max(1, Math.round(d.h * scale));
+    var c = document.createElement('canvas'); c.width = cw; c.height = ch;
+    var ctx = c.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cw, ch);
+    ctx.drawImage(d.src, 0, 0, cw, ch);
+    return c.toDataURL('image/jpeg', q);
+  }
+  function good(u){ return typeof u === 'string' && u.indexOf('data:image/jpeg;base64,') === 0 && u.length > 200; }
+  return viaImage().catch(viaBitmap).then(function(d){
+    var dim = maxDim, q = quality, out = draw(d, dim, q);
+    for (var i = 0; i < 4 && good(out) && out.length > MAX_CHARS; i++){
+      dim = Math.round(dim * 0.8); q = Math.max(0.5, q - 0.08); out = draw(d, dim, q);
+    }
+    if (!good(out)) throw new Error('這張圖片無法處理，請換一張，或直接用手機截圖');
+    if (out.length > MAX_CHARS) throw new Error('圖片太大，請換較小的圖片');
+    return out;
+  }, function(){
+    // 瀏覽器解不開這張圖（例如 HEIC）：只有「瀏覽器本來就能顯示、而且不大」的原檔才放行，其餘一律擋下，
+    // 不再把解不開的檔案原封不動傳上去（那會變成存起來之後顯示不出來的壞圖）。
+    if (RAW_OK.indexOf((file.type || '').toLowerCase()) >= 0 && file.size < 1000000) return readRaw();
+    throw new Error('這張圖片格式無法使用（例如 iPhone 的 HEIC），請改傳 JPG 或 PNG，或直接用手機截圖');
   });
 }
 
@@ -5650,7 +5677,7 @@ function renderOrderView(o){
     if (o.status === 'awaiting_barcode') {
       html += '<div class="info-box center">店家正在準備付款條碼，請稍候（頁面會自動更新）</div>';
     } else if (o.status === 'ready_to_pay' && o.barcode_image) {
-      html += '<div class="center"><div class="barcode-wrap"><img class="barcode" src="'+o.barcode_image+'" /><div class="barcode-watermark"></div></div></div>';
+      html += '<div class="center"><div class="barcode-wrap"><img class="barcode" src="'+o.barcode_image+'" onerror="imgBroken(this)" /><div class="barcode-watermark"></div></div></div>';
       html += '<div class="muted center" style="margin-top:8px;">請出示以上條碼給店家掃描付款</div>';
     }
   }
@@ -5705,16 +5732,25 @@ async function uploadProof(){
 
   if (file) {
     window.proofPickAt = Date.now();
-    compressImage(file, 1280, 0.85).then(send).catch(()=>{ if (msgEl) msgEl.textContent = '圖片讀取失敗，請換一張再試'; });
+    compressImage(file, 1280, 0.85).then(send).catch((e)=>{ if (msgEl) msgEl.textContent = (e && e.message) || '圖片讀取失敗，請換一張再試'; });
   } else {
     send(null);
   }
 }
 
 
+function imgBroken(img){
+  var s = document.createElement('div');
+  s.style.cssText = 'color:#e0453c;font-size:14px;padding:16px;text-align:center;';
+  s.textContent = '圖片無法顯示，請聯繫客服重新提供';
+  if (img.parentNode) img.parentNode.replaceChild(s, img);
+}
+
 // 壓縮圖片：縮到最長邊 1280px、轉成 JPEG，避免安卓大照片或格式標記異常造成上傳失敗
 function compressImage(file, maxDim, quality){
   maxDim = maxDim || 1280; quality = quality || 0.85;
+  var MAX_CHARS = 1400000;
+  var RAW_OK = ['image/jpeg','image/png','image/gif','image/webp'];
   function readRaw(){
     return new Promise(function(resolve, reject){
       var r = new FileReader();
@@ -5723,24 +5759,42 @@ function compressImage(file, maxDim, quality){
       r.readAsDataURL(file);
     });
   }
-  return new Promise(function(resolve, reject){
-    var url = URL.createObjectURL(file);
-    var img = new Image();
-    img.onload = function(){
-      try{
-        var w = img.naturalWidth, h = img.naturalHeight;
-        var scale = Math.min(1, maxDim / Math.max(w, h));
-        var cw = Math.max(1, Math.round(w * scale)), ch = Math.max(1, Math.round(h * scale));
-        var c = document.createElement('canvas'); c.width = cw; c.height = ch;
-        var ctx = c.getContext('2d');
-        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cw, ch);
-        ctx.drawImage(img, 0, 0, cw, ch);
-        URL.revokeObjectURL(url);
-        resolve(c.toDataURL('image/jpeg', quality));
-      }catch(e){ URL.revokeObjectURL(url); readRaw().then(resolve, reject); }
-    };
-    img.onerror = function(){ URL.revokeObjectURL(url); readRaw().then(resolve, reject); };
-    img.src = url;
+  function viaImage(){
+    return new Promise(function(resolve, reject){
+      var url = URL.createObjectURL(file);
+      var img = new Image();
+      img.onload = function(){ URL.revokeObjectURL(url); resolve({src: img, w: img.naturalWidth, h: img.naturalHeight}); };
+      img.onerror = function(){ URL.revokeObjectURL(url); reject(new Error('decode')); };
+      img.src = url;
+    });
+  }
+  function viaBitmap(){
+    if (!window.createImageBitmap) return Promise.reject(new Error('nobitmap'));
+    return createImageBitmap(file).then(function(b){ return {src: b, w: b.width, h: b.height}; });
+  }
+  function draw(d, dim, q){
+    var scale = Math.min(1, dim / Math.max(d.w, d.h));
+    var cw = Math.max(1, Math.round(d.w * scale)), ch = Math.max(1, Math.round(d.h * scale));
+    var c = document.createElement('canvas'); c.width = cw; c.height = ch;
+    var ctx = c.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cw, ch);
+    ctx.drawImage(d.src, 0, 0, cw, ch);
+    return c.toDataURL('image/jpeg', q);
+  }
+  function good(u){ return typeof u === 'string' && u.indexOf('data:image/jpeg;base64,') === 0 && u.length > 200; }
+  return viaImage().catch(viaBitmap).then(function(d){
+    var dim = maxDim, q = quality, out = draw(d, dim, q);
+    for (var i = 0; i < 4 && good(out) && out.length > MAX_CHARS; i++){
+      dim = Math.round(dim * 0.8); q = Math.max(0.5, q - 0.08); out = draw(d, dim, q);
+    }
+    if (!good(out)) throw new Error('這張圖片無法處理，請換一張，或直接用手機截圖');
+    if (out.length > MAX_CHARS) throw new Error('圖片太大，請換較小的圖片');
+    return out;
+  }, function(){
+    // 瀏覽器解不開這張圖（例如 HEIC）：只有「瀏覽器本來就能顯示、而且不大」的原檔才放行，其餘一律擋下，
+    // 不再把解不開的檔案原封不動傳上去（那會變成存起來之後顯示不出來的壞圖）。
+    if (RAW_OK.indexOf((file.type || '').toLowerCase()) >= 0 && file.size < 1000000) return readRaw();
+    throw new Error('這張圖片格式無法使用（例如 iPhone 的 HEIC），請改傳 JPG 或 PNG，或直接用手機截圖');
   });
 }
 

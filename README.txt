@@ -585,3 +585,19 @@ functions/_lib/live.js、functions/_lib/templates.js、functions/[[path]].js
   現在改成獨立的提示框：左側藍色強調線、圓形「i」圖示、文字與連結同一段、淺色／深色模式各自配色。
 - 法律說明的文字完全沒有改動；只有「不適用七日猶豫期」加粗（跟下單頁同意條款勾選框的強調方式一致）。
 異動檔案：functions/_lib/templates.js（付款頁）
+
+
+==================== v74：修正「付款圖片損毀（破圖）」 ====================
+原因：客人用的瀏覽器解不開某些圖片（例如 iPhone 的 HEIC、特殊格式）時，舊版會把「原始檔」直接上傳，
+      後端又把沒標 MIME 的檔案一律標成 JPEG 存起來 → 資料庫裡是「標成 JPEG 的 HEIC」，後台縮圖就顯示破圖。
+修正：
+  1. 後端（付款證明、後台上傳條碼）：用檔案開頭的特徵碼判斷真實格式，只收 JPEG／PNG／GIF／WebP，
+     MIME 以特徵碼為準（不信客戶端自己標的）；HEIC、截斷資料、非圖片、超過約 1.6MB 一律擋下並回傳說明。
+  2. 客人頁／後台的壓縮：解不開時先改用 createImageBitmap 再試；仍解不開就明確提示「請改傳 JPG／PNG 或直接截圖」，
+     不再偷偷上傳原檔；輸出太大會自動縮小重壓；壓出空白圖（data:,）也會擋下。
+  3. 顯示端：後台縮圖若是壞圖，改顯示「⚠ 圖片損毀，請客人重傳」；客人頁條碼圖壞掉顯示「圖片無法顯示，請聯繫客服」。
+注意：已經存進資料庫的壞圖不會自動修復（資料本身就不是可顯示的圖），需要請客人重傳。
+查看哪些訂單的圖有問題（看 MIME 與大小）：
+  wrangler d1 execute <資料庫名稱> --remote --command "SELECT id, substr(proof_image,1,30) AS head, length(proof_image) AS len FROM orders WHERE proof_image IS NOT NULL ORDER BY id DESC LIMIT 20"
+  （正常會是 data:image/jpeg;base64,/9j/… ；若看到 data:image/heic、data:application/…、或 /9j/ 以外的開頭卻標 jpeg，就是壞圖）
+異動檔案：functions/[[path]].js、functions/_lib/templates.js、README.txt。不需要 migration。
