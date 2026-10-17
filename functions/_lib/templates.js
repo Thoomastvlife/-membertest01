@@ -3817,6 +3817,27 @@ new MutationObserver(function(){
   if (vizLast){ vizSig = ''; renderDashCharts(vizLast); }
 }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
+// 首頁「待處理事項」點下去：跳到對應分頁；訂單類的順便帶入狀態篩選，直接看到那幾筆
+function jumpToTodo(tab, filter){
+  if (tab === 'orders' && filter) {
+    fillOrderFilters();
+    ['ord_search','ord_date_from','ord_date_to','ord_f_member','ord_f_method','ord_f_platform','ord_f_amin','ord_f_amax'].forEach(function(id){
+      const el = document.getElementById(id); if (el) el.value = '';
+    });
+    document.getElementById('ord_f_status').value = filter.status || '';
+    document.getElementById('ord_f_completed').value = filter.completed || '';
+    const qs = collectOrderSearchQs();
+    if (qs) {
+      // 先標記成「搜尋結果顯示中」，showTab 載入訂單時就會直接跑這組篩選，不會先閃一下整月列表
+      orderSearchActive = true;
+      lastOrderSearchQs = qs;
+      const adv = document.getElementById('ord_adv');
+      if (adv && adv.classList.contains('hidden')) toggleOrdAdv();
+    }
+  }
+  showTab(tab);
+}
+
 async function loadDashboard(opts){
   opts = opts || {};
   const msg = document.getElementById('dash_msg');
@@ -3836,14 +3857,15 @@ async function loadDashboard(opts){
 
     // 待處理
     const p = d.pending;
+    // [名稱, 數量, 要跳去的分頁（要用分頁名稱 orders，不是權限名稱 order_list）, 是否醒目, 訂單篩選]
     const todos = [
-      ['待上傳條碼', p.need_barcode, 'order_list', true],
-      ['已上傳付款證明，待核對', p.need_verify, 'order_list', true],
-      ['已付款，待結案', p.to_complete, 'order_list', false],
-      ['點數兌換單待處理', p.redemptions, 'points', true],
-      ['等客人轉帳', p.wait_transfer, 'order_list', false],
-      ['等客人用條碼付款', p.wait_barcode_pay, 'order_list', false],
-      ['等客人選付款方式', p.wait_method, 'order_list', false]
+      ['待上傳條碼', p.need_barcode, 'orders', true, {status:'awaiting_barcode'}],
+      ['已上傳付款證明，待核對', p.need_verify, 'orders', true, {status:'awaiting_payment'}],
+      ['已付款，待結案', p.to_complete, 'orders', false, {status:'paid', completed:'no'}],
+      ['點數兌換單待處理', p.redemptions, 'points', true, null],
+      ['等客人轉帳', p.wait_transfer, 'orders', false, {status:'awaiting_payment'}],
+      ['等客人用條碼付款', p.wait_barcode_pay, 'orders', false, {status:'ready_to_pay'}],
+      ['等客人選付款方式', p.wait_method, 'orders', false, {status:'pending_method'}]
     ];
     const box = document.getElementById('dash_todos');
     box.innerHTML = '';
@@ -3854,7 +3876,7 @@ async function loadDashboard(opts){
       const l = document.createElement('span'); l.textContent = t[0];
       const n = document.createElement('span'); n.className = 'n'; n.textContent = t[1];
       b.appendChild(l); b.appendChild(n);
-      b.addEventListener('click', function(){ showTab(t[2]); });
+      b.addEventListener('click', function(){ jumpToTodo(t[2], t[4]); });
       box.appendChild(b);
     });
     // 收合時標題旁顯示還有幾類待處理，不用展開也看得到有沒有事
