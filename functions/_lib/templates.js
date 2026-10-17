@@ -1425,7 +1425,7 @@ async function start2faSetup(){
     document.getElementById('sec_secret_text').textContent = r.secret;
     const qrBox = document.getElementById('sec_qr');
     qrBox.innerHTML = '';
-    new QRCode(qrBox, { text: r.otpauth_url, width: 180, height: 180 });
+    new QRCode(qrBox, { text: r.otpauth_url, width: 180, height: 180, correctLevel: QRCode.CorrectLevel.L });
     sec_showStep('sec_step_setup');
   }catch(e){ m.textContent = e.message; m.className='msg err'; }
 }

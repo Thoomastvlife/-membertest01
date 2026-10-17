@@ -745,7 +745,9 @@ export async function verifyTotpCode(secretBase32, inputCode, window = 1) {
 // 給驗證器 App 掃描用的 otpauth:// 連結（用來產生 QR code）
 export function totpOtpauthUrl(secretBase32, accountLabel, issuer) {
   const label = encodeURIComponent(`${issuer}:${accountLabel}`);
-  const params = new URLSearchParams({ secret: secretBase32, issuer, algorithm: "SHA1", digits: "6", period: "30" });
+  // algorithm/digits/period 都是驗證器 App 的預設值（SHA1、6 位、30 秒），不用寫進去，
+  // 網址短一點 QR code 才不會因為資料太多而產生失敗（issuer 是中文時網址會被編碼成很長）
+  const params = new URLSearchParams({ secret: secretBase32, issuer });
   return `otpauth://totp/${label}?${params.toString()}`;
 }
 
