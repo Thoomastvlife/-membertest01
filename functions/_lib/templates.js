@@ -2423,7 +2423,7 @@ function renderOrders(){
 
     let proofInfo = '';
     if (o.proof_last_digits) proofInfo += \`末碼 \${o.proof_last_digits}<br/>\`;
-    if (o.proof_image) proofInfo += \`<img class="proof-thumb" src="\${o.proof_image}" onclick="viewProof(\${o.id})" onerror="proofBroken(this, \${o.id})" />\`;
+    if (o.has_proof_image) proofInfo += \`<img class="proof-thumb" loading="lazy" src="/api/admin/orders/\${o.id}/proof-image?v=\${encodeURIComponent(o.proof_uploaded_at || '')}" onclick="viewProof(\${o.id})" onerror="proofBroken(this, \${o.id})" />\`;
     if (!proofInfo) proofInfo = '<span class="muted" style="color:var(--muted)">-</span>';
 
     const ptsNote = o.points_used > 0 ? \`<br/><span class="muted" style="color:var(--muted)">點數 \${o.points_used} 點 -$\${o.points_discount}</span>\` : '';
@@ -2760,39 +2760,27 @@ function proofBroken(img, id){
   if (img.parentNode) img.parentNode.replaceChild(a, img);
 }
 
-function downloadProof(id){
-  var o = ordersCache.find(function(x){ return x.id === id; });
-  if (!o || !o.proof_image){ alert('找不到這張圖片'); return; }
-  var m = /^data:([^;,]*)[^,]*;base64,(.*)$/.exec(o.proof_image);
-  if (!m){ alert('圖片資料格式不正確，請請客人重傳'); return; }
+async function downloadProof(id){
   try{
-    var bin = atob(m[2]);
-    var bytes = new Uint8Array(bin.length);
-    for (var k = 0; k < bin.length; k++) bytes[k] = bin.charCodeAt(k);
-    var head = bin.slice(0, 12);
-    var ext = '.bin';
-    if (bytes[0] === 0xFF && bytes[1] === 0xD8) ext = '.jpg';
-    else if (bin.slice(1, 4) === 'PNG') ext = '.png';
-    else if (bin.slice(0, 3) === 'GIF') ext = '.gif';
-    else if (head.slice(0, 4) === 'RIFF' && head.slice(8, 12) === 'WEBP') ext = '.webp';
-    else if (head.slice(4, 8) === 'ftyp') ext = '.heic';
-    var blob = new Blob([bytes], {type: m[1] || 'application/octet-stream'});
-    var url = URL.createObjectURL(blob);
-    var link = document.createElement('a');
+    const res = await fetch('/api/admin/orders/' + id + '/proof-image', {credentials:'include'});
+    if (!res.ok) { alert('找不到這張圖片，請請客人重傳'); return; }
+    const blob = await res.blob();
+    const t = (blob.type || '').toLowerCase();
+    const ext = t === 'image/jpeg' ? '.jpg' : t === 'image/png' ? '.png' : t === 'image/gif' ? '.gif' : t === 'image/webp' ? '.webp' : '.bin';
+    const o = ordersCache.find(function(x){ return x.id === id; });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
     link.href = url;
-    link.download = 'proof-' + (o.order_no || o.id) + ext;
+    link.download = 'proof-' + ((o && o.order_no) || id) + ext;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     setTimeout(function(){ URL.revokeObjectURL(url); }, 4000);
-  }catch(e){ alert('下載失敗：圖片資料不完整，請請客人重傳'); }
+  }catch(e){ alert('下載失敗：' + (e && e.message ? e.message : '圖片資料不完整，請請客人重傳')); }
 }
 
 function viewProof(id){
-  const o = ordersCache.find(x=>x.id===id);
-  if (!o || !o.proof_image) return;
-  const w = window.open('');
-  if (w) w.document.write('<img src="'+o.proof_image+'" style="max-width:100%">');
+  window.open('/api/admin/orders/' + id + '/proof-image', '_blank');
 }
 
 function openCorrect(id){

@@ -1447,6 +1447,53 @@ function parseCheckoutItems(raw) {
   return { items };
 }
 
+// 訂單列表不要把「付款證明／條碼圖片」（base64，一張可能上 MB）整批讀進來：
+// 一個月幾十到幾百張訂單加起來會把 Worker 記憶體撐爆（回 503），整個列表就載不出來。
+// 列表只帶「有沒有圖」的旗標（has_proof_image / has_barcode_image），圖片改成要看的時候才
+// 向 /api/admin/orders/:id/proof-image 單張載入。欄位清單從資料表實際欄位產生，之後新增欄位不用改這裡。
+let ORDER_LIST_COLS_CACHE = null;
+async function orderListSelect(env, alias) {
+  const a = alias ? alias + "." : "";
+  try {
+    if (!ORDER_LIST_COLS_CACHE) {
+      const { results } = await env.DB.prepare("PRAGMA table_info(orders)").all();
+      const cols = (results || []).map((r) => r.name).filter((n) => n && n !== "proof_image" && n !== "barcode_image");
+      if (!cols.length) throw new Error("no columns");
+      ORDER_LIST_COLS_CACHE = cols;
+    }
+    return (
+      ORDER_LIST_COLS_CACHE.map((c) => a + c).join(", ") +
+      `, CASE WHEN ${a}proof_image IS NOT NULL AND ${a}proof_image <> '' THEN 1 ELSE 0 END AS has_proof_image` +
+      `, CASE WHEN ${a}barcode_image IS NOT NULL AND ${a}barcode_image <> '' THEN 1 ELSE 0 END AS has_barcode_image`
+    );
+  } catch (e) {
+    return a + "*"; // 查不到欄位清單就退回舊做法（至少不會壞）
+  }
+}
+
+// 單張付款證明圖片（後台列表的縮圖與「查看」用）。資料庫裡存的是 data URL，這裡還原成圖片本身回傳。
+async function handleAdminProofImage(id, env) {
+  const row = await env.DB.prepare("SELECT proof_image FROM orders WHERE id=?").bind(id).first();
+  const v = row && row.proof_image;
+  const m = typeof v === "string" && /^data:([^;,]*)(?:;[^,]*)?;base64,([\s\S]*)$/.exec(v);
+  if (!m) return new Response("not found", { status: 404 });
+  let bin;
+  try {
+    bin = Uint8Array.from(atob(m[2].replace(/\s+/g, "")), (c) => c.charCodeAt(0));
+  } catch (e) {
+    return new Response("bad image", { status: 422 });
+  }
+  const mime = /^image\/(jpeg|png|gif|webp)$/i.test(m[1]) ? m[1].toLowerCase() : "application/octet-stream";
+  return new Response(bin, {
+    headers: {
+      "Content-Type": mime,
+      "Cache-Control": "private, max-age=3600",
+      "X-Content-Type-Options": "nosniff",
+      "Content-Security-Policy": "default-src 'none'; img-src data:; style-src 'unsafe-inline'",
+    },
+  });
+}
+
 async function handleListOrders(request, env) {
   const url = new URL(request.url);
   const month = url.searchParams.get("month");
@@ -1456,18 +1503,18 @@ async function handleListOrders(request, env) {
   if (orderNoParam && orderNoParam.trim()) {
     const id = parseOrderNo(orderNoParam);
     if (!id) return json([]);
-    const { results } = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).all();
+    const { results } = await env.DB.prepare(`SELECT ${await orderListSelect(env)} FROM orders WHERE id=?`).bind(id).all();
     return json((await attachMemberFlags(env, results)).map((o) => ({ ...o, order_no: formatOrderNo(o.id) })));
   }
 
   // 進階搜尋：關鍵字（任何內容）、日期區間、會員、狀態、付款方式、平台、金額…（見 _lib/ordersearch.js）
   if (hasOrderSearchParams(url.searchParams)) {
-    const { sql, binds } = buildOrderSearch(url.searchParams, await getPlatforms(env.DB));
+    const { sql, binds } = buildOrderSearch(url.searchParams, await getPlatforms(env.DB), await orderListSelect(env, "o"));
     const { results } = await env.DB.prepare(sql).bind(...binds).all();
     return json((await attachMemberFlags(env, results)).map((o) => ({ ...o, order_no: formatOrderNo(o.id) })));
   }
 
-  let query = "SELECT * FROM orders";
+  let query = `SELECT ${await orderListSelect(env)} FROM orders`;
   const binds = [];
   if (month) {
     query += " WHERE strftime('%Y-%m', created_at) = ?";
@@ -3892,6 +3939,9 @@ export async function onRequest(context) {
           ? handleExportOrderHistory(historyMatch[1], env, session, request)
           : handleOrderHistory(historyMatch[1], env);
       }
+
+      const proofImgMatch = path.match(/^\/api\/admin\/orders\/(\d+)\/proof-image$/);
+      if (proofImgMatch && method === "GET") return handleAdminProofImage(proofImgMatch[1], env);
 
       const barcodeMatch = path.match(/^\/api\/admin\/orders\/(\d+)\/barcode$/);
       if (barcodeMatch && method === "POST") {

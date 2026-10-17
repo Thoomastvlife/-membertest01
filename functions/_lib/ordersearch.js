@@ -65,7 +65,7 @@ function synMatch(map, term) {
 }
 
 // 組出查詢 SQL。回傳 { sql, binds }；所有使用者輸入都走綁定參數（?N），不會拼進 SQL。
-export function buildOrderSearch(sp, platforms) {
+export function buildOrderSearch(sp, platforms, selectCols = "o.*") {
   const binds = [];
   const bind = (v) => {
     binds.push(v);
@@ -149,7 +149,7 @@ export function buildOrderSearch(sp, platforms) {
   }
 
   const sql =
-    "SELECT o.* FROM orders o LEFT JOIN members m ON m.id = o.member_id" +
+    "SELECT " + selectCols + " FROM orders o LEFT JOIN members m ON m.id = o.member_id" +
     (where.length ? " WHERE " + where.join(" AND ") : "") +
     " ORDER BY o.created_at DESC, o.id DESC LIMIT " + ORDER_SEARCH_LIMIT;
   return { sql, binds };
