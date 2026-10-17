@@ -67,7 +67,7 @@ import {
   handleTotpAdminReset,
   handleUnlockLogin,
 } from "./_lib/twofa.js";
-import { termsHtml, privacyHtml } from "./_lib/legal.js";
+import { termsHtml, privacyHtml, LEGAL_VERSION } from "./_lib/legal.js";
 import { getRateRules, saveRateRules, getAllRateRules, getRateGroupForPlatform, RATE_GROUPS, DEFAULT_RATE_RULES, MIN_QUOTE_AMOUNT, calcCoins, isCustomRateGroup } from "./_lib/rates.js";
 
 // 會員自助下單的最低金額，跟查價系統的最低查詢金額保持一致
@@ -1774,6 +1774,16 @@ async function handleAddOrderItem(id, request, env) {
   return json(item);
 }
 
+// 記錄「事先同意」服務條款／隱私權政策的時間與版本。失敗（例如還沒執行 migrate_v30.sql）不影響註冊、下單，只是沒有紀錄。
+async function recordConsent(env, table, idColumn, idValue) {
+  try {
+    await env.DB.prepare(`UPDATE ${table} SET agreed_terms_at=?, terms_version=? WHERE ${idColumn}=? AND agreed_terms_at IS NULL`)
+      .bind(nowIso(), LEGAL_VERSION, idValue).run();
+  } catch (e) {
+    console.error("recordConsent failed:", e && e.message);
+  }
+}
+
 // 寄送序號：去掉前後空白、統一換行、最長 2000 字；空白 = 沒有序號
 const DELIVERY_NOTE_MAX = 2000;
 const DELIVERY_MIGRATE_HINT = "資料庫尚未升級，請先在 D1 執行 migrate_v29.sql（新增「寄送序號」欄位）";
@@ -2431,6 +2441,11 @@ async function handleSelectMethod(token, request, env) {
   if (method === "store_barcode" && order.amount > CVS_LIMIT) {
     return json({ error: `金額超過 $${CVS_LIMIT.toLocaleString()}，無法使用超商條碼，請分筆訂單` }, 400);
   }
+  // 點數／序號類商品一經交付即不適用七日猶豫期，必須「事先同意」。會員自助下單時已經勾選過（訂單上有紀錄）就不用再勾；
+  // 其他訂單（例如後台建單、傳連結給客人付款）要在這裡勾選同意才能選付款方式。
+  if (!order.agreed_terms_at && body.agree_terms !== true) {
+    return json({ error: "請先勾選同意服務條款及隱私權政策（若沒看到勾選框，請重新整理頁面）" }, 400);
+  }
 
   let newStatus = "awaiting_barcode";
   let bankFields = {
@@ -2460,6 +2475,7 @@ async function handleSelectMethod(token, request, env) {
   )
     .bind(method, newStatus, nowIso(), bankFields.bank_name, bankFields.bank_account_number, bankFields.bank_account_holder, store, token)
     .run();
+  if (methodRes.meta && methodRes.meta.changes) await recordConsent(env, "orders", "token", token);
 
   const updated = await env.DB.prepare("SELECT * FROM orders WHERE token=?").bind(token).first();
   // 客人選了超商條碼／台灣Pay → 推播「待上傳條碼」（只有這次請求真的寫入成功才推，避免重複點擊重複通知）
@@ -2653,6 +2669,8 @@ async function handleMemberRegister(request, env) {
   if (!account || !account.trim()) return json({ error: "請輸入帳號" }, 400);
   if (!password || password.length < 6) return json({ error: "密碼至少需要 6 碼" }, 400);
   if (!referral_code || !referral_code.trim()) return json({ error: "請輸入推薦碼" }, 400);
+  // 個資是在註冊時第一次蒐集：必須先閱讀並同意服務條款及隱私權政策（前端有勾選框，這裡在伺服器端再把關一次）
+  if (body.agree_terms !== true) return json({ error: "請先閱讀並同意服務條款及隱私權政策" }, 400);
   // 只接受台灣手機：09 開頭共 10 碼（+886 / 886 開頭會自動換成 0）
   const phoneClean = String(phone || "").replace(/[\s-]/g, "").replace(/^(\+886|886)/, "0");
   if (!phoneClean) return json({ error: "請輸入手機號碼" }, 400);
@@ -2706,6 +2724,7 @@ async function handleMemberRegister(request, env) {
         .run();
 
       if (emailVerifiedAt) await env.DB.prepare("DELETE FROM email_codes WHERE email=?").bind(emailClean).run();
+      await recordConsent(env, "members", "id", r.meta.last_row_id);
 
       const ttlHours = parseInt(env.SESSION_TTL_HOURS || "12", 10);
       const session = await signSession(
@@ -2999,6 +3018,7 @@ async function handleMemberCreateOrder(session, request, env) {
   if (notifyEmail) {
     await env.DB.prepare("UPDATE orders SET notify_email=1, notify_email_addr=? WHERE id=?").bind(notifyAddr, inserted.meta.last_row_id).run();
   }
+  await recordConsent(env, "orders", "id", inserted.meta.last_row_id);   // 勾選同意的時間與條款版本
 
   await notifyAdminsOfNewOrder(env, { id: inserted.meta.last_row_id, member_name_snapshot: member.name, amount: finalAmount });
 

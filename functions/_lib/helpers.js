@@ -207,6 +207,7 @@ export function publicOrderView(o) {
     coupon_discount: o.coupon_discount ?? null,
     points_used: o.points_used || 0,
     points_discount: o.points_discount ?? null,
+    terms_agreed: !!o.agreed_terms_at,   // 已經有「同意條款」紀錄（會員下單時勾過）→ 付款頁不用再勾
   };
 }
 

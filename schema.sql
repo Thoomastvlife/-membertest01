@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS members (
   blocked_by TEXT,              -- 誰封鎖的（帳號名稱）
   failed_attempts INTEGER NOT NULL DEFAULT 0,  -- 連續登入失敗次數。既有資料庫用 migrate_v28.sql 加上
   locked_until TEXT,            -- 鎖定到期時間（UTC）；NULL 或已過期 = 沒被鎖
+  agreed_terms_at TEXT,         -- 註冊時勾選同意服務條款／隱私權政策的時間（UTC）。既有資料庫用 migrate_v30.sql 加上
+  terms_version TEXT,           -- 當時同意的條款版本（對應 legal.js 的 LEGAL_VERSION）
   created_at TEXT DEFAULT (datetime('now')),
   FOREIGN KEY (referred_by) REFERENCES members(id)
 );
@@ -81,6 +83,8 @@ CREATE TABLE IF NOT EXISTS orders (
   points_discount REAL,                -- 點數折抵的金額
   coins REAL,                          -- 依下單當下的費率試算出的預計獲得幣數（以優惠碼折抵前的金額計算），NULL 表示未計算（例如未指定平台或金額不在範圍）
   admin_note TEXT,                     -- 後台內部備註，不會顯示給客人看，單純方便店家自己記錄
+  agreed_terms_at TEXT,                -- 顧客勾選同意服務條款／隱私權政策的時間（UTC）。既有資料庫用 migrate_v30.sql 加上
+  terms_version TEXT,                  -- 當時同意的條款版本（對應 legal.js 的 LEGAL_VERSION）
   FOREIGN KEY (member_id) REFERENCES members(id)
 );
 

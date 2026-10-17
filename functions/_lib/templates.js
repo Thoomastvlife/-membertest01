@@ -2500,6 +2500,7 @@ function renderOrderItems(orderId, items){
 
   container.innerHTML = \`
     <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:var(--text);">📋 訂單 \${orderNo} 明細</div>
+    <div style="font-size:12px;color:var(--muted);margin:-2px 0 8px;">\${o && o.agreed_terms_at ? '✅ 顧客已於 ' + toTaipeiTime(o.agreed_terms_at) + ' 勾選同意服務條款及隱私權政策（版本 ' + escapeHtml(o.terms_version || '未記錄') + '）' : 'ℹ️ 沒有顧客同意紀錄（舊訂單，或訂單還沒選付款方式）'}</div>
     <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:10px;">
       <thead>
         <tr style="background:var(--bg);">
@@ -5543,6 +5544,7 @@ const CVS_STORES = {seven:'7-11', family:'全家', hilife:'萊爾富'};
 const CVS_LIMIT = 10000;
 const CVS_FEE = 15;
 let storePickOpen = false;
+let termsTicked = false;   // 客人在付款頁勾選「同意服務條款」的狀態（重畫頁面時要保留）
 let bankPickOpen = false;
 let lastOrder = null;
 let pollTimer=null;
@@ -5555,9 +5557,16 @@ function toTaipeiTime(dateStr) {
 }
 // ========================================================
 
-function openStorePick(){ storePickOpen = true; if (lastOrder) render(lastOrder); }
+// 還沒有「同意條款」紀錄的訂單，客人要先勾選同意才能選付款方式（點數／序號類商品排除七日猶豫期需「事先同意」）
+function termsOk(){
+  if (lastOrder && lastOrder.terms_agreed) return true;
+  if (termsTicked) return true;
+  alert('請先勾選同意服務條款及隱私權政策');
+  return false;
+}
+function openStorePick(){ if (!termsOk()) return; storePickOpen = true; if (lastOrder) render(lastOrder); }
 function closeStorePick(){ storePickOpen = false; if (lastOrder) render(lastOrder); }
-function openBankPick(){ bankPickOpen = true; if (lastOrder) render(lastOrder); }
+function openBankPick(){ if (!termsOk()) return; bankPickOpen = true; if (lastOrder) render(lastOrder); }
 function closeBankPick(){ bankPickOpen = false; if (lastOrder) render(lastOrder); }
 function escB(x){ return String(x == null ? '' : x).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 document.addEventListener('click', function(ev){
@@ -5659,6 +5668,7 @@ function renderOrderView(o){
     const storeNames = {seven:'7-11', family:'全家', hilife:'萊爾富'};
     const stores = (Array.isArray(o.stores_enabled) ? o.stores_enabled : ['seven','family','hilife']).filter(function(k){ return storeNames[k]; });
     const banks = Array.isArray(o.banks_enabled) ? o.banks_enabled : [];
+    let mainBranch = false;   // 目前畫面是不是「選付款方式」的主畫面（勾選同意只放在這裡）
     if (storePickOpen && !overLimit && pm('store_barcode')) {
       html += '<div class="muted" style="margin-top:14px;">請選擇要繳費的超商（選擇後將無法變更）</div>';
       html += '<div class="methods">' + stores.map(function(k){ return '<button data-pick="store" data-v="'+k+'">'+storeNames[k]+'</button>'; }).join('') + '</div>';
@@ -5669,6 +5679,7 @@ function renderOrderView(o){
       html += '<div class="methods">' + banks.map(function(b){ return '<button data-pick="bank" data-v="'+escB(b.id)+'">'+escB(b.bank_name)+'</button>'; }).join('') + '</div>';
       html += '<div class="center" style="margin-top:12px;"><a href="#" onclick="closeBankPick();return false;" style="color:#6b7280;font-size:14px;">‹ 返回選擇付款方式</a></div>';
     } else {
+      mainBranch = true;
       if (me.length) html += '<div class="muted" style="margin-top:14px;">請選擇付款方式（選擇後將無法變更）</div>';
       html += '<div class="methods">'+
         (pm('transfer') ? (banks.length > 1 ? '<button onclick="openBankPick()">轉帳</button>' : '<button onclick="selectMethod(\\'transfer\\')">轉帳</button>') : '')+
@@ -5682,6 +5693,23 @@ function renderOrderView(o){
       }
     }
     app.innerHTML = html;
+    if (mainBranch && me.length && !o.terms_agreed) {
+      // 勾選同意服務條款及隱私權政策（點數／序號類商品一經交付不適用七日猶豫期，需消費者事先同意）
+      const lab = document.createElement('label');
+      lab.style.cssText = 'display:flex;gap:8px;align-items:flex-start;font-size:13px;line-height:1.6;margin-top:14px;cursor:pointer;';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.style.cssText = 'width:auto;margin:3px 0 0;flex:none;';
+      cb.checked = termsTicked;
+      cb.addEventListener('change', function(){ termsTicked = cb.checked; });
+      const sp = document.createElement('span');
+      sp.innerHTML = '我已閱讀並同意<a href="/terms" target="_blank">服務條款</a>及<a href="/privacy" target="_blank">隱私權政策</a>（包含：點數／序號類商品一經交付，不適用七日猶豫期）';
+      lab.appendChild(cb);
+      lab.appendChild(sp);
+      const methods = app.querySelector('.methods');
+      if (methods && methods.parentNode) methods.parentNode.insertBefore(lab, methods);
+      else app.appendChild(lab);
+    }
     if (!me.length) {
       const d = document.createElement('div');
       d.className = 'info-box';
@@ -5831,9 +5859,11 @@ function compressImage(file, maxDim, quality){
 
 
 async function selectMethod(method, store, bankId){
+  if (!termsOk()) return;
   try{
     const res = await fetch('/api/order/'+token+'/select-method', {
-      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({method, store, bank_id: bankId || null})
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({method, store, bank_id: bankId || null, agree_terms: !!((lastOrder && lastOrder.terms_agreed) || termsTicked)})
     });
     const d = await res.json();
     if (!res.ok){ alert(d.error||'發生錯誤'); return; }
@@ -7257,6 +7287,10 @@ ${THEME_CSS_PORTAL}
     </div>
     <div style="font-size:12px;color:#888;margin-top:4px;">驗證碼 10 分鐘內有效；沒收到請檢查垃圾郵件匣。</div>
   </div>
+  <label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;line-height:1.6;margin:14px 0 4px;cursor:pointer;">
+    <input type="checkbox" id="reg_agree" style="width:auto;margin:3px 0 0;flex:none;" />
+    <span>我已閱讀並同意<a href="/terms" target="_blank">服務條款</a>及<a href="/privacy" target="_blank">隱私權政策</a>（包含個人資料之蒐集、處理及利用方式）</span>
+  </label>
   <button class="btn" id="reg_btn" onclick="doRegister()">建立帳號</button>
   <div id="reg_msg" class="msg"></div>
   <div class="foot">已經有帳號了？<a href="/member">前往登入</a></div>
@@ -7326,7 +7360,11 @@ ${THEME_CSS_PORTAL}
       phone: document.getElementById('reg_phone').value.trim(),
       email: document.getElementById('reg_email').value.trim(),
       email_code: document.getElementById('reg_email_code').value.trim(),
+      agree_terms: document.getElementById('reg_agree').checked,
     };
+    if (!payload.agree_terms){
+      msg.textContent = '請先勾選同意服務條款及隱私權政策'; msg.className = 'msg err'; return;
+    }
     if (EMAIL_VERIFY && !/^[0-9]{6}$/.test(payload.email_code)){
       msg.textContent = '請輸入 6 位數的信箱驗證碼（先按「寄送驗證碼」）'; msg.className = 'msg err'; return;
     }
