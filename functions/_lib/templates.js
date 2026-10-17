@@ -101,6 +101,9 @@ ${THEME_HEAD}
   .perm-item b{display:block;font-weight:600;}
   .perm-item small{display:block;color:var(--muted);font-size:12px;margin-top:2px;line-height:1.4;}
   .perm-actions{display:flex;gap:8px;margin:6px 0 10px;}
+  .cred-line{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:2px 0;}
+  .cred-line span{word-break:break-all;}
+  .copy-btn{margin:0 !important;padding:2px 10px !important;font-size:12px !important;white-space:nowrap;}
   .tag{display:inline-block;padding:1px 9px;border-radius:999px;font-size:12px;line-height:1.7;border:1px solid var(--border);margin:0 4px 4px 0;white-space:nowrap;}
   .tag.vip{background:rgba(245,166,35,.18);border-color:rgba(245,166,35,.65);}
   .tag.bad{background:rgba(229,100,107,.18);border-color:rgba(229,100,107,.65);}
@@ -2186,6 +2189,37 @@ async function createOrder(){
   }catch(e){ msg.textContent = e.message; msg.className='msg err'; }
 }
 
+// 快速複製：把訂單的平台帳號或密碼複製到剪貼簿（按鈕上的 data-id、data-f 決定複製哪一個，密碼不會寫在網頁的按鈕屬性裡）
+function copyTextQuick(text, done){
+  function fallback(){
+    try{
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select(); ta.setSelectionRange(0, text.length);
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      done(ok);
+    }catch(e){ done(false); }
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(function(){ done(true); }).catch(fallback);
+  else fallback();
+}
+function copyOrderCred(btn){
+  const id = parseInt(btn.dataset.id, 10);
+  const o = ordersCache.find(function(x){ return x.id === id; });
+  const v = o ? (btn.dataset.f === 'password' ? o.platform_password : o.platform_account) : '';
+  if (!v) return;
+  copyTextQuick(v, function(ok){
+    if (!ok) { prompt('複製失敗，請手動複製：', v); return; }
+    const old = btn.dataset.label || btn.textContent;
+    btn.dataset.label = old;
+    btn.textContent = '已複製 ✓';
+    setTimeout(function(){ btn.textContent = old; }, 1200);
+  });
+}
+
 function copyLink(){
   const el = document.getElementById('co_link');
   el.select(); document.execCommand('copy');
@@ -2378,8 +2412,12 @@ function renderOrders(){
       : (o.points_used > 0 ? '' : '<span class="muted" style="color:var(--muted)">-</span>');
     const couponInfo = couponInfo0 + ptsNote;
 
+    const credBtn = function(field, has){
+      return has ? ' <button type="button" class="btn secondary small copy-btn" data-id="' + o.id + '" data-f="' + field + '" onclick="copyOrderCred(this)">複製</button>' : '';
+    };
     const accountInfo = (o.platform_account || o.platform_password)
-      ? \`帳號：\${escapeHtml(o.platform_account||'-')}<br/>密碼：<code>\${escapeHtml(o.platform_password||'-')}</code>\`
+      ? '<div class="cred-line"><span>帳號：' + escapeHtml(o.platform_account || '-') + '</span>' + credBtn('account', !!o.platform_account) + '</div>' +
+        '<div class="cred-line"><span>密碼：<code>' + escapeHtml(o.platform_password || '-') + '</code></span>' + credBtn('password', !!o.platform_password) + '</div>'
       : '<span class="muted" style="color:var(--muted)">-</span>';
 
     return \`<tr>

@@ -568,3 +568,12 @@ functions/_lib/live.js、functions/_lib/templates.js、functions/[[path]].js
 
 上線：不需要 migration，直接部署即可。
 異動檔案：functions/_lib/banks.js（新）、platforms.js、access.js、functions/[[path]].js、templates.js、README.txt
+
+
+==================== v72：訂單列表「帳號／密碼」快速複製 ====================
+- 沒有資料庫變動，直接重新部署即可。
+- 後台「訂單列表」的「帳號/密碼」欄，帳號和密碼後面各多一個「複製」按鈕，按一下就複製到剪貼簿，按鈕會短暫顯示「已複製 ✓」。
+  只有帳號或只有密碼時只顯示有資料的那一個按鈕；搜尋結果裡的訂單也一樣可以複製。
+- 瀏覽器不允許使用剪貼簿 API 時會自動改用備用方式；備用方式也失敗時，會跳出視窗顯示內容讓你手動複製。
+- 密碼不會寫在按鈕的網頁屬性裡（按鈕只記訂單編號與欄位，複製時才從目前列表資料取值）；帳號與密碼的顯示一律轉義，含特殊字元也安全。
+異動檔案：functions/_lib/templates.js
