@@ -18,8 +18,24 @@ CREATE TABLE IF NOT EXISTS admins (
   totp_pending_secret TEXT,              -- 啟用流程中暫存的密鑰，掃完 QR 並驗證成功才會正式生效，尚未生效前不會拿來擋登入
   totp_enabled INTEGER NOT NULL DEFAULT 0,
   totp_backup_codes TEXT,                -- JSON 陣列，備援碼的雜湊值；一次性使用，用掉就從陣列移除
+  session_version INTEGER NOT NULL DEFAULT 0,  -- 登入版本號：「登出所有裝置」或重設密碼時 +1，舊的登入憑證立刻失效。既有資料庫用 migrate_v31.sql 加上
   created_at TEXT DEFAULT (datetime('now'))
 );
+
+-- 後台帳號登入過的裝置（新裝置登入通知用）。device_hash 是瀏覽器裝置 cookie 的 SHA-256，不存原值。既有資料庫用 migrate_v31.sql 建立
+CREATE TABLE IF NOT EXISTS admin_devices (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  admin_id INTEGER NOT NULL,
+  device_hash TEXT NOT NULL,
+  user_agent TEXT,
+  ip TEXT,
+  country TEXT,
+  city TEXT,
+  first_seen TEXT DEFAULT (datetime('now')),
+  last_seen TEXT DEFAULT (datetime('now')),
+  UNIQUE (admin_id, device_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_admin_devices_admin ON admin_devices(admin_id, last_seen);
 
 CREATE TABLE IF NOT EXISTS members (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -915,6 +915,28 @@ ${THEME_CSS_ADMIN}
       </div>
 
       <div class="card">
+        <h2>會員等級</h2>
+        <small class="hint">依「累積儲值金額」（該會員所有<b>已付款</b>訂單的實付金額加總）自動分級。每個等級可以設定<b>點數倍率</b>（訂單完成發點時乘上去）和<b>專屬優惠碼</b>（只有該等級以上的會員能用）。會員頁會顯示目前等級與升級進度。</small>
+        <label style="display:flex;align-items:center;gap:8px;color:var(--ink);margin-top:12px;"><input id="tier_enabled" type="checkbox" style="width:auto;" /> <b>啟用會員等級</b></label>
+        <label>基本等級名稱（還沒達到任何門檻的會員）</label>
+        <input id="tier_base_name" maxlength="12" placeholder="一般會員" autocomplete="off" />
+        <table id="tier_table" style="margin-top:12px;">
+          <thead><tr><th>等級名稱</th><th>累積儲值門檻（元）</th><th>點數倍率（倍）</th><th>專屬優惠碼（多組用逗號分隔）</th><th>操作</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div id="tier_empty" class="hint" style="margin-top:8px;">還沒有任何等級，按「新增等級」開始設定。</div>
+        <button class="btn secondary" type="button" onclick="addTierRow()">＋ 新增等級</button>
+        <button class="btn" type="button" onclick="saveTiersAdmin()">儲存等級設定</button>
+        <div id="tier_msg" class="msg"></div>
+        <small class="hint" id="tier_dist" style="display:block;margin-top:6px;"></small>
+        <small class="hint" style="display:block;margin-top:10px;line-height:1.7;">
+          • 門檻是「累積」金額，達到就升級（剛好等於門檻也算）；金額只算已付款訂單，取消或過期的不算。<br/>
+          • 點數倍率以「這筆訂單之前」的累積金額判斷等級：升級後的下一筆訂單才享有新倍率；已經發出去的點數不會回頭調整。倍率只有在上面「訂單回饋」開啟時才有作用。<br/>
+          • 專屬優惠碼要先到「優惠碼」分頁建立，再填進來。填進等級的優惠碼，會員端只有該等級以上才能用；<b>後台建單仍可指定任何優惠碼</b>。關閉會員等級後，這些優惠碼會變成一般優惠碼（所有人都能用），不想開放請另外停用該優惠碼。
+        </small>
+      </div>
+
+      <div class="card">
         <h2>兌換單</h2>
         <table id="pt_red_table">
           <thead><tr><th>時間</th><th>會員</th><th>商品</th><th>點數</th><th>狀態</th><th>操作</th></tr></thead>
@@ -1091,6 +1113,17 @@ ${THEME_CSS_ADMIN}
         <button class="btn" id="sec_enable_btn" onclick="start2faSetup()">啟用兩步驟驗證</button>
         <button class="btn secondary hidden" id="sec_backup_btn" onclick="showRegenBackupForm()">重新產生備援碼</button>
         <button class="btn danger hidden" id="sec_disable_btn" onclick="showDisable2faForm()">關閉兩步驟驗證</button>
+      </div>
+
+      <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border);">
+        <p style="margin:0 0 4px;"><strong>登入過的裝置</strong></p>
+        <small class="hint" id="sec_dev_hint"></small>
+        <div id="sec_dev_list" style="margin-top:6px;"></div>
+        <div style="margin-top:12px;">
+          <button class="btn secondary" onclick="logoutAllDevices(true)">登出其他所有裝置</button>
+          <button class="btn danger" onclick="logoutAllDevices(false)">登出所有裝置（含這台）</button>
+        </div>
+        <small class="hint" style="display:block;margin-top:8px;">懷疑帳號被別人用過、或手機／電腦弄丟時使用。登出後，那些裝置需要重新輸入帳號密碼（有啟用兩步驟驗證的還要再輸入驗證碼）。</small>
       </div>
     </div>
 
@@ -1419,12 +1452,67 @@ function openSecurityModal(){
   document.getElementById('sec_backup_btn').classList.toggle('hidden', !enabled);
   document.getElementById('sec_disable_btn').classList.toggle('hidden', !enabled);
   document.getElementById('securityModal').classList.remove('hidden');
+  loadDevices();
 }
 function closeSecurityModal(){
   document.getElementById('securityModal').classList.add('hidden');
 }
 function cancelSecurityStep(){
   sec_showStep('sec_step_status');
+}
+
+// ---- 登入過的裝置、登出所有裝置 ----
+async function loadDevices(){
+  const hint = document.getElementById('sec_dev_hint');
+  const box = document.getElementById('sec_dev_list');
+  box.innerHTML = '<small class="hint">載入中…</small>'; hint.textContent = '';
+  try{
+    const d = await api('/api/admin/devices');
+    if (!d.ready){
+      box.innerHTML = '';
+      hint.textContent = '資料庫還沒升級（需執行 migrate_v31.sql），目前不會偵測新裝置，也不能使用「登出所有裝置」。';
+      return;
+    }
+    if (d.has_email){
+      hint.textContent = '有新裝置登入時，會寄通知信到 ' + d.email_masked + '。';
+    } else {
+      hint.innerHTML = '<span style="color:var(--danger);">你的帳號還沒有設定信箱，新裝置登入時不會收到通知信。</span>' +
+        (adminMe && adminMe.is_owner ? '請到「員工帳號」頁，在自己那一列按「設定信箱」。' : '請請管理員到「員工帳號」頁替你設定信箱。');
+    }
+    box.innerHTML = d.devices.length ? d.devices.map(function(v){
+      return '<div style="padding:8px 0;border-top:1px solid var(--border);font-size:13px;">' +
+        '<b>' + escapeHtml(v.label) + '</b>' +
+        (v.current ? ' <span style="font-size:11px;padding:1px 7px;border-radius:10px;background:var(--ok);color:#fff;">目前這台</span>' : '') +
+        '<br><small class="hint">最後登入 ' + toTaipeiTime(v.last_seen) +
+        (v.location ? '・' + escapeHtml(v.location) : '') +
+        (v.ip ? '・IP ' + escapeHtml(v.ip) : '') + '</small></div>';
+    }).join('') : '<small class="hint">還沒有紀錄，下次登入後就會出現。</small>';
+  }catch(e){ box.innerHTML = ''; hint.textContent = e.message; }
+}
+
+async function logoutAllDevices(keepCurrent){
+  const m = document.getElementById('sec_msg'); m.textContent=''; m.className='msg';
+  const ask = keepCurrent
+    ? '要登出「其他所有裝置」嗎？目前這台會保持登入。'
+    : '要登出「所有裝置」嗎？包含目前這台，之後需要重新登入。';
+  if (!confirm(ask)) return;
+  try{
+    await api('/api/admin/sessions/logout-all', {method:'POST', body: JSON.stringify({keep_current: !!keepCurrent})});
+    if (keepCurrent){
+      m.textContent = '已登出其他所有裝置'; m.className = 'msg ok';
+      loadDevices();
+    } else {
+      location.reload();
+    }
+  }catch(e){ m.textContent = e.message; m.className = 'msg err'; }
+}
+
+async function adminLogoutAll(id, username){
+  if (!confirm('確定要登出「' + username + '」在所有裝置上的登入嗎？他需要重新登入。（員工離職、或懷疑帳號被別人用過時使用）')) return;
+  try{
+    await api('/api/admin/staff/' + id + '/logout-all', {method:'POST'});
+    alert('已登出「' + username + '」的所有裝置');
+  }catch(e){ alert(e.message); }
 }
 
 async function start2faSetup(){
@@ -3053,6 +3141,7 @@ function renderMemberDetail(){
   const kpi = function(l, v){ return '<div class="stat-kpi"><div class="l">' + l + '</div><div class="v">' + v + '</div></div>'; };
   document.getElementById('md_kpis').innerHTML =
     kpi('累計消費（已付款）', dMoney(st.paid_total)) +
+    (d.tier ? kpi('會員等級', escapeHtml(d.tier.name) + (d.tier.rate_percent > 100 ? '（點數 ×' + (d.tier.rate_percent / 100) + '）' : '')) : '') +
     kpi('已付款筆數', st.paid_count) +
     kpi('平均每筆', dMoney(st.avg_paid)) +
     kpi('本月消費', dMoney(st.month_total)) +
@@ -3449,6 +3538,7 @@ async function loadStaff(){
       '<td data-label="操作">'+
         (isOwner ? '<button class="btn secondary small" onclick="setStaffEmail('+s.id+')">設定信箱</button>' : '<button class="btn secondary small" onclick="openStaffPerms('+s.id+')">設定權限</button>')+
         '<button class="btn secondary small" onclick="resetStaffPassword('+s.id+')">重設密碼</button>'+
+        (!isSelf ? '<button class="btn secondary small" onclick="adminLogoutAll('+s.id+',\\''+escapeHtml(s.username)+'\\')">登出所有裝置</button>' : '')+
         (s.totp_enabled && !isSelf ? '<button class="btn secondary small" onclick="adminReset2fa('+s.id+',\\''+escapeHtml(s.username)+'\\')">重設兩步驟驗證</button>' : '')+
         (s.is_locked ? '<button class="btn secondary small" onclick="unlockStaff('+s.id+',\\''+escapeHtml(s.username)+'\\')">解除鎖定</button>' : '')+
         '<button class="btn danger small" '+((isSelf||isOwner)?'disabled':'')+' onclick="deleteStaff('+s.id+')">刪除</button>'+
@@ -4735,8 +4825,97 @@ let ptEditingItemId = null;
 const PT_TYPE = {earn:'完成回饋', spend:'訂單折抵', redeem:'商城兌換', refund:'退回', admin:'店家調整'};
 const PT_RED = {pending:'待處理', fulfilled:'已完成', rejected:'已拒絕並退點'};
 
+// ---- 會員等級 ----
+let tierRows = [];   // 每列：{name, threshold, rate（倍，例如 1.2）, codes（逗號分隔的字串）}
+
+function tierMsg(text, ok){
+  const m = document.getElementById('tier_msg');
+  m.textContent = text || '';
+  m.className = 'msg' + (text ? (ok ? ' ok' : ' err') : '');
+}
+
+function tierCell(label, node){
+  const td = document.createElement('td');
+  td.setAttribute('data-label', label);
+  td.appendChild(node);
+  return td;
+}
+
+function tierField(type, value, bind, attrs){
+  const i = document.createElement('input');
+  i.type = type;
+  i.value = value == null ? '' : value;
+  Object.keys(attrs || {}).forEach(function(k){ i.setAttribute(k, attrs[k]); });
+  i.addEventListener('input', function(){ bind(i.value); });
+  return i;
+}
+
+function renderTierRows(){
+  const tbody = document.querySelector('#tier_table tbody');
+  tbody.innerHTML = '';
+  tierRows.forEach(function(r, idx){
+    const tr = document.createElement('tr');
+    tr.appendChild(tierCell('等級名稱', tierField('text', r.name, function(v){ r.name = v; }, {maxlength: '12', placeholder: '例如：銀卡'})));
+    tr.appendChild(tierCell('累積儲值門檻', tierField('number', r.threshold, function(v){ r.threshold = v; }, {min: '1', step: '1', placeholder: '例如：5000'})));
+    tr.appendChild(tierCell('點數倍率', tierField('number', r.rate, function(v){ r.rate = v; }, {min: '1', max: '10', step: '0.1', placeholder: '1'})));
+    tr.appendChild(tierCell('專屬優惠碼', tierField('text', r.codes, function(v){ r.codes = v; }, {placeholder: '沒有就留空', autocomplete: 'off'})));
+    const del = document.createElement('button');
+    del.type = 'button'; del.className = 'btn danger small'; del.textContent = '刪除';
+    del.addEventListener('click', function(){ tierRows.splice(idx, 1); renderTierRows(); });
+    tr.appendChild(tierCell('操作', del));
+    tbody.appendChild(tr);
+  });
+  document.getElementById('tier_empty').classList.toggle('hidden', tierRows.length > 0);
+}
+
+function addTierRow(){
+  if (tierRows.length >= 8){ tierMsg('等級最多 8 個', false); return; }
+  tierRows.push({name: '', threshold: '', rate: '1', codes: ''});
+  renderTierRows();
+}
+
+function applyTierConfig(d){
+  const c = d.config;
+  document.getElementById('tier_enabled').checked = !!c.enabled;
+  document.getElementById('tier_base_name').value = c.base_name || '';
+  tierRows = (c.tiers || []).map(function(t){
+    return {name: t.name, threshold: String(t.threshold), rate: String(t.rate_percent / 100), codes: (t.coupon_codes || []).join(', ')};
+  });
+  renderTierRows();
+  document.getElementById('tier_dist').textContent = d.distribution && d.distribution.length
+    ? '目前各等級人數：' + d.distribution.map(function(x){ return x.name + ' ' + x.count + ' 人'; }).join('、')
+    : '';
+}
+
+async function loadTiersAdmin(){
+  try{ applyTierConfig(await api('/api/admin/points/tiers')); }
+  catch(e){ tierMsg(e.message, false); }
+}
+
+async function saveTiersAdmin(){
+  tierMsg('', true);
+  const tiers = tierRows.map(function(r){
+    return {
+      name: String(r.name || '').trim(),
+      threshold: Number(r.threshold),
+      rate_percent: Math.round(parseFloat(r.rate) * 100),
+      coupon_codes: String(r.codes || '').split(/[,，;；、 ]+/).map(function(x){ return x.trim(); }).filter(Boolean),
+    };
+  });
+  try{
+    const d = await api('/api/admin/points/tiers', {method: 'POST', body: JSON.stringify({
+      enabled: document.getElementById('tier_enabled').checked,
+      base_name: document.getElementById('tier_base_name').value.trim(),
+      tiers: tiers,
+    })});
+    applyTierConfig(d);
+    tierMsg('已儲存', true);
+  }catch(e){ tierMsg(e.message, false); }
+}
+
 function loadPointsAdmin(){
   loadPointsConfigAdmin();
+  loadTiersAdmin();
   loadRedemptionsAdmin();
   loadPointItemsAdmin();
   loadPointMembersAdmin();
@@ -6095,6 +6274,19 @@ ${THEME_HEAD}
   .pts-balance{font-family:var(--mono);font-size:34px;font-weight:700;color:var(--accent-ink);line-height:1.1;}
   .pts-balance small{font-size:14px;font-weight:500;color:var(--muted);margin-left:4px;}
   .pts-rule{color:var(--muted);font-size:13px;margin-top:8px;line-height:1.6;}
+  .who-tier{font-size:12px;font-weight:700;color:var(--accent-ink);border:1px solid var(--accent);border-radius:12px;padding:1px 8px;white-space:nowrap;}
+  .tier-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;}
+  .tier-badge{font-weight:700;font-size:18px;color:var(--accent-ink);background:var(--accent-soft);border-radius:999px;padding:4px 14px;}
+  .tier-total{font-family:var(--mono);font-size:13px;color:var(--muted);}
+  .tier-bar{height:10px;background:var(--line);border-radius:999px;overflow:hidden;margin:12px 0 6px;}
+  .tier-fill{height:100%;background:var(--accent);border-radius:999px;transition:width .4s;}
+  .tier-next{font-size:13px;color:var(--muted);line-height:1.6;}
+  .tier-benefit{margin-top:10px;font-size:13px;line-height:1.8;}
+  .tier-benefit code{font-family:var(--mono);font-weight:700;background:var(--accent-soft);color:var(--accent-ink);border-radius:6px;padding:1px 6px;}
+  .tier-row{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px dashed var(--line);font-size:13px;}
+  .tier-row .sub{color:var(--muted);font-size:12px;}
+  .tier-row.cur{font-weight:700;color:var(--accent-ink);}
+  .tier-row.lock{color:var(--muted);}
   .pts-sub{font-size:14px;font-weight:700;margin:18px 0 6px;}
   .pts-fold{display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer;user-select:none;padding:10px 0;border-bottom:1px solid var(--line);}
   .pts-fold .cnt{font-weight:500;font-size:12.5px;color:var(--muted);margin-left:6px;}
@@ -6188,7 +6380,7 @@ ${THEME_CSS_PORTAL}
 <div id="appView" class="hidden">
   <header>
     <h1>會員查詢</h1>
-    <div class="who"><button type="button" class="who-btn" id="whoBtn" onclick="toggleProfile()" aria-expanded="false"><span id="whoami"></span><span id="whoPts" class="who-pts hidden"></span><span class="who-caret" id="whoCaret">▾</span></button>
+    <div class="who"><button type="button" class="who-btn" id="whoBtn" onclick="toggleProfile()" aria-expanded="false"><span id="whoami"></span><span id="whoTier" class="who-tier hidden"></span><span id="whoPts" class="who-pts hidden"></span><span class="who-caret" id="whoCaret">▾</span></button>
       ${THEME_HEADER_BTN}
       <button class="btn secondary" onclick="doLogout()">登出</button></div>
   </header>
@@ -6233,6 +6425,16 @@ ${THEME_CSS_PORTAL}
         </div>
       </div>
       <div id="pfMsg" class="msg"></div>
+    </div>
+    <!-- === 會員等級 === -->
+    <div class="card hidden" id="tierCard">
+      <h2>會員等級</h2>
+      <div class="tier-head"><span class="tier-badge" id="tierName"></span><span class="tier-total" id="tierTotal"></span></div>
+      <div class="tier-bar"><div class="tier-fill" id="tierFill"></div></div>
+      <div class="tier-next" id="tierNext"></div>
+      <div class="tier-benefit" id="tierBenefit"></div>
+      <div class="pts-sub">等級一覽</div>
+      <div id="tierList"></div>
     </div>
     <!-- === 我的點數 === -->
     <div class="card" id="pointsCard">
@@ -7139,7 +7341,52 @@ function renderPtsLed(){
   }).join('') || '<tr><td colspan="3">尚無點數紀錄</td></tr>';
 }
 
+// ---- 會員等級 ----
+function tierMoney(n){ return '$' + Math.round(Number(n) || 0).toLocaleString('en-US'); }
+function tierRate(p){ return '×' + (Number(p) / 100); }
+
+function renderTier(d){
+  const card = document.getElementById('tierCard');
+  const chip = document.getElementById('whoTier');
+  if (!d || !d.enabled){ card.classList.add('hidden'); chip.classList.add('hidden'); return; }
+  card.classList.remove('hidden');
+  chip.textContent = d.current.name;
+  chip.classList.remove('hidden');
+  document.getElementById('tierName').textContent = d.current.name;
+  document.getElementById('tierTotal').textContent = '累積儲值 ' + tierMoney(d.total);
+  document.getElementById('tierFill').style.width = Math.round(d.progress * 100) + '%';
+  document.getElementById('tierNext').innerHTML = d.next
+    ? '再儲值 <b>' + tierMoney(d.next.remaining) + '</b> 即可升級為「' + ptsEsc(d.next.name) + '」' + (d.next.rate_percent > 100 ? '（點數回饋 ' + tierRate(d.next.rate_percent) + '）' : '')
+    : '🎉 您已經是最高等級';
+
+  const lines = [];
+  if (d.current.rate_percent > 100) {
+    lines.push('點數回饋倍率：<b>' + tierRate(d.current.rate_percent) + '</b>' + (d.earn_enabled === false ? '（目前點數回饋功能暫停）' : ''));
+  }
+  (d.coupons || []).forEach(function(c){
+    lines.push('專屬優惠碼：<code>' + ptsEsc(c.code) + '</code> ' + ptsEsc(c.desc));
+  });
+  if (!lines.length) lines.push('目前等級沒有額外優惠，升級後可享更多回饋。');
+  document.getElementById('tierBenefit').innerHTML = lines.join('<br/>');
+
+  document.getElementById('tierList').innerHTML = d.tiers.map(function(t){
+    const perks = [];
+    if (t.rate_percent > 100) perks.push('點數 ' + tierRate(t.rate_percent));
+    if (t.has_coupon) perks.push('專屬優惠碼');
+    return '<div class="tier-row ' + (t.current ? 'cur' : (t.reached ? '' : 'lock')) + '"><div>' +
+      (t.current ? '👉 ' : (t.reached ? '✓ ' : '🔒 ')) + ptsEsc(t.name) + (t.current ? '（目前）' : '') +
+      '<div class="sub">' + (t.threshold > 0 ? '累積儲值滿 ' + tierMoney(t.threshold) : '加入即可') + '</div></div>' +
+      '<div style="text-align:right;">' + (perks.length ? perks.join('<br/>') : '<span class="sub">標準回饋</span>') + '</div></div>';
+  }).join('');
+}
+
+async function loadTier(){
+  try{ renderTier(await api('/api/member/tier')); }
+  catch(e){ /* 等級載入失敗不影響其他功能 */ }
+}
+
 async function loadPoints(){
+  loadTier();
   try{
     const d = await api('/api/member/points');
     pointsState = d;

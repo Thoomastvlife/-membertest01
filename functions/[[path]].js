@@ -68,6 +68,18 @@ import {
   handleUnlockLogin,
 } from "./_lib/twofa.js";
 import { termsHtml, privacyHtml, LEGAL_VERSION } from "./_lib/legal.js";
+import {
+  trackLoginDevice,
+  notifyNewDevice,
+  handleListDevices,
+  handleLogoutAllSelf,
+  handleLogoutAllStaff,
+  handleRevokeByLink,
+  revokePageHtml,
+  bumpSessionVersion,
+  deleteDevicesOf,
+} from "./_lib/devices.js";
+import { getTierConfig, saveTierConfig, memberTierInfo, tierDistribution } from "./_lib/tiers.js";
 import { getRateRules, saveRateRules, getAllRateRules, getRateGroupForPlatform, RATE_GROUPS, DEFAULT_RATE_RULES, MIN_QUOTE_AMOUNT, calcCoins, isCustomRateGroup } from "./_lib/rates.js";
 
 // 會員自助下單的最低金額，跟查價系統的最低查詢金額保持一致
@@ -624,7 +636,7 @@ async function handleSetupAdmin(request, env) {
   return json({ ok: true });
 }
 
-async function handleLogin(request, env) {
+async function handleLogin(request, env, waitUntil) {
   const body = await request.json().catch(() => ({}));
   const { username, password, totp_code } = body;
   if (!username || !password) return json({ error: "帳號或密碼錯誤" }, 401);
@@ -674,12 +686,29 @@ async function handleLogin(request, env) {
 
   await clearFailedLogin(env, "admins", admin.id);
 
+  // 辨識裝置：新裝置要寄通知信。這一段任何地方出錯都不能讓登入失敗。
+  let device = null;
+  try {
+    device = await trackLoginDevice(env, request, admin);
+  } catch (e) {
+    console.error("trackLoginDevice failed:", e);
+  }
+
   const ttlHours = parseInt(env.SESSION_TTL_HOURS || "12", 10);
   const session = await signSession(
-    { adminId: admin.id, username: admin.username, exp: Date.now() + ttlHours * 3600 * 1000 },
+    // sv = 登入版本號：之後按「登出所有裝置」會讓舊憑證失效（欄位還沒升級時是 0）
+    { adminId: admin.id, username: admin.username, sv: Number(admin.session_version) || 0, exp: Date.now() + ttlHours * 3600 * 1000 },
     env.ADMIN_SESSION_SECRET
   );
-  return json({ ok: true }, 200, { "Set-Cookie": setCookieHeader("admin_session", session, ttlHours * 3600) });
+  const res = json({ ok: true }, 200, { "Set-Cookie": setCookieHeader("admin_session", session, ttlHours * 3600) });
+  if (device && device.cookie) res.headers.append("Set-Cookie", device.cookie); // 裝置 cookie（長期有效）
+
+  if (device && device.isNew) {
+    const job = notifyNewDevice(env, request, admin, device); // 自己吞掉錯誤
+    if (waitUntil) waitUntil(job);
+    else await job;
+  }
+  return res;
 }
 
 async function handleLogout() {
@@ -791,6 +820,7 @@ async function handleResetStaffPassword(id, request, env) {
   if (!password || password.length < 6) return json({ error: "密碼至少需要 6 碼" }, 400);
   const hash = await hashPassword(password);
   await env.DB.prepare("UPDATE admins SET password_hash=? WHERE id=?").bind(hash, id).run();
+  await bumpSessionVersion(env, id, { soft: true }); // 密碼換了，舊的登入全部作廢（資料庫還沒升級就略過）
   return json({ ok: true });
 }
 
@@ -807,6 +837,7 @@ async function handleDeleteStaff(id, session, env) {
     if (!/no such column/i.test(String(e && e.message))) throw e;
   }
   await env.DB.prepare("DELETE FROM admins WHERE id=?").bind(id).run();
+  await deleteDevicesOf(env, id);
   return json({ ok: true });
 }
 
@@ -1262,7 +1293,9 @@ async function handleCouponPreview(request, env) {
   const amt = parseFloat(body.amount);
   if (!amt || amt <= 0) return json({ error: "金額不正確" }, 400);
 
-  const result = await applyCouponToAmount(env, body.code, amt);
+  // 會員登入中（會員頁試算）→ 一併檢查「會員等級專屬優惠碼」；後台結帳櫃檯沒有會員登入，不檢查
+  const viewer = await requireMember(request, env);
+  const result = await applyCouponToAmount(env, body.code, amt, viewer ? { memberId: viewer.memberId } : {});
   if (!result.ok) return json({ error: result.error }, 400);
   return json({
     ok: true,
@@ -2968,7 +3001,7 @@ async function handleMemberCreateOrder(session, request, env) {
   let finalAmount = amt;
   let couponResult = null;
   if (body.coupon_code && body.coupon_code.trim()) {
-    couponResult = await applyCouponToAmount(env, body.coupon_code, amt);
+    couponResult = await applyCouponToAmount(env, body.coupon_code, amt, { memberId: member.id });   // 會員自助下單：專屬優惠碼要檢查等級
     if (!couponResult.ok) return json({ error: couponResult.error }, 400);
     finalAmount = couponResult.finalAmount;
   }
@@ -3182,6 +3215,29 @@ async function handleSavePointsConfigAdmin(request, env) {
   const r = await savePointsConfig(env, body);
   if (!r.ok) return json({ error: r.error }, 400);
   return json({ ok: true });
+}
+
+// 會員：目前等級、升級進度、專屬優惠
+async function handleMemberTier(session, env) {
+  const info = await memberTierInfo(env, session.memberId);
+  if (info.enabled) {
+    const pc = await getPointsConfig(env);
+    info.earn_enabled = pc.earnEnabled; // 點數倍率只有在「訂單回饋」開著時才有作用
+  }
+  return json(info);
+}
+
+// 後台：會員等級設定
+async function handleGetTiersAdmin(env) {
+  const cfg = await getTierConfig(env);
+  return json({ config: cfg, distribution: await tierDistribution(env, cfg) });
+}
+
+async function handleSaveTiersAdmin(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const r = await saveTierConfig(env, body);
+  if (!r.ok) return json({ error: r.error }, 400);
+  return json({ ok: true, config: r.config, distribution: await tierDistribution(env, r.config) });
 }
 
 // 後台：所有會員的點數餘額
@@ -3458,6 +3514,12 @@ export async function onRequest(context) {
     }
 
     // ---- Public pages ----
+    if (path === "/admin/revoke" || path === "/admin/revoke/") {
+      // 新裝置通知信裡的「立即登出所有裝置」頁面。GET 只顯示按鈕、不會有任何動作；token 放在 # 後面，不會送到伺服器
+      return new Response(revokePageHtml(), {
+        headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" },
+      });
+    }
     if (path === "/admin" || path === "/admin/") return html(adminHtml({ platforms: await getPlatforms(env.DB) }));
     if (path.startsWith("/pay/")) return html(payHtml({ platforms: await getPlatforms(env.DB) }));
     if (path === "/member" || path === "/member/") return html(memberHtml({ platforms: await getPlatforms(env.DB) }));
@@ -3480,7 +3542,7 @@ export async function onRequest(context) {
     if (path === "/api/admin/login" && method === "POST") {
       const body = await request.clone().json().catch(() => ({}));
       const uname = String(body.username || "").trim().slice(0, 60);
-      const res = await handleLogin(request, env);
+      const res = await handleLogin(request, env, (p) => context.waitUntil(p));
       if (res.status < 400) {
         let a = null;
         try { a = await env.DB.prepare("SELECT id, username FROM admins WHERE username=?").bind(uname).first(); } catch { /* 查不到就用輸入的帳號 */ }
@@ -3490,6 +3552,7 @@ export async function onRequest(context) {
       }
       return res;
     }
+    if (path === "/api/auth/revoke-sessions" && method === "POST") return handleRevokeByLink(request, env);
     if (path === "/api/admin/logout" && method === "POST") {
       const who = await requireAdmin(request, env);
       if (who) await logAdminAction(env, who, request, { action: "auth.admin_logout", summary: "登出後台" });
@@ -3614,6 +3677,7 @@ export async function onRequest(context) {
       }
       if (path === "/api/member/profile/send-email-code" && method === "POST") return handleMemberProfileSendCode(session, request, env);
       if (path === "/api/member/points" && method === "GET") return handleMemberPoints(session, env);
+      if (path === "/api/member/tier" && method === "GET") return handleMemberTier(session, env);
       if (path === "/api/member/points/redeem" && method === "POST") {
         const body = await request.clone().json().catch(() => ({}));
         const it = await env.DB.prepare("SELECT name, cost FROM points_items WHERE id=?").bind(parseInt(body.item_id, 10) || 0).first().catch(() => null);
@@ -3634,6 +3698,10 @@ export async function onRequest(context) {
       // 角色與權限：每次都從資料庫讀，管理員改了權限或刪了帳號，下一個請求就立刻生效
       const access = await getAdminAccess(env, session);
       if (!access) return json({ error: "此帳號已被移除，請重新登入" }, 401, { "Set-Cookie": clearCookieHeader("admin_session") });
+      // 登入版本號（sv）和資料庫不一樣 = 這張登入憑證已經被「登出所有裝置」或重設密碼收回
+      if ((Number(session.sv) || 0) !== (Number(access.sessionVersion) || 0)) {
+        return json({ error: "登入已失效（帳號被登出所有裝置，或密碼已重設），請重新登入" }, 401, { "Set-Cookie": clearCookieHeader("admin_session") });
+      }
       const needPerm = requiredAdminPermission(path, method);
       if (!canAccess(access, needPerm)) {
         return json({ error: needPerm === "OWNER" ? "只有管理員可以使用這個功能" : "你沒有這項功能的權限，請聯絡管理員" }, 403);
@@ -3652,6 +3720,17 @@ export async function onRequest(context) {
       if (path === "/api/admin/backup/finish" && method === "POST") return handleBackupFinish(request, env, session);
       if (path === "/api/admin/logs" && method === "GET") return handleListAdminLogs(request, env);
       if (path === "/api/admin/logs/export" && method === "GET") return handleExportAdminLogs(request, env, session);
+
+      // ---- 登入裝置與「登出所有裝置」（只動自己的帳號，伺服器端一律用 session.adminId）----
+      if (path === "/api/admin/devices" && method === "GET") return handleListDevices(request, env, session);
+      if (path === "/api/admin/sessions/logout-all" && method === "POST") {
+        const body = await request.clone().json().catch(() => ({}));
+        return alog(
+          env, session, request,
+          { action: "auth.logout_all", summary: body && body.keep_current ? "登出其他所有裝置（保留目前這台）" : "登出所有裝置（包含目前這台）" },
+          handleLogoutAllSelf(request, env, session)
+        );
+      }
 
       // ---- 兩步驟驗證（每個帳號管理自己的，不吃網址參數，伺服器端一律用 session.adminId）----
       if (path === "/api/admin/2fa/setup" && method === "POST") return handleTotpSetup(session, env);
@@ -3747,6 +3826,15 @@ export async function onRequest(context) {
               : `清除${L.staff}的信箱`,
           }),
           handleSetStaffEmail(staffEmailMatch[1], request, env)
+        );
+      }
+
+      const staffLogoutMatch = path.match(/^\/api\/admin\/staff\/(\d+)\/logout-all$/);
+      if (staffLogoutMatch && method === "POST") {
+        return alog(
+          env, session, request,
+          { action: "staff.logout_all", summary: `登出${L.staff}的所有裝置` },
+          handleLogoutAllStaff(staffLogoutMatch[1], env)
         );
       }
 
@@ -4139,6 +4227,16 @@ export async function onRequest(context) {
           env, session, request,
           { action: "points.save_config", summary: "更新點數系統設定", detail: sanitizeForLog(body) },
           handleSavePointsConfigAdmin(request, env)
+        );
+      }
+      // 會員等級設定（權限跟點數分頁一樣：路徑放在 /points 底下）
+      if (path === "/api/admin/points/tiers" && method === "GET") return handleGetTiersAdmin(env);
+      if (path === "/api/admin/points/tiers" && method === "POST") {
+        const body = await request.clone().json().catch(() => ({}));
+        return alog(
+          env, session, request,
+          { action: "points.save_tiers", summary: "更新會員等級設定", detail: sanitizeForLog(body) },
+          handleSaveTiersAdmin(request, env)
         );
       }
       if (path === "/api/admin/points/members" && method === "GET") return handleAdminPointsMembers(env);

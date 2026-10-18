@@ -54,6 +54,8 @@ export function requiredAdminPermission(path, method) {
     case "me":
     case "push":
     case "2fa": // 兩步驟驗證：每個登入帳號都只能管理「自己」的，伺服器端用 session.adminId，不吃網址參數
+    case "devices": // 自己登入過的裝置（唯讀）
+    case "sessions": // 自己「登出所有裝置」
       return null;
     case "staff":
       return read ? { any: ["OWNER", "logs"] } : "OWNER"; // 操作紀錄的帳號篩選要讀帳號名稱
@@ -112,31 +114,37 @@ export function parsePermissions(raw) {
 
 // 讀出目前登入帳號的角色與權限。回傳 null 代表這個帳號已經不存在（被刪除），要請他重新登入。
 export async function getAdminAccess(env, session) {
-  let row;
-  let totpColumnMissing = false;
-  try {
-    row = await env.DB.prepare("SELECT id, username, role, permissions, totp_enabled FROM admins WHERE id=?").bind(session.adminId).first();
-  } catch (e) {
-    if (!/no such column/i.test(String(e && e.message))) throw e;
-    totpColumnMissing = true; // 還沒執行 migrate_v28.sql，降級查詢，繼續往下走
-  }
-  if (totpColumnMissing) {
+  // 從欄位最完整的查詢開始；欄位不存在（還沒執行某支 migrate）就退一步，全部都不行才當成最舊的資料庫
+  const attempts = [
+    "SELECT id, username, role, permissions, totp_enabled, session_version FROM admins WHERE id=?", // migrate_v31.sql
+    "SELECT id, username, role, permissions, totp_enabled FROM admins WHERE id=?", // migrate_v28.sql
+    "SELECT id, username, role, permissions FROM admins WHERE id=?", // migrate_v22.sql
+  ];
+  let row = null;
+  let queried = false;
+  for (const sql of attempts) {
     try {
-      row = await env.DB.prepare("SELECT id, username, role, permissions FROM admins WHERE id=?").bind(session.adminId).first();
+      row = await env.DB.prepare(sql).bind(session.adminId).first();
+      queried = true;
+      break;
     } catch (e) {
-      if (/no such column/i.test(String(e && e.message))) {
-        // 資料庫還沒執行 migrate_v22.sql：維持舊行為（所有帳號都是管理員），不要讓整個後台壞掉
-        return { id: session.adminId, username: session.username, owner: true, legacy: true, configured: true, perms: new Set(PERMISSION_KEYS), totpEnabled: false };
-      }
-      throw e;
+      if (!/no such column/i.test(String(e && e.message))) throw e;
     }
+  }
+  if (!queried) {
+    // 資料庫還沒執行 migrate_v22.sql：維持舊行為（所有帳號都是管理員），不要讓整個後台壞掉
+    return { id: session.adminId, username: session.username, owner: true, legacy: true, configured: true, perms: new Set(PERMISSION_KEYS), totpEnabled: false, sessionVersion: 0 };
   }
   if (!row) return null;
   const owner = row.role === "owner";
   const parsed = owner ? null : parsePermissions(row.permissions);
   const configured = owner || parsed !== null;
   const perms = new Set(owner || parsed === null ? PERMISSION_KEYS : parsed);
-  return { id: row.id, username: row.username, owner, legacy: false, configured, perms, totpEnabled: !!row.totp_enabled };
+  return {
+    id: row.id, username: row.username, owner, legacy: false, configured, perms,
+    totpEnabled: !!row.totp_enabled,
+    sessionVersion: Number(row.session_version) || 0, // 和登入憑證裡的 sv 比對，不一樣就代表已被「登出所有裝置」
+  };
 }
 
 export function canAccess(access, need) {

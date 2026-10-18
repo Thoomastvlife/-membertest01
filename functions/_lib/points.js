@@ -6,6 +6,7 @@
 // - 點數商城：兌換當下扣點；後台拒絕時退點並補回庫存
 // ========================================================================
 import { formatOrderNo } from "./helpers.js";
+import { tierRateForOrder } from "./tiers.js";
 
 const DEFAULTS = { enabled: "1", earn_per: "100", redeem_value: "1", max_percent: "50" };
 
@@ -120,9 +121,18 @@ export async function reconcileOrderPoints(env, order, { gone = false, recalc = 
 
   // 訂單回饋：必須「已付款」而且「訂單完成(結案)」才給點；取消結案 / 取消訂單會自動扣回
   let wantEarn = 0;
+  let tierNote = "";
   if (order.status === "paid" && order.is_completed) {
-    if (cfg.earnEnabled) wantEarn = currEarn > 0 && !recalc ? currEarn : Math.floor(Number(order.amount) / cfg.earnPer);
-    else wantEarn = currEarn; // 發點關閉時：不再發新點，但已發的不動
+    if (cfg.earnEnabled) {
+      if (currEarn > 0 && !recalc) wantEarn = currEarn;
+      else {
+        // 會員等級的點數倍率：以「這筆訂單之前」的累積儲值金額判斷等級（升級後的下一筆才享有新倍率）。
+        // 倍率用整數百分比（120 = 1.2 倍）計算，避免小數誤差。
+        const tier = await tierRateForOrder(env, order);
+        wantEarn = Math.floor(Math.round(Number(order.amount) * tier.ratePercent) / (cfg.earnPer * 100));
+        if (tier.ratePercent > 100) tierNote = `（${tier.name} ×${tier.ratePercent / 100}）`;
+      }
+    } else wantEarn = currEarn; // 發點關閉時：不再發新點，但已發的不動
   }
   if (wantEarn !== currEarn) {
     await addLedger(env, {
@@ -132,7 +142,7 @@ export async function reconcileOrderPoints(env, order, { gone = false, recalc = 
       orderId: order.id,
       note:
         wantEarn > currEarn
-          ? `訂單 ${orderNo} 完成回饋`
+          ? `訂單 ${orderNo} 完成回饋${tierNote}`
           : order.status === "paid" && order.is_completed
           ? `訂單 ${orderNo} 金額調整`
           : order.status === "paid"

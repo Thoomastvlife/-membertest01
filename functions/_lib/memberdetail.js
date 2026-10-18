@@ -1,5 +1,6 @@
 // 會員詳細頁：基本資料、消費總覽、訂單歷史、點數紀錄、標籤、備註紀錄、封鎖下單
 import { jsonRes as json, formatOrderNo, nowIso } from "./helpers.js";
+import { getTierConfig, resolveTier } from "./tiers.js";
 
 export const MEMBER_TAG_MAX_COUNT = 10;
 export const MEMBER_TAG_MAX_LEN = 12;
@@ -98,6 +99,8 @@ export async function handleMemberDetail(id, env) {
 
   const ref = await env.DB.prepare("SELECT COUNT(*) AS c FROM members WHERE referred_by=?").bind(id).first();
 
+  const tierCfg = await getTierConfig(env);
+
   return json({
     migrated,
     member: {
@@ -122,6 +125,11 @@ export async function handleMemberDetail(id, env) {
       ...stats,
       avg_paid: stats.paid_count ? Math.round((stats.paid_total / stats.paid_count) * 100) / 100 : 0,
     },
+    tier: (() => {
+      if (!tierCfg.enabled || !tierCfg.tiers.length) return null;
+      const r = resolveTier(tierCfg, stats.paid_total);
+      return { name: r.name, rate_percent: r.ratePercent, next_name: r.next ? r.next.name : null, remaining: r.remaining };
+    })(),
     points: { balance: pts.balance, earned: pts.earned, spent: pts.spent, ledger },
     orders,
     notes,

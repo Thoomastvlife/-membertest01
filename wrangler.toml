@@ -35,6 +35,8 @@ EMAIL_FROM_ORDER = "咖啡代儲訂單通知 <order@member.ytgp168.com>"
 # DAILY_REPORT_TO = "owner@gmail.com"
 # 日報寄件人，選填；不填沿用 EMAIL_FROM_ORDER，再沒有就用 EMAIL_FROM。
 EMAIL_FROM_REPORT = "咖啡代儲營運日報 <report@member.ytgp168.com>"
+# 後台「新裝置登入通知」信的寄件人，選填；不填沿用 EMAIL_FROM。（需要先執行 migrate_v31.sql；收件人是該後台帳號自己設定的信箱）
+# EMAIL_FROM_SECURITY = "咖啡代儲安全通知 <security@member.ytgp168.com>"
 
 # ---- 服務條款／隱私權政策頁面（/terms、/privacy）要顯示的企業資訊 ----
 # 這些是「零售業等網路交易定型化契約應記載及不得記載事項」要求公開揭露的基本資訊，上線前請務必填寫正確；

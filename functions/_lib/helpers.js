@@ -1,4 +1,5 @@
 import { parsePermissions } from "./access.js";
+import { checkCouponForMember } from "./tiers.js";
 // 共用工具函式。放在 _lib 資料夾（開頭底線）Cloudflare Pages 不會把它當成路由。
 
 export function jsonRes(data, status = 200, extraHeaders = {}) {
@@ -217,7 +218,9 @@ export function publicOrderView(o) {
 
 // 檢查某個優惠碼是否可套用在給定金額上，並算出折抵金額（不會寫入資料庫、不會增加使用次數）。
 // 回傳 { ok:true, coupon, discount, finalAmount } 或 { ok:false, error }
-export async function applyCouponToAmount(env, rawCode, amount) {
+// opts.memberId 有帶（會員自助下單、會員頁試算）才會檢查「會員等級專屬優惠碼」；
+// 後台建單／後台試算不帶 opts，店家永遠可以指定任何優惠碼。
+export async function applyCouponToAmount(env, rawCode, amount, opts = {}) {
   const code = (rawCode || "").trim().toUpperCase();
   if (!code) return { ok: false, error: "請輸入優惠碼" };
 
@@ -232,6 +235,10 @@ export async function applyCouponToAmount(env, rawCode, amount) {
   }
   if (coupon.min_order_amount && amount < coupon.min_order_amount) {
     return { ok: false, error: `訂單金額需滿 ${coupon.min_order_amount} 元才可使用此優惠碼` };
+  }
+  if (opts && Object.prototype.hasOwnProperty.call(opts, "memberId")) {
+    const t = await checkCouponForMember(env, opts.memberId, coupon.code);
+    if (!t.ok) return { ok: false, error: t.error };
   }
 
   let discount;
