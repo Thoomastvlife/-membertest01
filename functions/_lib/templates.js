@@ -810,10 +810,19 @@ ${THEME_CSS_ADMIN}
         </table>
       </div>
       <div class="card">
-        <h2>每日營運日報</h2>
-        <small class="hint">日報會寄給「有填信箱的管理員」（以及設定檔裡額外指定的收件人）。按下面的按鈕，會把昨天的日報<b>只寄給你自己</b>（用你帳號上的信箱），不會影響正式排程。</small>
+        <h2>營運日報／週報／月報</h2>
+        <small class="hint">報表會寄給「有填信箱的管理員」（以及設定檔裡額外指定的收件人）。<b>日報</b>每天寄昨天；<b>週報</b>每週一寄上週（週一到週日）；<b>月報</b>每月 1 號寄上個月。週報與月報跟著每天的日報排程一起檢查、到期才寄，不需要另外設定。按下面的按鈕，會把最近一期<b>只寄給你自己</b>（用你帳號上的信箱），不會影響正式排程。</small>
         <button class="btn" id="dr_btn" onclick="sendTestDailyReport()">寄一封測試日報給我</button>
+        <button class="btn secondary" id="dr_w_btn" onclick="sendTestPeriodReport('weekly')">寄測試週報給我</button>
+        <button class="btn secondary" id="dr_m_btn" onclick="sendTestPeriodReport('monthly')">寄測試月報給我</button>
         <div id="dr_msg" class="msg"></div>
+        <div style="margin-top:14px;">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:6px 0;"><input type="checkbox" id="rs_weekly" style="width:auto;margin:0;" /> 自動寄送週報（每週一）</label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:6px 0;"><input type="checkbox" id="rs_monthly" style="width:auto;margin:0;" /> 自動寄送月報（每月 1 號）</label>
+          <button class="btn secondary" onclick="saveReportSettings()">儲存週報／月報設定</button>
+          <div id="rs_info" class="hint" style="margin-top:6px;"></div>
+          <div id="rs_msg" class="msg"></div>
+        </div>
       </div>
     </section>
 
@@ -1917,7 +1926,7 @@ function showTab(name, opts){
   if (name==='stats') loadStats();
   if (name==='settings') { loadSettings(); loadPlatformsAdmin(); loadMethodsAdmin(); }
   if (name==='announcement' && !opts.skipAnnouncementLoad) loadAnnouncement();
-  if (name==='staff') loadStaff();
+  if (name==='staff') { loadStaff(); loadReportSettings(); }
   if (name==='rates') loadRates();
   if (name==='coupons') loadCoupons();
   if (name==='points') loadPointsAdmin();
@@ -3445,6 +3454,42 @@ async function loadStaff(){
         '<button class="btn danger small" '+((isSelf||isOwner)?'disabled':'')+' onclick="deleteStaff('+s.id+')">刪除</button>'+
       '</td></tr>';
   }).join('') || '<tr><td colspan="8">尚無帳號</td></tr>';
+}
+
+async function sendTestPeriodReport(kind){
+  const btn = document.getElementById(kind === 'monthly' ? 'dr_m_btn' : 'dr_w_btn');
+  const msg = document.getElementById('dr_msg');
+  btn.disabled = true;
+  msg.textContent = '寄送中…'; msg.className = 'msg';
+  try{
+    const r = await api('/api/admin/period-report/test', {method:'POST', body: JSON.stringify({kind: kind})});
+    msg.innerHTML = '已寄出測試' + (kind === 'monthly' ? '月報' : '週報') + '（' + escapeHtml(r.label) + '）到 ' + escapeHtml(r.to) + '，請到信箱確認（沒看到也看一下垃圾信）。<br>寄件人：' + escapeHtml(r.sender || '未設定');
+    msg.className = 'msg ok';
+  }catch(e){
+    msg.textContent = e.message; msg.className = 'msg err';
+  }finally{
+    btn.disabled = false;
+  }
+}
+
+async function loadReportSettings(){
+  const info = document.getElementById('rs_info');
+  if (!info) return;
+  try{
+    const d = await api('/api/admin/report-settings');
+    document.getElementById('rs_weekly').checked = !!d.weekly;
+    document.getElementById('rs_monthly').checked = !!d.monthly;
+    info.textContent = '上次正式寄出：週報 ' + (d.last && d.last.weekly ? '（' + d.last.weekly + ' 起的那一週）' : '尚未寄過') + '；月報 ' + (d.last && d.last.monthly ? '（' + d.last.monthly + '）' : '尚未寄過');
+  }catch(e){ info.textContent = ''; }
+}
+
+async function saveReportSettings(){
+  const msg = document.getElementById('rs_msg');
+  try{
+    await api('/api/admin/report-settings', {method:'PUT', body: JSON.stringify({weekly: document.getElementById('rs_weekly').checked, monthly: document.getElementById('rs_monthly').checked})});
+    msg.textContent = '已儲存'; msg.className = 'msg ok';
+    loadReportSettings();
+  }catch(e){ msg.textContent = e.message; msg.className = 'msg err'; }
 }
 
 async function sendTestDailyReport(){

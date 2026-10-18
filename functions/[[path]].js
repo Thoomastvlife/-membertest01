@@ -1,4 +1,4 @@
-import { handleDailyReportCron, handleDailyReportTest } from "./_lib/report.js";
+import { handleDailyReportCron, handleDailyReportTest, handlePeriodReportCron, handlePeriodReportTest, handleReportSettings } from "./_lib/report.js";
 import { getBankAccounts, saveBankAccounts, chooseBank } from "./_lib/banks.js";
 import { adminHtml, payHtml, memberHtml, memberRegisterHtml } from "./_lib/templates.js";
 import {
@@ -3498,6 +3498,8 @@ export async function onRequest(context) {
 
     // 每日營運日報：GitHub Actions 排程用金鑰（X-Cron-Key）呼叫，不需要登入
     if (path === "/api/cron/daily-report") return handleDailyReportCron(request, env);
+    if (path === "/api/cron/weekly-report") return handlePeriodReportCron(request, env, "weekly");
+    if (path === "/api/cron/monthly-report") return handlePeriodReportCron(request, env, "monthly");
 
     // 直播留言自動抓取：監聽程式用金鑰（X-Ingest-Key）送留言進來，不需要登入
     if (path === "/api/live/ingest" && method === "POST") return handleLiveIngest(request, env);
@@ -3704,6 +3706,25 @@ export async function onRequest(context) {
         );
       }
 
+      if (path === "/api/admin/period-report/test" && method === "POST") {
+        return alog(
+          env, session, request,
+          (resBody) => ({
+            action: "staff.report_test",
+            summary: `寄出測試${resBody && resBody.kind === "monthly" ? "月報" : "週報"}給自己（${(resBody && resBody.to) || ""}）`,
+          }),
+          handlePeriodReportTest(request, env, session)
+        );
+      }
+      if (path === "/api/admin/report-settings" && (method === "GET" || method === "PUT")) {
+        if (method === "GET") return handleReportSettings(request, env);
+        const rb = await request.clone().json().catch(() => ({}));
+        return alog(
+          env, session, request,
+          { action: "settings.report", summary: `更新報表寄送設定（週報${rb.weekly === false ? "關" : "開"}、月報${rb.monthly === false ? "關" : "開"}）` },
+          handleReportSettings(request, env)
+        );
+      }
       if (path === "/api/admin/daily-report/test" && method === "POST") {
         return alog(
           env, session, request,
