@@ -6368,10 +6368,10 @@ ${THEME_CSS_PORTAL}
 <div id="loginView" class="card">
   <div class="mark">會</div>
   <h2>會員登入查詢</h2>
-  <label>帳號</label>
-  <input id="loginAccount" />
+  <label>帳號或電子信箱</label>
+  <input id="loginAccount" placeholder="輸入帳號，或註冊時的電子信箱" autocomplete="username" autocapitalize="none" />
   <label>密碼</label>
-  <input id="loginPass" type="password" />
+  <input id="loginPass" type="password" autocomplete="current-password" />
   <button class="btn" id="loginBtn" onclick="doLogin()">登入</button>
   <div id="loginMsg" class="msg"></div>
   <div class="hint">尚未收到帳號密碼？請洽店家開通。</div>
@@ -7002,7 +7002,7 @@ async function doLogin(){
   const password = document.getElementById('loginPass').value;
   const msg = document.getElementById('loginMsg');
   msg.textContent=''; msg.className='msg';
-  if (!account || !password){ msg.textContent='請輸入帳號密碼'; msg.className='msg err'; return; }
+  if (!account || !password){ msg.textContent='請輸入帳號（或信箱）與密碼'; msg.className='msg err'; return; }
   try{
     await api('/api/member/login', {method:'POST', body: JSON.stringify({account,password})});
     checkSession();

@@ -2613,20 +2613,31 @@ async function handleUploadProof(token, request, env) {
 async function handleMemberLogin(request, env) {
   const body = await request.json().catch(() => ({}));
   const { account, password } = body;
-  if (!account || !password) return json({ error: "請輸入帳號與密碼" }, 400);
+  if (!account || !password) return json({ error: "請輸入帳號（或信箱）與密碼" }, 400);
   const { maxAttempts, lockoutMinutes } = loginLockoutConfig(env);
 
-  let member;
-  try {
-    member = await env.DB.prepare(
-      `SELECT *, (locked_until IS NOT NULL AND locked_until > datetime('now')) AS is_locked FROM members WHERE account=?`
-    ).bind(account.trim()).first();
-  } catch (e) {
-    if (!/no such column/i.test(String(e && e.message))) throw e;
-    member = await env.DB.prepare("SELECT * FROM members WHERE account=?").bind(account.trim()).first(); // 還沒執行 migrate_v28.sql
+  const ident = String(account).trim();
+  // 先當帳號找（維持原本行為）；找不到而且長得像信箱（有 @）時，再用信箱找。
+  // 信箱找到不只一位會員時（資料重複）一律不放行，避免登入到別人的帳號。
+  const findBy = async (where, bindVal, limit) => {
+    try {
+      const { results } = await env.DB.prepare(
+        `SELECT *, (locked_until IS NOT NULL AND locked_until > datetime('now')) AS is_locked FROM members WHERE ${where} LIMIT ${limit}`
+      ).bind(bindVal).all();
+      return results || [];
+    } catch (e) {
+      if (!/no such column/i.test(String(e && e.message))) throw e;
+      const { results } = await env.DB.prepare(`SELECT * FROM members WHERE ${where} LIMIT ${limit}`).bind(bindVal).all(); // 還沒執行 migrate_v28.sql
+      return results || [];
+    }
+  };
+  let member = (await findBy("account=?", ident, 1))[0];
+  if (!member && ident.includes("@")) {
+    const byEmail = await findBy("LOWER(email)=?", ident.toLowerCase(), 2);
+    if (byEmail.length === 1) member = byEmail[0];
   }
   if (!member || !member.password_hash) {
-    return json({ error: "帳號或密碼錯誤，或此帳號尚未開通登入功能，請洽店家" }, 401);
+    return json({ error: "帳號（或信箱）或密碼錯誤，或此帳號尚未開通登入功能，請洽店家" }, 401);
   }
   if (member.is_locked) {
     return json({ error: `登入失敗次數過多，請 ${lockoutMinutes} 分鐘後再試` }, 429);
@@ -2634,7 +2645,7 @@ async function handleMemberLogin(request, env) {
   const valid = await verifyPassword(password, member.password_hash);
   if (!valid) {
     await bumpFailedLogin(env, "members", member.id, member.failed_attempts, maxAttempts, lockoutMinutes);
-    return json({ error: "帳號或密碼錯誤" }, 401);
+    return json({ error: "帳號（或信箱）或密碼錯誤" }, 401);
   }
   await clearFailedLogin(env, "members", member.id);
   const ttlHours = parseInt(env.SESSION_TTL_HOURS || "12", 10);
