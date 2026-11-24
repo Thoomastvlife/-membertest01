@@ -17,10 +17,13 @@ import { THEME_HEAD, THEME_TOGGLE_HTML, THEME_HEADER_BTN, THEME_CSS_ADMIN, THEME
 // ===== 網頁宣告（會員頁 / 註冊頁 / 付款頁 共用）=====
 const SUPPORT_EMAIL = "service@ytgp168.com";
 const SITE_DISCLAIMER_CSS = `
-  .site-disclaimer{width:100%;max-width:420px;margin:22px auto 8px;padding:0 14px;text-align:center;font-size:12.5px;line-height:1.7;color:#767B8C;box-sizing:border-box;}
-  .site-disclaimer b{display:block;font-size:13px;margin-bottom:2px;color:inherit;}
-  .site-disclaimer a{color:inherit;text-decoration:underline;}`;
-const SITE_DISCLAIMER_HTML = `<div class="site-disclaimer"><b>網頁宣告</b>本網站為會員自助查詢與訂單結帳頁面，內容僅供參考，實際以訂單確認內容為準。點數／序號類商品一經交付即不適用七日猶豫期，詳見<a href="/terms" target="_blank">服務條款</a>。<br/>客服信箱：<a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a>　<a href="/terms" target="_blank">服務條款</a>　<a href="/privacy" target="_blank">隱私權政策</a>　<a href="/contact" target="_blank">聯絡我們</a></div>`;
+  .site-disclaimer{width:100%;max-width:480px;margin:22px auto 8px;padding:0 14px;text-align:center;font-size:12.5px;line-height:1.7;color:#767B8C;box-sizing:border-box;}
+  .site-disclaimer b{display:block;font-size:13px;margin-bottom:4px;color:inherit;}
+  .site-disclaimer p{margin:0;}
+  .site-disclaimer a{color:inherit;text-decoration:underline;text-underline-offset:2px;}
+  .site-disclaimer .sd-links{display:flex;flex-direction:column;align-items:center;gap:6px;margin-top:10px;padding-top:10px;border-top:1px solid rgba(118,123,140,.25);}
+  .site-disclaimer .sd-nav{display:flex;flex-wrap:wrap;justify-content:center;gap:2px 18px;}`;
+const SITE_DISCLAIMER_HTML = `<div class="site-disclaimer"><b>網頁宣告</b><p>本網站為會員自助查詢與訂單結帳頁面，內容僅供參考，實際以訂單確認內容為準。點數／序號類商品一經交付即不適用七日猶豫期，詳見<a href="/terms" target="_blank">服務條款</a>。</p><div class="sd-links"><span>客服信箱：<a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a></span><span class="sd-nav"><a href="/terms" target="_blank">服務條款</a><a href="/privacy" target="_blank">隱私權政策</a><a href="/contact" target="_blank">聯絡我們</a></span></div></div>`;
 
 export function adminHtml({ platforms = DEFAULT_PLATFORMS } = {}) {
   return `<!DOCTYPE html>

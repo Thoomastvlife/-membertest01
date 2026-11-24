@@ -18,6 +18,9 @@ function bizInfo(env) {
   return {
     name: need(env.BIZ_NAME, "BIZ_NAME"),
     email: (env.BIZ_EMAIL && env.BIZ_EMAIL.trim()) || extractEmail(env.EMAIL_FROM_ORDER) || extractEmail(env.EMAIL_FROM) || "（尚未設定，請在 wrangler.toml 填入 BIZ_EMAIL）",
+    orderEmail: (() => { const o = extractEmail(env.EMAIL_FROM_ORDER); const m = (env.BIZ_EMAIL && env.BIZ_EMAIL.trim()) || ""; return o && o.includes("@") && o.toLowerCase() !== m.toLowerCase() ? o : ""; })(),
+    hours: (env.BIZ_HOURS && String(env.BIZ_HOURS).trim()) || "",
+    phone: (env.BIZ_PHONE && String(env.BIZ_PHONE).trim()) || "",
   };
 }
 
@@ -36,7 +39,7 @@ const PAGE_CSS = `
   *{box-sizing:border-box;}
   body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"PingFang TC","Microsoft JhengHei",sans-serif;line-height:1.75;}
   .wrap{max-width:760px;margin:0 auto;padding:32px 20px 80px;}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px 28px 8px;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px 28px 20px;}
   h1{font-size:22px;margin:0 0 4px;}
   .updated{color:var(--muted);font-size:13px;margin-bottom:24px;}
   h2{font-size:17px;margin:28px 0 10px;border-left:4px solid var(--accent);padding-left:10px;}
@@ -54,9 +57,20 @@ const PAGE_CSS = `
   form.contact input[type=text],form.contact input[type=email],form.contact textarea{width:100%;padding:10px 12px;font:inherit;font-size:15px;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:10px;}
   form.contact textarea{min-height:140px;resize:vertical;}
   form.contact input:focus,form.contact textarea:focus{outline:2px solid var(--accent);outline-offset:1px;}
-  form.contact button{margin:20px 0 24px;padding:11px 28px;font:inherit;font-size:15px;font-weight:600;color:#fff;background:var(--accent);border:0;border-radius:10px;cursor:pointer;}
+  form.contact button{margin:20px 0 28px;padding:11px 28px;font:inherit;font-size:15px;font-weight:600;color:#fff;background:var(--accent);border:0;border-radius:10px;cursor:pointer;}
   form.contact .hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;}
   .hint{font-size:13px;color:var(--muted);}
+  .info{margin:8px 0 0;border-top:1px solid var(--line);}
+  .info-row{display:flex;gap:16px;padding:10px 4px;border-bottom:1px solid var(--line);font-size:14px;}
+  .info-row .k{flex:0 0 76px;color:var(--muted);}
+  .info-row .v{flex:1;min-width:0;word-break:break-all;}
+  .links{margin:14px 0 4px;}
+  .links a{margin-right:14px;}
+  @media (max-width:480px){
+    .wrap{padding:20px 14px 60px;}
+    .card{padding:22px 18px 16px;}
+    form.contact button{width:100%;}
+  }
   footer{text-align:center;color:var(--muted);font-size:12px;margin-top:28px;}
 `;
 
@@ -97,6 +111,7 @@ export function termsHtml(env) {
     <table>
       <tr><td>名稱</td><td>${escapeHtml(b.name)}</td></tr>
       <tr><td>客服信箱</td><td>${escapeHtml(b.email)}（<a href="/contact">線上聯絡表單</a>）</td></tr>
+      ${b.orderEmail ? `<tr><td>訂單信箱</td><td>${escapeHtml(b.orderEmail)}</td></tr>` : ""}
     </table>
 
     <h2>二、服務內容</h2>
@@ -206,6 +221,7 @@ export function privacyHtml(env) {
     <h2>八、聯絡方式</h2>
     <table>
       <tr><td>客服信箱</td><td>${escapeHtml(b.email)}（<a href="/contact">線上聯絡表單</a>）</td></tr>
+      ${b.orderEmail ? `<tr><td>訂單信箱</td><td>${escapeHtml(b.orderEmail)}</td></tr>` : ""}
     </table>
   `;
   return pageShell("隱私權政策", b.name, body);
@@ -232,14 +248,21 @@ export function contactHtml(env) {
       <button type="submit">送出訊息</button>
     </form>`
     : `<div class="notice">聯絡表單尚未設定完成（請在 wrangler.toml 的 [vars] 填入 CONTACT_FORM_URL）。目前請直接來信：${escapeHtml(b.email)}</div>`;
+  const hasEmail = b.email.includes("@");
+  const emailCell = hasEmail ? `<a href="mailto:${escapeHtml(b.email)}">${escapeHtml(b.email)}</a>` : escapeHtml(b.email);
+  const infoRows = [
+    `<div class="info-row"><span class="k">客服信箱</span><span class="v">${emailCell}</span></div>`,
+    b.orderEmail ? `<div class="info-row"><span class="k">訂單信箱</span><span class="v"><a href="mailto:${escapeHtml(b.orderEmail)}">${escapeHtml(b.orderEmail)}</a></span></div>` : "",
+    b.phone ? `<div class="info-row"><span class="k">客服電話</span><span class="v">${escapeHtml(b.phone)}</span></div>` : "",
+    b.hours ? `<div class="info-row"><span class="k">客服時間</span><span class="v">${escapeHtml(b.hours)}</span></div>` : "",
+    `<div class="info-row"><span class="k">回覆時間</span><span class="v">我們會於客服時間內儘速回覆；訂單問題需先核對資料，請耐心等候。</span></div>`,
+  ].join("");
   const body = `
     <h1>聯絡我們</h1>
     <div class="updated">有任何訂單、付款或帳號問題，歡迎留言，我們會儘速回覆。</div>
     ${formHtml}
-    <table>
-      <tr><td>客服信箱</td><td>${escapeHtml(b.email)}（<a href="/contact">線上聯絡表單</a>）</td></tr>
-    </table>
-    <p class="hint">相關說明：<a href="/terms">服務條款</a>　<a href="/privacy">隱私權政策</a></p>
+    <div class="info">${infoRows}</div>
+    <p class="hint links">相關說明：<a href="/terms">服務條款</a><a href="/privacy">隱私權政策</a></p>
   `;
   return pageShell("聯絡我們", b.name, body);
 }
