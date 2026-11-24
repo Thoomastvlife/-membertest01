@@ -67,7 +67,7 @@ import {
   handleTotpAdminReset,
   handleUnlockLogin,
 } from "./_lib/twofa.js";
-import { termsHtml, privacyHtml, contactHtml, LEGAL_VERSION } from "./_lib/legal.js";
+import { termsHtml, privacyHtml, contactHtml, contactThanksHtml, LEGAL_VERSION } from "./_lib/legal.js";
 import {
   trackLoginDevice,
   notifyNewDevice,
@@ -3527,6 +3527,7 @@ export async function onRequest(context) {
     if (path === "/terms" && method === "GET") return html(termsHtml(env));
     if (path === "/privacy" && method === "GET") return html(privacyHtml(env));
     if ((path === "/contact" || path === "/contact/") && method === "GET") return html(contactHtml(env));
+    if ((path === "/contact/thanks" || path === "/contact/thanks/") && (method === "GET" || method === "POST")) return html(contactThanksHtml(env));
     if (path === "/") return html(homeHtml());
 
     // ---- Public API ----

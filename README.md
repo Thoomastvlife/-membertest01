@@ -50,6 +50,7 @@
   - 新增公開頁面 `/contact`，訪客填寫姓名、信箱、訂單編號（選填）、訊息後，資料會送到 polpomail「Web forms」，由它寄到你設定的客服信箱。首頁頁尾、`/terms`、`/privacy`、付款/會員頁的網頁宣告都加了連結。
   - 設定：`wrangler.toml` 的 `CONTACT_FORM_URL` 填 polpomail 給的表單網址。在 polpomail 按「New address」換網址後，要回來更新這一行並重新部署。
   - polpomail 表單設定要注意：「Only accept from these websites」要填 `https://member.ytgp168.com`（沒有 www）；Reply-to field 維持 `email`。表單欄位名稱 `name`、`email`、`_gotcha` 不要改名。
+  - 送出後想回到本站：polpomail 的「Thank-you page」填 `https://member.ytgp168.com/contact/thanks`。
   - 不需要跑資料庫升級腳本。
 
 ## 檔案結構

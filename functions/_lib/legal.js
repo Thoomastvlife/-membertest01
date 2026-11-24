@@ -243,3 +243,16 @@ export function contactHtml(env) {
   `;
   return pageShell("聯絡我們", b.name, body);
 }
+
+// 聯絡表單送出後的感謝頁（/contact/thanks）。在 polpomail 的「Thank-you page」填這個頁面的完整網址，
+// 訪客送出後就會回到本站，不會停在 polpomail 的英文感謝頁。
+export function contactThanksHtml(env) {
+  const b = bizInfo(env);
+  const body = `
+    <h1>已收到您的訊息</h1>
+    <div class="updated">謝謝您的來信，我們會儘速以您留下的信箱回覆。</div>
+    <p>若是訂單相關問題，回覆前我們會先核對訂單資料，請耐心等候。</p>
+    <p><a href="/member">回會員中心</a>　<a href="/">回首頁</a></p>
+  `;
+  return pageShell("已送出", b.name, body);
+}
