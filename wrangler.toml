@@ -51,4 +51,4 @@ BIZ_NAME = "咖啡代儲"
 # ---- 聯絡我們頁面（/contact）----
 # polpomail「Web forms」建立表單後給的表單網址（整串貼上）。訪客在 /contact 填寫送出後，內容會寄到該表單設定的信箱。
 # 這串網址請只放在這裡；若之後在 polpomail 按了「New address」，要回來更新這一行並重新部署。
-CONTACT_FORM_URL = "https://polpomail.f/bcd532945a836a6572a98aab97c4e3904d6a"
+CONTACT_FORM_URL = "https://polpomail.com/f/bcd532945a836a6572a98aab97c4e3904d6a"
