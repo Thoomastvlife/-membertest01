@@ -238,7 +238,7 @@ ${THEME_HEAD}
 <footer>
   <div class="wrap">
     <div id="contact"></div>
-    <div><a href="/member">會員登入</a>　<a href="/member/register">免費註冊</a></div>
+    <div><a href="/member">會員登入</a>　<a href="/member/register">免費註冊</a>　<a href="/contact">聯絡我們</a></div>
   </div>
 </footer>
 

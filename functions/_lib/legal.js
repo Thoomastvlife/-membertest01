@@ -49,6 +49,14 @@ const PAGE_CSS = `
   td:first-child{color:var(--muted);white-space:nowrap;width:110px;}
   a{color:var(--accent);}
   .back{display:inline-block;margin-bottom:18px;font-size:14px;}
+  form.contact label{display:block;font-size:14px;font-weight:600;margin:16px 0 6px;}
+  form.contact label small{font-weight:400;color:var(--muted);}
+  form.contact input[type=text],form.contact input[type=email],form.contact textarea{width:100%;padding:10px 12px;font:inherit;font-size:15px;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:10px;}
+  form.contact textarea{min-height:140px;resize:vertical;}
+  form.contact input:focus,form.contact textarea:focus{outline:2px solid var(--accent);outline-offset:1px;}
+  form.contact button{margin:20px 0 24px;padding:11px 28px;font:inherit;font-size:15px;font-weight:600;color:#fff;background:var(--accent);border:0;border-radius:10px;cursor:pointer;}
+  form.contact .hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;}
+  .hint{font-size:13px;color:var(--muted);}
   footer{text-align:center;color:var(--muted);font-size:12px;margin-top:28px;}
 `;
 
@@ -88,7 +96,7 @@ export function termsHtml(env) {
     <h2>一、企業經營者資訊</h2>
     <table>
       <tr><td>名稱</td><td>${escapeHtml(b.name)}</td></tr>
-      <tr><td>客服信箱</td><td>${escapeHtml(b.email)}</td></tr>
+      <tr><td>客服信箱</td><td>${escapeHtml(b.email)}（<a href="/contact">線上聯絡表單</a>）</td></tr>
     </table>
 
     <h2>二、服務內容</h2>
@@ -197,8 +205,41 @@ export function privacyHtml(env) {
 
     <h2>八、聯絡方式</h2>
     <table>
-      <tr><td>客服信箱</td><td>${escapeHtml(b.email)}</td></tr>
+      <tr><td>客服信箱</td><td>${escapeHtml(b.email)}（<a href="/contact">線上聯絡表單</a>）</td></tr>
     </table>
   `;
   return pageShell("隱私權政策", b.name, body);
+}
+
+// 聯絡我們（/contact）：表單送到 polpomail「Web forms」的表單網址（wrangler.toml 的 CONTACT_FORM_URL），
+// 由該服務把內容寄到客服信箱。沒設定網址時頁面會顯示提醒，不會送出到錯誤的地方。
+// 欄位名稱 name、email 是給 polpomail 的主旨 {name} 與「回覆給」欄位 email 用的，請勿隨意改名。
+export function contactHtml(env) {
+  const b = bizInfo(env);
+  const action = (env.CONTACT_FORM_URL && String(env.CONTACT_FORM_URL).trim()) || "";
+  const formHtml = action
+    ? `<form class="contact" method="POST" action="${escapeHtml(action)}" accept-charset="UTF-8">
+      <label for="c-name">您的姓名／暱稱</label>
+      <input type="text" id="c-name" name="name" required maxlength="60" autocomplete="name" />
+      <label for="c-email">電子信箱 <small>（我們會回覆到這個信箱）</small></label>
+      <input type="email" id="c-email" name="email" required maxlength="120" autocomplete="email" />
+      <label for="c-order">訂單編號 <small>（選填，與訂單有關的問題請填寫）</small></label>
+      <input type="text" id="c-order" name="order_no" maxlength="60" autocomplete="off" />
+      <label for="c-msg">訊息內容</label>
+      <textarea id="c-msg" name="message" required maxlength="3000"></textarea>
+      <div class="hp" aria-hidden="true"><label>請勿填寫此欄位<input type="text" name="_gotcha" tabindex="-1" autocomplete="off" /></label></div>
+      <p class="hint">請勿在訊息中填寫任何密碼或驗證碼。送出即表示您同意我們為回覆您的問題而使用上述資料，詳見<a href="/privacy">隱私權政策</a>。</p>
+      <button type="submit">送出訊息</button>
+    </form>`
+    : `<div class="notice">聯絡表單尚未設定完成（請在 wrangler.toml 的 [vars] 填入 CONTACT_FORM_URL）。目前請直接來信：${escapeHtml(b.email)}</div>`;
+  const body = `
+    <h1>聯絡我們</h1>
+    <div class="updated">有任何訂單、付款或帳號問題，歡迎留言，我們會儘速回覆。</div>
+    ${formHtml}
+    <table>
+      <tr><td>客服信箱</td><td>${escapeHtml(b.email)}（<a href="/contact">線上聯絡表單</a>）</td></tr>
+    </table>
+    <p class="hint">相關說明：<a href="/terms">服務條款</a>　<a href="/privacy">隱私權政策</a></p>
+  `;
+  return pageShell("聯絡我們", b.name, body);
 }

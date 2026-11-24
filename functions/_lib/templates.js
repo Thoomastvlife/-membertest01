@@ -20,7 +20,7 @@ const SITE_DISCLAIMER_CSS = `
   .site-disclaimer{width:100%;max-width:420px;margin:22px auto 8px;padding:0 14px;text-align:center;font-size:12.5px;line-height:1.7;color:#767B8C;box-sizing:border-box;}
   .site-disclaimer b{display:block;font-size:13px;margin-bottom:2px;color:inherit;}
   .site-disclaimer a{color:inherit;text-decoration:underline;}`;
-const SITE_DISCLAIMER_HTML = `<div class="site-disclaimer"><b>網頁宣告</b>本網站為會員自助查詢與訂單結帳頁面，內容僅供參考，實際以訂單確認內容為準。點數／序號類商品一經交付即不適用七日猶豫期，詳見<a href="/terms" target="_blank">服務條款</a>。<br/>客服信箱：<a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a>　<a href="/terms" target="_blank">服務條款</a>　<a href="/privacy" target="_blank">隱私權政策</a></div>`;
+const SITE_DISCLAIMER_HTML = `<div class="site-disclaimer"><b>網頁宣告</b>本網站為會員自助查詢與訂單結帳頁面，內容僅供參考，實際以訂單確認內容為準。點數／序號類商品一經交付即不適用七日猶豫期，詳見<a href="/terms" target="_blank">服務條款</a>。<br/>客服信箱：<a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a>　<a href="/terms" target="_blank">服務條款</a>　<a href="/privacy" target="_blank">隱私權政策</a>　<a href="/contact" target="_blank">聯絡我們</a></div>`;
 
 export function adminHtml({ platforms = DEFAULT_PLATFORMS } = {}) {
   return `<!DOCTYPE html>
@@ -6368,10 +6368,10 @@ ${THEME_CSS_PORTAL}
 <div id="loginView" class="card">
   <div class="mark">會</div>
   <h2>會員登入查詢</h2>
-  <label>帳號或電子信箱</label>
-  <input id="loginAccount" placeholder="輸入帳號，或註冊時的電子信箱" autocomplete="username" autocapitalize="none" />
+  <label>帳號</label>
+  <input id="loginAccount" />
   <label>密碼</label>
-  <input id="loginPass" type="password" autocomplete="current-password" />
+  <input id="loginPass" type="password" />
   <button class="btn" id="loginBtn" onclick="doLogin()">登入</button>
   <div id="loginMsg" class="msg"></div>
   <div class="hint">尚未收到帳號密碼？請洽店家開通。</div>
@@ -7002,7 +7002,7 @@ async function doLogin(){
   const password = document.getElementById('loginPass').value;
   const msg = document.getElementById('loginMsg');
   msg.textContent=''; msg.className='msg';
-  if (!account || !password){ msg.textContent='請輸入帳號（或信箱）與密碼'; msg.className='msg err'; return; }
+  if (!account || !password){ msg.textContent='請輸入帳號密碼'; msg.className='msg err'; return; }
   try{
     await api('/api/member/login', {method:'POST', body: JSON.stringify({account,password})});
     checkSession();

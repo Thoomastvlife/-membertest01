@@ -47,3 +47,8 @@ BIZ_NAME = "咖啡代儲"
 # 部署前務必設定這個機密值（用來簽署登入 session）：
 #   wrangler pages secret put ADMIN_SESSION_SECRET --project-name=member-checkout-pages
 # 建議用一長串隨機字串，例如: openssl rand -hex 32
+
+# ---- 聯絡我們頁面（/contact）----
+# polpomail「Web forms」建立表單後給的表單網址（整串貼上）。訪客在 /contact 填寫送出後，內容會寄到該表單設定的信箱。
+# 這串網址請只放在這裡；若之後在 polpomail 按了「New address」，要回來更新這一行並重新部署。
+CONTACT_FORM_URL = "https://polpomail.f/bcd532945a836a6572a98aab97c4e3904d6a"
